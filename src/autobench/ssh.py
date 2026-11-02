@@ -14,17 +14,18 @@ from python_socks import ProxyConnectionError, ProxyError, ProxyTimeoutError, Pr
 from python_socks.async_.asyncio import Proxy
 
 from autobench import remote_runner
-from autobench.config import Machine, Policy, System, file_sha256
+from autobench.config import Machine, Policy, SSHConfig, System, file_sha256
 from autobench.errors import AuthenticationFailed, ChecksumError, ConnectionLost, RemoteError
 from autobench.storage import private_dir
 
 
-class RemoteClient:
-    def __init__(self, machine: Machine, system: System | None, policy: Policy):
-        self.machine = machine
-        self.system = system
+class SSHClient:
+    """Authenticated, verified SSH RPCs independent of a benchmark configuration."""
+
+    def __init__(self, ssh: SSHConfig, policy: Policy, label: str = "connection"):
         self.policy = policy
-        self.ssh = machine.connection(system)
+        self.ssh = ssh
+        self.label = label
         self.source = Path(remote_runner.__file__).read_text()
 
     @asynccontextmanager
@@ -85,18 +86,18 @@ class RemoteClient:
             asyncssh.KeyImportError,
         ) as exc:
             raise AuthenticationFailed(
-                f"SSH authentication/host-key check failed for {self.machine.id}"
+                f"SSH authentication/host-key check failed for {self.label}"
             ) from exc
         except asyncssh.SFTPError as exc:
             if isinstance(
                 exc, (asyncssh.SFTPConnectionLost, asyncssh.SFTPNoConnection, asyncssh.SFTPEOF)
             ):
-                raise ConnectionLost(f"SFTP connection lost for {self.machine.id}") from exc
-            raise RemoteError(f"SFTP operation failed for {self.machine.id}: {exc}") from exc
+                raise ConnectionLost(f"SFTP connection lost for {self.label}") from exc
+            raise RemoteError(f"SFTP operation failed for {self.label}: {exc}") from exc
         except (ProxyError, ProxyConnectionError, ProxyTimeoutError) as exc:
-            raise ConnectionLost(f"SOCKS5 proxy connection failed for {self.machine.id}") from exc
+            raise ConnectionLost(f"SOCKS5 proxy connection failed for {self.label}") from exc
         except (asyncssh.Error, OSError, asyncio.TimeoutError) as exc:
-            raise ConnectionLost(f"{stage} unavailable for {self.machine.id}") from exc
+            raise ConnectionLost(f"{stage} unavailable for {self.label}") from exc
         finally:
             if sock is not None:
                 sock.close()
@@ -118,6 +119,13 @@ class RemoteClient:
 
     async def probe(self, requirements: list[str] | None = None) -> dict:
         return await self.call("probe", {"requirements": requirements or []})
+
+
+class RemoteClient(SSHClient):
+    def __init__(self, machine: Machine, system: System | None, policy: Policy):
+        self.machine = machine
+        self.system = system
+        super().__init__(machine.connection(system), policy, machine.id)
 
     def root(self, probe: dict) -> str:
         configured = self.machine.remote_dir

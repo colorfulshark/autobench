@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import tarfile
 import tempfile
 import threading
@@ -24,8 +25,15 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from starlette.background import BackgroundTask
 
 from autobench import __version__, services
-from autobench.config import Config, load_config_text
-from autobench.errors import AutoBenchError
+from autobench.config import (
+    Config,
+    PositiveSeconds,
+    SSHConfig,
+    inspect_archive,
+    load_config_text,
+    resolve_ssh_paths,
+)
+from autobench.errors import AutoBenchError, ConfigurationFieldError
 from autobench.storage import Store
 from autobench.web.files import ConfigFiles, ConflictError, parse_document
 
@@ -89,6 +97,38 @@ class ControlBody(Body):
     state_dir: str
 
 
+class ProbeBody(Body):
+    ssh: SSHConfig
+    config_path: str | None = None
+    connect_timeout: PositiveSeconds = 15
+
+
+def field_errors(exc: Exception) -> list[dict]:
+    if isinstance(exc, ConfigurationFieldError):
+        return [{"path": exc.path, "code": exc.code, "message": str(exc)}]
+    if isinstance(exc, (ValidationError, RequestValidationError)):
+        return [
+            {
+                "path": [part for part in item["loc"] if part != "body"],
+                "code": item["type"],
+                "message": item["msg"],
+            }
+            for item in exc.errors()
+        ]
+    mark = getattr(exc, "problem_mark", None)
+    if mark:
+        return [
+            {
+                "path": [],
+                "code": "yaml_syntax",
+                "message": "YAML 格式错误",
+                "line": mark.line + 1,
+                "column": mark.column + 1,
+            }
+        ]
+    return [{"path": [], "code": "configuration", "message": error_message(exc)}]
+
+
 def error_message(exc: Exception) -> str:
     if isinstance(exc, (ValidationError, RequestValidationError)):
         return "\n".join(
@@ -150,6 +190,9 @@ class Operations:
                 if kind in {"discover", "doctor"}:
                     for item in result:
                         item["errors"] = self.clean(item.get("errors", []))
+                if kind == "connection_probe":
+                    for item in result["checks"]:
+                        item["message"] = self.clean(item["message"])
                 record["result"] = result
                 record["status"] = "completed"
             except asyncio.CancelledError:
@@ -288,7 +331,12 @@ def create_app(
             status = 403
         else:
             status = 422
-        return JSONResponse({"detail": clean(error_message(exc))}, status_code=status)
+        issues = field_errors(exc)
+        for issue in issues:
+            issue["message"] = clean(issue["message"])
+        return JSONResponse(
+            {"detail": clean(error_message(exc)), "errors": issues}, status_code=status
+        )
 
     for error in (
         ValueError,
@@ -314,9 +362,23 @@ def create_app(
     def saved(body: SavedBody, *, check_sources: bool = True) -> Config:
         document = files.load(body.path, body.revision)
         remember(document["document"])
-        return load_config_text(
-            document["text"], Path(document["path"]), check_sources=check_sources
-        )
+        parsed = load_config_text(document["text"], Path(document["path"]), check_sources=False)
+        if check_sources:
+            for index, benchmark in enumerate(parsed.benchmarks):
+                try:
+                    inspect_archive(benchmark)
+                except (OSError, ValueError, tarfile.TarError) as exc:
+                    field = (
+                        "source_subdir"
+                        if "source_subdir" in str(exc)
+                        else "source_sha256"
+                        if "checksum" in str(exc)
+                        else "source_archive"
+                    )
+                    raise ConfigurationFieldError(
+                        str(exc), ["benchmarks", index, field], "source"
+                    ) from exc
+        return parsed
 
     @app.get("/api/info")
     def info():
@@ -335,6 +397,38 @@ def create_app(
         value = files.load(body.path)
         remember(value["document"])
         return value
+
+    @app.get("/api/files")
+    def browse_files(path: str | None = None):
+        directory = files.path(path or files.base_dir)
+        if directory.is_file():
+            directory = directory.parent
+        if not directory.is_dir():
+            raise FileNotFoundError("目录不存在，请输入已有服务器目录")
+        entries = []
+        for entry in directory.iterdir():
+            try:
+                if entry.is_dir() or entry.is_file():
+                    entries.append(
+                        {
+                            "name": entry.name,
+                            "path": str(entry),
+                            "type": "directory" if entry.is_dir() else "file",
+                        }
+                    )
+            except OSError:
+                continue
+        entries.sort(key=lambda entry: (entry["type"] != "directory", entry["name"].casefold()))
+        return {"path": str(directory), "parent": str(directory.parent), "entries": entries}
+
+    @app.post("/api/connections/probe", status_code=202)
+    async def connection_probe(body: ProbeBody):
+        remember(body.ssh.model_dump(mode="json"))
+        base = files.path(body.config_path).parent if body.config_path else files.base_dir
+        resolve_ssh_paths(body.ssh, base)
+        return operations.start(
+            "connection_probe", lambda: services.probe_connection(body.ssh, body.connect_timeout)
+        )
 
     @app.post("/api/config/parse")
     def parse(body: DocumentBody):
@@ -417,6 +511,20 @@ def create_app(
                 result["controller_active"] = True
             for job in result["jobs"]:
                 job["reason"] = clean(job["reason"])
+            progress = {job["id"]: job for job in store.jobs(run_id)}
+            for job in result["jobs"]:
+                details = progress[job["id"]]["details"]
+                ready_at = details.get("ready_at")
+                job["phase"] = job["status"]
+                if (
+                    isinstance(ready_at, (int, float))
+                    and math.isfinite(ready_at)
+                    and ready_at > time.time()
+                    and not details.get("remote_dir")
+                    and job["status"] in {"pending", "preparing", "switching"}
+                ):
+                    job["phase"] = "stabilizing"
+                    job["wait_seconds"] = max(0, math.ceil(ready_at - time.time()))
             return result
 
     @app.post("/api/runs/{run_id}/{action}", status_code=202)

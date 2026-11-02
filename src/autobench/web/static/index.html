@@ -3,32 +3,30 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>AutoBench · 测试控制台</title>
+    <title>AutoBench · 测试工作台</title>
     <link rel="stylesheet" href="/static/style.css" />
-    <script src="/static/app.js" defer></script>
+    <script type="module" src="/static/app.js"></script>
   </head>
   <body>
-    <div class="shell">
+    <div class="app-shell">
       <aside class="sidebar">
         <a class="brand" href="/" aria-label="AutoBench 首页"
-          ><span class="brand-icon">A<span>↗</span></span
-          ><strong>AutoBench<small>LINUX BENCHMARK CONTROL</small></strong></a
+          ><span class="brand-mark">A↗</span
+          ><span>AutoBench<small>TEST WORKSPACE</small></span></a
         >
-        <div class="sidebar-label">工作空间</div>
+        <div class="nav-caption">测试工作空间</div>
         <nav aria-label="主导航">
-          <button class="nav active" data-page="config">
-            <span>▤</span> 配置编辑 <i>01</i>
-          </button>
-          <button class="nav" data-page="inspect">
-            <span>⌁</span> 机器诊断 <i>02</i>
-          </button>
-          <button class="nav" data-page="runs">
-            <span>▥</span> 运行记录 <i>03</i>
+          <button data-page="config" class="nav-item active">
+            <span>▤</span> 测试配置</button
+          ><button data-page="inspect" class="nav-item">
+            <span>⌁</span> 环境检查</button
+          ><button data-page="runs" class="nav-item">
+            <span>▥</span> 运行记录
           </button>
         </nav>
         <div class="sidebar-note">
-          <span class="live-dot"></span> 本地控制器
-          <p>SSH 执行 · UEFI 切换<br />持久状态 · 中断恢复</p>
+          <span class="live-dot"></span> SSH 测试控制器
+          <p>连接机器，安排测试<br />结果回收，中断恢复</p>
         </div>
         <footer>
           <span id="version">AutoBench</span><span id="server-address"></span>
@@ -36,215 +34,267 @@
       </aside>
       <main>
         <header class="topbar">
-          <span>控制台 <b>/</b> <span id="breadcrumb">配置编辑</span></span
-          ><span class="local-tag"
+          <span
+            >工作空间 <span class="divider">/</span>
+            <span id="breadcrumb">测试配置</span></span
+          ><span class="service-tag"
             ><span class="live-dot"></span> 服务工作空间</span
           >
         </header>
         <div id="notice" role="status" aria-live="polite" hidden></div>
-        <section class="page" id="page-config">
+        <section id="page-config" class="page">
           <div class="page-heading">
             <div>
-              <div class="eyebrow">CONFIGURATION</div>
-              <h1>配置编辑</h1>
-              <p>定义机器与测试矩阵，保存配置后开始运行。</p>
+              <div class="eyebrow">CONFIGURE YOUR NEXT RUN</div>
+              <h1>把测试准备好</h1>
+              <p>连接机器、选择系统，再安排一份可恢复的测试计划。</p>
             </div>
-            <span id="save-state" class="badge">未保存</span>
+            <button id="new-config" class="button secondary">
+              ＋ 新建配置
+            </button>
           </div>
-          <div class="card file-card">
-            <label for="config-path" class="label">配置文件路径</label>
-            <div class="toolbar">
-              <input
-                id="config-path"
-                placeholder="例如 /home/user/autobench.yaml"
-                spellcheck="false"
-              /><button id="load">加载</button
-              ><button id="save" class="primary">保存</button
-              ><button id="save-as">另存为</button>
-            </div>
-            <div class="file-bottom">
-              <span id="base-dir" class="muted"></span>
-              <div class="toolbar">
-                <button class="text-button" id="new">＋ 新建模板</button
-                ><label class="text-button import-button"
-                  >导入 YAML<input
-                    id="import"
-                    type="file"
-                    accept=".yaml,.yml,text/yaml,text/plain"
-                    hidden /></label
-                ><button class="text-button" id="export">下载 YAML ↓</button>
+          <div class="project-bar">
+            <div class="project-file">
+              <span class="project-icon">▤</span>
+              <div>
+                <div class="file-title">
+                  <button id="file-name" class="file-name">正在加载…</button
+                  ><span id="save-state" class="pill" data-tone="warning"
+                    >未保存</span
+                  >
+                </div>
+                <span id="file-location" class="secondary mono"></span>
               </div>
             </div>
-          </div>
-          <div class="card editor-card">
-            <div class="editor-top">
-              <div class="tabs" role="tablist" aria-label="编辑模式">
-                <button
-                  id="mode-form"
-                  role="tab"
-                  aria-selected="true"
-                  class="selected"
-                >
-                  表单编辑</button
-                ><button id="mode-yaml" role="tab" aria-selected="false">
-                  YAML 源码
-                </button>
-              </div>
-              <span id="matrix-summary" class="muted"></span>
-            </div>
-            <div id="form-editor"></div>
-            <div id="yaml-panel" hidden>
-              <div class="yaml-hint">
-                直接编辑保留注释与排版；切回表单后修改会重新生成 YAML。
-              </div>
-              <textarea
-                id="yaml-editor"
-                aria-label="YAML 配置源码"
-                spellcheck="false"
-              ></textarea>
-              <div id="yaml-meta" class="yaml-meta"></div>
+            <div class="project-tools">
+              <span id="matrix-summary" class="secondary"></span>
+              <details id="file-menu" class="menu">
+                <summary>文件操作 ⌄</summary>
+                <div class="menu-items">
+                  <button id="open-config">打开服务器配置…</button
+                  ><label
+                    >导入 YAML<input
+                      id="import"
+                      type="file"
+                      accept=".yaml,.yml,.json,text/plain,text/yaml"
+                      hidden /></label
+                  ><button id="save-draft">保存草稿</button
+                  ><button id="save-as">另存为…</button
+                  ><button id="export">下载 YAML</button>
+                </div>
+              </details>
             </div>
           </div>
-          <div class="action-bar">
-            <span class="muted" id="execution-hint"
-              >请先保存配置，再执行校验、诊断或测试。</span
-            >
-            <div class="toolbar">
-              <button id="validate" class="requires-saved">完整校验</button
-              ><button id="start" class="primary requires-saved">
-                启动测试 →
-              </button>
+          <div class="editor-toolbar">
+            <div class="segmented" aria-label="编辑模式">
+              <button id="mode-form" class="active">可视化配置</button
+              ><button id="mode-yaml">YAML 源码</button>
             </div>
+            <button id="workbench-switch" class="text-button">
+              进入完整工作台
+            </button>
           </div>
-          <pre
-            id="validation-result"
-            class="result"
-            aria-label="校验结果"
+          <div
+            id="wizard-steps"
+            class="wizard-steps"
+            aria-label="配置步骤"
+          ></div>
+          <div
+            id="config-errors"
+            class="error-summary"
+            role="alert"
             hidden
-          ></pre>
-        </section>
-        <section class="page" id="page-inspect" hidden>
-          <div class="page-heading">
-            <div>
-              <div class="eyebrow">MACHINE INSPECTION</div>
-              <h1>机器诊断</h1>
-              <p>检查当前系统的连接、UEFI 启动项与测试依赖。</p>
+          ></div>
+          <div id="config-body"></div>
+          <section id="yaml-panel" class="panel yaml-panel" hidden>
+            <div class="yaml-help">
+              完整 YAML 编辑。只修改源码会保留注释；修改可视化配置后将重新生成
+              YAML。
             </div>
-            <span class="badge">只读检查</span>
-          </div>
-          <div class="card">
-            <h2>检查范围</h2>
-            <p class="muted">
-              使用配置编辑页面中已保存的文件。只检查当前启动的系统，不切换操作系统。
-            </p>
-            <div class="toolbar">
-              <label for="inspection-machine">目标机器</label
-              ><select id="inspection-machine">
-                <option value="">全部机器</option></select
-              ><button id="discover" class="requires-saved">发现机器</button
-              ><button id="doctor" class="primary requires-saved">
-                诊断环境
+            <textarea
+              id="yaml-editor"
+              aria-label="YAML 配置源码"
+              spellcheck="false"
+            ></textarea>
+            <div id="yaml-meta" class="yaml-meta"></div>
+          </section>
+          <div id="validation-result" class="callout success" hidden></div>
+          <div class="action-bar">
+            <div><span id="action-hint" class="secondary"></span></div>
+            <div class="actions">
+              <button id="prev-step" class="button secondary" hidden>
+                ← 上一步</button
+              ><button id="secondary-action" class="text-button">
+                保存草稿</button
+              ><button id="primary-action" class="button primary">
+                下一步 →
               </button>
             </div>
-            <p id="inspection-config" class="muted mono"></p>
           </div>
-          <div id="inspection-result" class="inspection-results">
+        </section>
+        <section id="page-inspect" class="page" hidden>
+          <div class="page-heading">
+            <div>
+              <div class="eyebrow">ENVIRONMENT READINESS</div>
+              <h1>确认机器已准备好</h1>
+              <p>先看问题与处理方式，再按需展开技术细节。</p>
+            </div>
+            <span class="pill">只读检查</span>
+          </div>
+          <section class="panel">
+            <div class="section-heading">
+              <div>
+                <h2>检查范围</h2>
+                <p class="hint">
+                  完整检查使用已保存配置；保存前可在机器详情中识别当前系统。
+                </p>
+              </div>
+              <button id="inspect-config" class="text-button">
+                前往机器连接 →
+              </button>
+            </div>
+            <div class="inspection-actions">
+              <div class="field">
+                <label for="inspection-machine" class="field-label"
+                  >目标机器</label
+                ><select id="inspection-machine">
+                  <option value="">全部机器</option>
+                </select>
+              </div>
+              <button id="doctor" class="button primary">检查当前环境</button>
+            </div>
+            <p id="inspection-config" class="secondary mono"></p>
+          </section>
+          <div id="inspection-result">
             <div class="empty">
-              <span>⌁</span>
-              <h3>等待机器检查</h3>
-              <p>保存配置后，选择发现机器或诊断环境。</p>
+              <span class="empty-icon">⌁</span>
+              <h3>准备检查当前系统</h3>
+              <p class="hint">只读身份、启动项及运行依赖，不切换系统。</p>
             </div>
           </div>
         </section>
-        <section class="page" id="page-runs" hidden>
+        <section id="page-runs" class="page" hidden>
           <div class="page-heading">
             <div>
-              <div class="eyebrow">RUN HISTORY</div>
-              <h1>运行记录</h1>
-              <p>跟踪测试矩阵，恢复执行并收集原始结果。</p>
+              <div class="eyebrow">RUNS & RESULTS</div>
+              <h1>每次测试，都有迹可循</h1>
+              <p>跟踪执行进度，恢复控制，查看原始结果。</p>
             </div>
-            <span class="badge"
-              ><span class="live-dot"></span> 每 2 秒刷新</span
-            >
+            <span class="pill"><span class="live-dot"></span> 每 2 秒更新</span>
           </div>
-          <div class="card">
-            <label class="label" for="state-dir">状态目录</label>
-            <div class="toolbar">
-              <input id="state-dir" spellcheck="false" /><button
-                id="refresh-runs"
-              >
-                读取记录</button
-              ><button id="config-state">使用配置目录</button>
+          <div class="history-location">
+            <div>
+              <span class="secondary">历史记录位置</span
+              ><code id="state-location"></code>
             </div>
-          </div>
-          <div class="card runs-card">
-            <div class="card-heading">
-              <h2>历史运行</h2>
-              <span id="run-count" class="muted"></span>
-            </div>
-            <div id="runs-list" class="table-wrap"></div>
-          </div>
-          <div id="run-detail" hidden>
-            <div class="card">
-              <div class="card-heading">
-                <div>
-                  <h2>运行详情</h2>
-                  <code id="run-id"></code>
-                </div>
-                <span id="run-status" class="badge"></span>
-              </div>
-              <p id="controller-status" class="muted"></p>
-              <div class="toolbar run-actions">
-                <button data-action="resume">恢复执行</button
-                ><button data-action="fetch">仅收集结果</button
-                ><button data-action="cancel" class="danger">取消运行</button
-                ><a id="archive-download" class="button" download
-                  >下载完整归档 ↓</a
-                >
-              </div>
-              <div id="jobs" class="table-wrap"></div>
-            </div>
-            <div class="detail-grid">
-              <div class="card">
-                <div class="card-heading">
-                  <h2>运行事件</h2>
-                  <span class="muted">增量更新</span>
-                </div>
-                <pre id="events" class="event-log"></pre>
-              </div>
-              <div class="card">
-                <h2>结果与日志</h2>
-                <div id="artifacts"></div>
-              </div>
-            </div>
-            <div class="card" id="preview-card" hidden>
-              <div class="card-heading">
-                <h2 id="preview-title">文件预览</h2>
-                <button id="close-preview">关闭</button>
-              </div>
-              <pre id="artifact-preview"></pre>
+            <div class="actions">
+              <button id="use-config-location" class="text-button">
+                使用当前配置位置</button
+              ><button id="change-location" class="button secondary">
+                更改位置…
+              </button>
             </div>
           </div>
+          <section class="panel">
+            <div class="section-heading">
+              <div>
+                <h2>历史运行 <span id="run-count" class="secondary"></span></h2>
+              </div>
+              <div class="run-filters">
+                <input
+                  id="run-search"
+                  aria-label="搜索运行"
+                  placeholder="搜索运行 ID 或日期"
+                /><select id="run-filter" aria-label="筛选运行状态">
+                  <option value="">全部状态</option>
+                  <option value="running">运行中</option>
+                  <option value="paused">已暂停</option>
+                  <option value="succeeded">成功</option>
+                  <option value="failed">失败</option>
+                  <option value="cancelled">已取消</option>
+                  <option value="pending">待执行</option>
+                </select>
+              </div>
+            </div>
+            <div id="runs-list" class="table-scroll"></div>
+          </section>
+          <div id="run-detail" hidden></div>
         </section>
       </main>
     </div>
-    <dialog id="save-dialog">
-      <form method="dialog">
-        <h2>另存为 YAML</h2>
-        <label class="label" for="save-path">本机文件路径</label
-        ><input
-          id="save-path"
-          required
-          placeholder="/home/user/new-config.yaml"
-        />
-        <p class="muted">相对路径将以新文件所在目录为基准。</p>
-        <div class="toolbar">
-          <button value="cancel" formnovalidate>取消</button
-          ><button id="confirm-save-as" value="save" class="primary">
-            保存
+    <aside
+      id="preview-drawer"
+      class="preview-drawer"
+      aria-label="文件预览"
+      hidden
+    >
+      <div class="section-heading">
+        <h2 id="preview-title"></h2>
+        <button id="close-preview" class="icon-button" aria-label="关闭预览">
+          ×
+        </button>
+      </div>
+      <p id="preview-path" class="secondary mono"></p>
+      <pre id="artifact-preview"></pre>
+    </aside>
+    <dialog id="path-dialog">
+      <form id="path-form">
+        <h2 id="path-title">保存配置</h2>
+        <p class="hint">配置文件保存在运行 Web 服务的服务器上。</p>
+        <label for="save-path" class="field-label">服务器文件路径</label>
+        <div class="input-controls">
+          <input
+            id="save-path"
+            required
+            placeholder="/path/to/autobench.yaml"
+          /><button id="path-browse" class="browse-button" type="button">
+            选择目录…
+          </button>
+        </div>
+        <p class="hint">
+          相对路径以新 YAML 所在目录解释。已有目标文件不会被自动覆盖。
+        </p>
+        <div class="dialog-actions">
+          <button
+            value="cancel"
+            type="submit"
+            formnovalidate
+            class="button secondary"
+          >
+            取消</button
+          ><button
+            id="path-confirm"
+            value="save"
+            type="submit"
+            class="button primary"
+          >
+            确定
           </button>
         </div>
       </form>
+    </dialog>
+    <dialog id="file-dialog" class="file-dialog">
+      <h2 id="file-title">选择服务器文件</h2>
+      <p id="file-help" class="hint"></p>
+      <div class="file-path-bar">
+        <button id="file-up" class="icon-button" aria-label="上级目录">↑</button
+        ><input
+          id="file-path"
+          aria-label="服务器目录路径"
+          spellcheck="false"
+        /><button id="file-go" class="button secondary">前往</button>
+      </div>
+      <label class="toggle file-hidden-toggle"
+        ><input type="checkbox" id="file-hidden" /><span
+          >显示隐藏文件</span
+        ></label
+      >
+      <div id="file-list" class="file-list"></div>
+      <p id="file-selected" class="secondary mono"></p>
+      <div class="dialog-actions">
+        <button id="file-cancel" class="button secondary">取消</button
+        ><button id="file-confirm" class="button primary">选择</button>
+      </div>
     </dialog>
   </body>
 </html>

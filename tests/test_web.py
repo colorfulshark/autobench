@@ -458,3 +458,124 @@ def test_replaced_output_directory_cannot_redirect_artifact_access(client, confi
         client.get(f"/api/runs/{run_id}/artifact", params={"path": "private.txt"}).status_code
         == 403
     )
+
+
+def test_file_browser_lists_directories_without_reading_contents(client, tmp_path):
+    (tmp_path / "folder").mkdir()
+    (tmp_path / "alpha.yaml").write_text("password: private-secret")
+    (tmp_path / ".hidden").touch()
+    response = client.get("/api/files", params={"path": str(tmp_path)})
+    assert response.status_code == 200
+    result = response.json()
+    assert result["path"] == str(tmp_path) and result["parent"] == str(tmp_path.parent)
+    assert result["entries"][0]["name"] == "folder"
+    assert any(entry["name"] == ".hidden" for entry in result["entries"])
+    assert "private-secret" not in response.text
+    assert client.get("/api/files", params={"path": "alpha.yaml"}).json()["path"] == str(tmp_path)
+    assert client.get("/api/files", params={"path": "absent"}).status_code == 404
+
+
+def test_validation_errors_expose_paths_but_not_inputs(client, saved):
+    document = saved["document"]
+    document["machines"][0]["ssh"]["password"] = "private-probe-secret"
+    document["machines"][0]["ssh"]["port"] = "private-probe-secret"
+    saved = client.post(
+        "/api/config/save", json={**reference(saved), "text": yaml.safe_dump(document)}
+    ).json()
+    result = client.post("/api/config/validate", json=reference(saved))
+    assert result.status_code == 422
+    assert result.json()["errors"][0]["path"] == ["machines", 0, "ssh", "port"]
+    assert "private-probe-secret" not in result.text
+    assert "input" not in result.json()["errors"][0]
+    syntax = client.post("/api/config/parse", json={"text": "machines: [\n"}).json()
+    assert syntax["errors"][0]["line"] == 2 and syntax["errors"][0]["column"] == 1
+
+
+def test_draft_probe_needs_only_connection_and_resolves_paths(client, tmp_path, monkeypatch):
+    received = []
+
+    class Client:
+        def __init__(self, ssh, policy):
+            received.append((ssh, policy))
+
+        async def probe(self, requirements):
+            return {
+                "hostname": "test-host",
+                "machine_id": "1" * 32,
+                "boot_id": "boot-1",
+                "efi": {"current": "0001", "entries": {"0001": {"active": True, "label": "Linux"}}},
+                "python": [3, 11],
+                "systemd_available": True,
+                "systemd_version": 250,
+                "commands": {name: "/bin/" + name for name in requirements},
+                "disk_free": 10**10,
+            }
+
+    monkeypatch.setattr("autobench.services.SSHClient", Client)
+    folder = tmp_path / "configs"
+    folder.mkdir()
+    (folder / "known_hosts").touch()
+    (folder / "id_key").touch()
+    body = {
+        "config_path": "configs/new.yaml",
+        "ssh": {
+            "host": "localhost",
+            "username": "bench",
+            "password": "secret-not-returned",
+            "known_hosts": "known_hosts",
+            "client_keys": ["id_key"],
+        },
+        "connect_timeout": 2,
+    }
+    response = client.post("/api/connections/probe", json=body)
+    assert response.status_code == 202, response.text
+    result = wait_operation(client, response.json())
+    assert result["probe"]["machine_id"] == "1" * 32
+    assert all(check["status"] == "passed" for check in result["checks"])
+    assert received[0][0].known_hosts == folder / "known_hosts"
+    assert received[0][0].client_keys == [folder / "id_key"]
+    assert received[0][1].connect_timeout == 2
+    assert not (folder / "new.yaml").exists() and client.get("/api/runs").json() == []
+    assert "secret-not-returned" not in client.get("/api/operations").text
+
+
+def test_draft_probe_reports_missing_trust_file_as_actionable_check(client):
+    result = client.post(
+        "/api/connections/probe",
+        json={
+            "ssh": {
+                "host": "localhost",
+                "username": "bench",
+                "known_hosts": "absent",
+                "password": "no-echo",
+            }
+        },
+    )
+    checks = wait_operation(client, result.json())["checks"]
+    assert checks[0]["code"] == "known_hosts_missing"
+    assert checks[0]["path"] == ["ssh", "known_hosts"]
+    assert "no-echo" not in client.get("/api/operations").text
+
+
+def test_run_status_explains_system_stabilization_wait(client, config):
+    store = Store(config.policy.state_dir)
+    run_id = store.create(config)
+    job = store.jobs(run_id)[0]
+    store.update(job["id"], ready_at=time.time() + 30)
+    result = client.get(f"/api/runs/{run_id}").json()
+    assert result["jobs"][0]["phase"] == "stabilizing"
+    assert 1 <= result["jobs"][0]["wait_seconds"] <= 30
+    assert store.job(job["id"])["status"] == "pending"
+    store.close()
+
+
+def test_missing_connection_file_error_locates_advanced_field(client, saved):
+    data = saved["document"]
+    data["machines"][0]["ssh"].update(known_hosts="missing-hosts", password="a")
+    saved = client.post(
+        "/api/config/save", json={**reference(saved), "text": yaml.safe_dump(data)}
+    ).json()
+    response = client.post("/api/config/validate", json=reference(saved))
+    assert response.status_code == 422
+    assert response.json()["errors"][0]["path"] == ["machines", 0, "ssh", "known_hosts"]
+    assert response.json()["errors"][0]["code"] == "file_missing"

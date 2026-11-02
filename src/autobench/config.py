@@ -270,15 +270,24 @@ def load_config_text(text: str, path: Path, *, check_sources: bool = True) -> Co
     config.policy.state_dir = local(config.policy.state_dir)
     config.policy.output_dir = local(config.policy.output_dir)
     for machine in config.machines:
-        machine.ssh.known_hosts = local(machine.ssh.known_hosts)
-        machine.ssh.client_keys = [local(p) for p in machine.ssh.client_keys]
+        resolve_ssh_paths(machine.ssh, path.parent)
         for system in machine.systems:
-            if system.ssh.known_hosts is not None:
-                system.ssh.known_hosts = local(system.ssh.known_hosts)
-            if system.ssh.client_keys is not None:
-                system.ssh.client_keys = [local(p) for p in system.ssh.client_keys]
+            resolve_ssh_paths(system.ssh, path.parent)
     for benchmark in config.benchmarks:
         benchmark.source_archive = local(benchmark.source_archive)
         if check_sources:
             inspect_archive(benchmark)
     return config
+
+
+def resolve_ssh_paths(ssh: SSHConfig | SSHOverride, base_dir: Path) -> None:
+    """Resolve connection files without filling omitted system overrides."""
+
+    def local(value: Path) -> Path:
+        expanded = value.expanduser()
+        return ((base_dir / expanded) if not expanded.is_absolute() else expanded).resolve()
+
+    if ssh.known_hosts is not None:
+        ssh.known_hosts = local(ssh.known_hosts)
+    if ssh.client_keys is not None:
+        ssh.client_keys = [local(value) for value in ssh.client_keys]
