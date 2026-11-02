@@ -37,27 +37,29 @@ def merged_env(base: dict[str, str], system: Environment, benchmark: Environment
 
 
 class Model(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
 
 class SOCKS5Proxy(Model):
     host: str
     port: Annotated[int, Field(ge=1, le=65535)] = 1080
     username: str | None = None
-    password_env: str | None = None
+    password: StrictStr | None = Field(default=None, repr=False)
 
     @model_validator(mode="after")
     def check_proxy(self):
         if not self.host.strip() or "\x00" in self.host:
             raise ValueError("SOCKS5 proxy host cannot be empty or contain NUL")
-        if (self.username is None) != (self.password_env is None):
-            raise ValueError("SOCKS5 proxy requires both username and password_env")
+        if (self.username is None) != (self.password is None):
+            raise ValueError("SOCKS5 proxy requires both username and password")
         if self.username is not None and (
             not self.username.isascii() or not 1 <= len(self.username) <= 255
         ):
             raise ValueError("SOCKS5 proxy username must contain 1–255 ASCII characters")
-        if self.password_env is not None and not ENV_NAME.fullmatch(self.password_env):
-            raise ValueError("proxy password_env must name a local environment variable")
+        if self.password is not None and (
+            not self.password.isascii() or not 1 <= len(self.password) <= 255
+        ):
+            raise ValueError("SOCKS5 proxy password must contain 1–255 ASCII characters")
         return self
 
 
@@ -65,8 +67,7 @@ class SSHOverride(Model):
     host: str | None = None
     port: Annotated[int, Field(ge=1, le=65535)] | None = None
     username: str | None = None
-    password_env: str | None = None
-    prompt_password: bool | None = None
+    password: StrictStr | None = Field(default=None, repr=False)
     client_keys: list[Path] | None = None
     agent: bool | None = None
     known_hosts: Path | None = None
@@ -81,7 +82,7 @@ class SSHOverride(Model):
 
     @model_validator(mode="after")
     def nonnullable_overrides(self):
-        for name in self.model_fields_set - {"password_env", "host_key_alias", "proxy"}:
+        for name in self.model_fields_set - {"password", "host_key_alias", "proxy"}:
             if getattr(self, name) is None:
                 raise ValueError(f"SSH override {name} cannot be null")
         return self
@@ -91,8 +92,7 @@ class SSHConfig(Model):
     host: str
     port: Annotated[int, Field(ge=1, le=65535)] = 22
     username: str
-    password_env: str | None = None
-    prompt_password: bool = False
+    password: StrictStr | None = Field(default=None, repr=False)
     client_keys: list[Path] = Field(default_factory=list)
     agent: bool = True
     known_hosts: Path = Path("~/.ssh/known_hosts")
@@ -101,10 +101,6 @@ class SSHConfig(Model):
 
     @model_validator(mode="after")
     def check_auth(self):
-        if self.password_env and not ENV_NAME.fullmatch(self.password_env):
-            raise ValueError("password_env must name a local environment variable")
-        if self.password_env and self.prompt_password:
-            raise ValueError("choose password_env or prompt_password")
         if not self.host or not self.username:
             raise ValueError("SSH host and username cannot be empty")
         return self

@@ -17,7 +17,7 @@ from autobench.errors import (
     RemoteError,
     UncertainSubmission,
 )
-from autobench.ssh import Credentials, RemoteClient
+from autobench.ssh import RemoteClient
 from autobench.storage import TERMINAL, Store
 
 
@@ -57,19 +57,17 @@ class Scheduler:
         store: Store,
         run_id: str,
         *,
-        credentials: Credentials | None = None,
         client_factory: Callable | None = None,
         report: Callable[[str], None] = print,
     ):
         self.store = store
         self.run_id = run_id
         self.config = store.config(run_id)
-        self.credentials = credentials or Credentials()
         self.client_factory = client_factory or RemoteClient
         self.report = report
 
     def client(self, machine: Machine, system: System | None):
-        return self.client_factory(machine, system, self.config.policy, self.credentials)
+        return self.client_factory(machine, system, self.config.policy)
 
     def event(self, job: dict | None, message: str):
         self.store.event(self.run_id, job["id"] if job else None, message)
@@ -385,10 +383,10 @@ class Scheduler:
                 self.store.snapshot(self.run_id, root)
 
 
-async def inspect_machine(config: Config, machine: Machine, credentials: Credentials) -> dict:
+async def inspect_machine(config: Config, machine: Machine) -> dict:
     """Read-only discovery/doctor: never boot other systems to inspect them."""
     requirements = requirements_for(config)
-    client = RemoteClient(machine, None, config.policy, credentials)
+    client = RemoteClient(machine, None, config.policy)
     probe = await client.probe(requirements)
     errors = []
     try:

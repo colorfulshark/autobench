@@ -192,8 +192,16 @@ class Store:
 
     def snapshot(self, run_id: str, root: Path):
         private_dir(root)
+        config = json.loads(self.run(run_id)["config"])
+        # Keep the frozen database configuration intact for resume. Only the
+        # exported copy is redacted, including explicitly set system overrides.
+        for machine in config["machines"]:
+            for ssh in [machine["ssh"], *(system["ssh"] for system in machine["systems"])]:
+                for settings in (ssh, ssh.get("proxy") or {}):
+                    if settings.get("password") is not None:
+                        settings["password"] = "********"
         for name, value in (
-            ("config.json", json.loads(self.run(run_id)["config"])),
+            ("config.json", config),
             ("events.json", self.events(run_id)),
         ):
             temp = root / (name + ".tmp")

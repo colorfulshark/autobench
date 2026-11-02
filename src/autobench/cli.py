@@ -15,7 +15,6 @@ from autobench import __version__
 from autobench.config import load_config
 from autobench.errors import AutoBenchError
 from autobench.scheduler import Scheduler, inspect_machine
-from autobench.ssh import Credentials
 from autobench.storage import Store
 
 app = typer.Typer(
@@ -81,12 +80,11 @@ async def inspections(config: Path, selected: str | None):
     machines = [m for m in parsed.machines if selected is None or m.id == selected]
     if not machines:
         raise ValueError(f"unknown machine: {selected}")
-    credentials = Credentials()
     result = []
     # Discovery is intentionally read-only and only inspects the currently booted OS.
     for machine in machines:
         try:
-            result.append(await inspect_machine(parsed, machine, credentials))
+            result.append(await inspect_machine(parsed, machine))
         except AutoBenchError as exc:
             result.append({"machine": machine.id, "errors": [str(exc)]})
     return result

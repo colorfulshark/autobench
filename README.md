@@ -38,7 +38,19 @@ autobench run examples/autobench.yaml
 
 SSH 必须验证主机密钥。通过可信渠道核对各系统指纹后，将它们登记到指定的 `known_hosts`。同一 IP 对应多个系统时可以登记多个合法主机密钥，或为系统设置 `host_key_alias` 并分别登记对应别名。工具不自动接受新密钥，不读取用户 SSH config。
 
-密码登录使用 `password_env` 引用本地环境变量，或使用 `prompt_password: true` 隐藏输入；两者互斥。公钥登录配置 `client_keys`，或启用 `agent` 使用本地 ssh-agent；加密私钥可先加载到 ssh-agent。每个系统的 `ssh` 可以覆盖机器默认设置；切换认证方式时可用 `password_env: null` 清除继承的密码引用、`client_keys: []` 清除密钥列表。凭据只在内存解析，不写入 SQLite 或归档，也不转发给测试进程。
+密码登录直接在 YAML 的 `ssh.password` 中填写字符串，建议加引号；密码按字面值使用，不进行变量替换或 Shell 展开。公钥登录配置 `client_keys`，或启用 `agent` 使用本地 ssh-agent；加密私钥可先加载到 ssh-agent。每个系统的 `ssh` 可以覆盖机器默认设置；切换认证方式时可用 `password: null` 清除继承的密码、`client_keys: []` 清除密钥列表。仅使用密码认证时，设置 `client_keys: []` 和 `agent: false`。
+
+```yaml
+ssh:
+  host: 192.0.2.10
+  username: bench
+  password: "your-ssh-password"
+  known_hosts: ~/.ssh/known_hosts
+  client_keys: []
+  agent: false
+```
+
+密码随完整配置保存在本地 SQLite 中，供恢复运行使用；状态目录权限为 0700，数据库权限为 0600。结果归档的 `config.json` 将所有机器级、系统级 SSH 和代理密码替换为 `********`，保留显式的 `null`。密码不转发给远端测试进程。
 
 ## SSH SOCKS5 代理
 
@@ -57,7 +69,7 @@ machines:
         port: 1080
         # 代理需要用户名密码时，同时填写下面两项：
         # username: proxy-user
-        # password_env: AUTOBENCH_PROXY_PASSWORD
+        # password: "your-proxy-password"
     systems:
       - id: ubuntu
         boot_entry: "0001"
@@ -70,11 +82,11 @@ machines:
           proxy: null  # 此系统直连；也可填写完整代理对象来替换机器的代理。
 ```
 
-代理 `host` 必填，`port` 默认 `1080`，范围为 1–65535。无认证代理省略 `username` 和 `password_env`；认证代理必须同时配置这两项，密码从指定的本地环境变量读取。由于代理库的编码限制，代理用户名和密码各为 1–255 个 ASCII 字符。代理认证独立于 SSH 登录认证。
+代理 `host` 必填，`port` 默认 `1080`，范围为 1–65535。无认证代理省略 `username` 和 `password`；认证代理必须同时配置这两项，密码直接填写在 YAML 中。由于代理库的编码限制，代理用户名和密码各为 1–255 个 ASCII 字符。代理认证独立于 SSH 登录认证。
 
 目标域名由代理解析，`known_hosts` 仍需登记目标主机及端口或 `host_key_alias` 对应的密钥，不能以代理主机的密钥替代。代理建立连接与 SSH 握手共享 `policy.connect_timeout`（默认 15 秒），已连接后的命令和传输沿用原超时策略。代理不可用时报告代理连接失败并沿用现有重连策略，不回退直连。
 
-`discover`、`doctor`、`run`、`resume`、`fetch` 和 `cancel` 自动使用代理配置。`resume` 使用冻结的代理设置，并重新读取密码环境变量；修改 YAML 仅影响新运行。系统级代理对象会整体替换机器级代理，不进行对象内部字段合并。配置快照和归档只记录密码环境变量名，不记录解析后的密码，也不将代理凭据传给远端测试进程。
+`discover`、`doctor`、`run`、`resume`、`fetch` 和 `cancel` 自动使用代理配置。`resume` 使用 SQLite 中冻结的代理设置及密码；修改 YAML 仅影响新运行。系统级代理对象会整体替换机器级代理，不进行对象内部字段合并。结果归档中的代理密码已脱敏，代理凭据不会传给远端测试进程。
 
 工具连接已有 SOCKS5 服务，不自动启动 `ssh -D`，不读取用户 SSH config 或全局代理环境变量，不支持 HTTP/SOCKS4 代理或代理链。
 
@@ -129,7 +141,7 @@ autobench resume RUN_ID --state-dir /path/to/state
 ```
 
 - SSH 断线不会停止 systemd 托管的编译或测试。收到启动响应前断线，控制端查询原 job 的状态，不创建新任务。
-- 本地退出或 Ctrl-C 后，远程测试继续。`resume` 使用 SQLite 中冻结的配置，包括原环境变量；修改 YAML 只影响新运行。密码引用在恢复时重新解析。
+- 本地退出或 Ctrl-C 后，远程测试继续。`resume` 使用 SQLite 中冻结的配置，包括原密码和测试环境变量；修改 YAML 只影响新运行。
 - `fetch` 只收集已经封存的产物，不启动测试、不切系统。恢复时若任务所属系统未启动，暂停并报告，由用户先恢复该系统。
 - 远端意外重启、编译失败或运行失败均保留日志，不自动重跑；后续系统暂停，其他机器继续。需要重新测试时创建新的 run。
 - 取消请求先持久化。已有控制端运行时由其轮询处理；远程不可达时保留 `cancel_pending`，连接恢复后重新执行 `cancel` 或 `resume`。已提交的系统重启不会被取消命令撤销。

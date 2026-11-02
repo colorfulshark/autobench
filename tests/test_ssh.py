@@ -6,10 +6,11 @@ from types import SimpleNamespace
 
 import asyncssh
 import pytest
+from pydantic import ValidationError
 
 from autobench.config import SOCKS5Proxy
 from autobench.errors import AuthenticationFailed, ChecksumError, ConnectionLost, RemoteError
-from autobench.ssh import Credentials, RemoteClient, validate_inventory
+from autobench.ssh import RemoteClient, validate_inventory
 
 
 @pytest.fixture
@@ -125,7 +126,7 @@ async def socks_server():
 
 
 @pytest.fixture(params=["direct", "socks5", "socks5-auth"])
-async def ssh_server(tmp_path, config, socks_server, request, monkeypatch):
+async def ssh_server(tmp_path, config, socks_server, request):
     host_key = asyncssh.generate_private_key("ssh-ed25519")
     client_key = asyncssh.generate_private_key("ssh-ed25519")
     fault = {"drop": False, "offsets": [], "passwords": [], "public_keys": 0}
@@ -189,9 +190,8 @@ async def ssh_server(tmp_path, config, socks_server, request, monkeypatch):
         if request.param == "socks5-auth":
             socks_server.auth = True
             machine.ssh.proxy.username = "proxy-user"
-            machine.ssh.proxy.password_env = "TEST_PROXY_PASSWORD"
-            monkeypatch.setenv("TEST_PROXY_PASSWORD", "proxy-secret")
-    client = RemoteClient(machine, None, config.policy, Credentials())
+            machine.ssh.proxy.password = "proxy-secret"
+    client = RemoteClient(machine, None, config.policy)
     try:
         yield client, fault
     finally:
@@ -206,22 +206,21 @@ async def test_public_key_auth_and_real_remote_helper(ssh_server):
     assert fault["public_keys"] > 0 and fault["passwords"] == []
 
 
-async def test_password_authentication(ssh_server, monkeypatch):
+async def test_password_authentication(ssh_server):
     client, fault = ssh_server
     client.ssh.client_keys = []
-    client.ssh.password_env = "TEST_AUTOBENCH_PASSWORD"
-    monkeypatch.setenv("TEST_AUTOBENCH_PASSWORD", "correct-password")
+    client.ssh.password = "correct-password"
     assert (await client.probe())["machine_id"]
     assert fault["passwords"] == ["correct-password"]
 
 
-async def test_bad_password_and_host_key_rejected(ssh_server, monkeypatch):
+async def test_bad_password_and_host_key_rejected(ssh_server):
     client, fault = ssh_server
     client.ssh.client_keys = []
-    client.ssh.password_env = "TEST_AUTOBENCH_PASSWORD"
-    monkeypatch.setenv("TEST_AUTOBENCH_PASSWORD", "wrong-password")
-    with pytest.raises(AuthenticationFailed):
+    client.ssh.password = "wrong-password"
+    with pytest.raises(AuthenticationFailed) as failure:
         await client.probe()
+    assert "wrong-password" not in str(failure.value)
     assert "wrong-password" in fault["passwords"]
     replacement = asyncssh.generate_private_key("ssh-ed25519")
     client.ssh.known_hosts.write_text(
@@ -320,16 +319,6 @@ def test_inventory_traversal_rejected(name):
         )
 
 
-def test_credentials_prompt_cached_and_reference_not_modified(config):
-    ssh = config.machines[0].ssh
-    ssh.prompt_password = True
-    calls = []
-    credentials = Credentials(lambda message: calls.append(message) or "secret")
-    assert credentials.password(ssh) == "secret"
-    assert credentials.password(ssh) == "secret"
-    assert len(calls) == 1 and "secret" not in ssh.model_dump_json()
-
-
 @pytest.fixture
 async def proxied_client(ssh_server, socks_server):
     client, fault = ssh_server
@@ -383,44 +372,38 @@ async def test_proxy_rejects_without_direct_fallback(ssh_server, socks_server):
     assert socks_server.requests == [(client.ssh.host, client.ssh.port)]
 
 
-async def test_proxy_bad_password_is_sanitized(proxied_client, socks_server, monkeypatch):
+async def test_proxy_bad_password_is_sanitized(proxied_client, socks_server):
     client, _ = proxied_client
     socks_server.auth = True
     client.ssh.proxy.username = "proxy-user"
-    client.ssh.proxy.password_env = "TEST_PROXY_SECRET"
-    monkeypatch.setenv("TEST_PROXY_SECRET", "wrong-proxy-password")
+    client.ssh.proxy.password = "wrong-proxy-password"
     with pytest.raises(ConnectionLost, match="SOCKS5 proxy") as failure:
         await client.probe()
     assert "wrong-proxy-password" not in str(failure.value)
-    assert "wrong-proxy-password" not in client.ssh.model_dump_json()
+    assert "wrong-proxy-password" not in repr(client.ssh)
     assert socks_server.requests == []
 
 
 @pytest.mark.parametrize("password", [None, "", "x" * 256, "秘密"])
-async def test_proxy_invalid_credentials_fail_before_connecting(
-    proxied_client, socks_server, monkeypatch, password
+async def test_proxy_invalid_password_fails_before_connecting(
+    proxied_client, socks_server, password
 ):
     client, _ = proxied_client
-    client.ssh.proxy.username = "proxy-user"
-    client.ssh.proxy.password_env = "TEST_PROXY_SECRET"
-    if password is None:
-        monkeypatch.delenv("TEST_PROXY_SECRET", raising=False)
-    else:
-        monkeypatch.setenv("TEST_PROXY_SECRET", password)
-    with pytest.raises(AuthenticationFailed, match="SOCKS5 proxy"):
-        await client.probe()
+    with pytest.raises(ValidationError, match="SOCKS5 proxy"):
+        client.ssh.proxy = SOCKS5Proxy(
+            host="127.0.0.1", port=socks_server.port, username="proxy-user", password=password
+        )
     assert not socks_server.accepted.is_set()
 
 
-async def test_proxy_password_is_read_again(proxied_client, socks_server, monkeypatch):
+async def test_proxy_password_can_be_updated(proxied_client, socks_server):
     client, _ = proxied_client
     socks_server.auth = True
     client.ssh.proxy.username = "proxy-user"
-    client.ssh.proxy.password_env = "TEST_PROXY_SECRET"
-    monkeypatch.setenv("TEST_PROXY_SECRET", "wrong-proxy-password")
+    client.ssh.proxy.password = "wrong-proxy-password"
     with pytest.raises(ConnectionLost):
         await client.probe()
-    monkeypatch.setenv("TEST_PROXY_SECRET", "proxy-secret")
+    client.ssh.proxy.password = "proxy-secret"
     assert (await client.probe())["machine_id"]
     assert socks_server.passwords[-1] == (b"proxy-user", b"proxy-secret")
 

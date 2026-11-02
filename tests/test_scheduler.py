@@ -24,7 +24,7 @@ class World:
         self.active = 0
         self.max_active = 0
 
-    def factory(self, machine, system, policy, credentials):
+    def factory(self, machine, system, policy):
         return FakeRemote(self, machine, system)
 
 

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import getpass
 import json
 import os
 import re
@@ -15,58 +14,16 @@ from python_socks import ProxyConnectionError, ProxyError, ProxyTimeoutError, Pr
 from python_socks.async_.asyncio import Proxy
 
 from autobench import remote_runner
-from autobench.config import Machine, Policy, SOCKS5Proxy, SSHConfig, System, file_sha256
+from autobench.config import Machine, Policy, System, file_sha256
 from autobench.errors import AuthenticationFailed, ChecksumError, ConnectionLost, RemoteError
 from autobench.storage import private_dir
 
 
-class Credentials:
-    """In-memory only; snapshots contain references, never resolved credentials."""
-
-    def __init__(self, prompt=getpass.getpass):
-        self.prompt = prompt
-        self.passwords: dict[tuple, str] = {}
-
-    def password(self, config: SSHConfig) -> str | None:
-        if config.password_env:
-            value = os.environ.get(config.password_env)
-            if value is None:
-                raise AuthenticationFailed(
-                    f"set local variable {config.password_env} for SSH login"
-                )
-            return value
-        if config.prompt_password:
-            key = (config.host, config.port, config.username)
-            if key not in self.passwords:
-                self.passwords[key] = self.prompt(
-                    f"SSH password for {config.username}@{config.host}: "
-                )
-            return self.passwords[key]
-        return None
-
-    def proxy_password(self, proxy: SOCKS5Proxy) -> str | None:
-        if proxy.password_env is None:
-            return None
-        value = os.environ.get(proxy.password_env)
-        if value is None:
-            raise AuthenticationFailed(
-                f"set local variable {proxy.password_env} for SOCKS5 proxy login"
-            )
-        # python-socks 2.x encodes SOCKS5 credentials as ASCII. Validate here so
-        # an encoding exception cannot expose the password in a user-facing error.
-        if not value.isascii() or not 1 <= len(value) <= 255:
-            raise AuthenticationFailed("SOCKS5 proxy password must contain 1–255 ASCII characters")
-        return value
-
-
 class RemoteClient:
-    def __init__(
-        self, machine: Machine, system: System | None, policy: Policy, credentials: Credentials
-    ):
+    def __init__(self, machine: Machine, system: System | None, policy: Policy):
         self.machine = machine
         self.system = system
         self.policy = policy
-        self.credentials = credentials
         self.ssh = machine.connection(system)
         self.source = Path(remote_runner.__file__).read_text()
 
@@ -78,7 +35,7 @@ class RemoteClient:
             "host": self.ssh.host,
             "port": self.ssh.port,
             "username": self.ssh.username,
-            "password": self.credentials.password(self.ssh),
+            "password": self.ssh.password,
             "known_hosts": str(self.ssh.known_hosts),
             "config": None,
             "client_keys": [str(p) for p in self.ssh.client_keys],
@@ -97,7 +54,6 @@ class RemoteClient:
                 if self.ssh.proxy is not None:
                     stage = "SOCKS5 proxy connection"
                     proxy = self.ssh.proxy
-                    password = self.credentials.proxy_password(proxy)
                     # The socket peer is the proxy, never a trusted identity for the target.
                     kwargs["known_hosts"] = asyncssh.read_known_hosts(
                         str(self.ssh.known_hosts)
@@ -111,7 +67,7 @@ class RemoteClient:
                         host=proxy.host,
                         port=proxy.port,
                         username=proxy.username,
-                        password=password,
+                        password=proxy.password,
                         rdns=True,
                     ).connect(
                         dest_host=self.ssh.host,

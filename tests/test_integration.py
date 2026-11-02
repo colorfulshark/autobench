@@ -7,7 +7,7 @@ import pytest
 
 from autobench.config import load_config
 from autobench.scheduler import Scheduler
-from autobench.ssh import Credentials, RemoteClient
+from autobench.ssh import RemoteClient
 from autobench.storage import Store
 
 
@@ -19,7 +19,7 @@ async def test_real_ssh_systemd_current_os(tmp_path):
     config = load_config(Path(path))
     assert len(config.machines) == 1 and len(config.machines[0].systems) == 1
     machine = config.machines[0]
-    client = RemoteClient(machine, machine.systems[0], config.policy, Credentials())
+    client = RemoteClient(machine, machine.systems[0], config.policy)
     probe = await client.probe()
     assert Scheduler.is_target(probe, machine.systems[0]), "this test must not switch OS"
     config.policy.state_dir = tmp_path / "state"
@@ -54,7 +54,7 @@ async def test_real_uefi_matrix(tmp_path):
         assert all(j["details"]["archived"] for j in store.jobs(run_id))
         for machine in config.machines:
             final = machine.systems[-1]
-            probe = await RemoteClient(machine, final, config.policy, Credentials()).probe()
+            probe = await RemoteClient(machine, final, config.policy).probe()
             assert Scheduler.is_target(probe, final)
     finally:
         store.close()

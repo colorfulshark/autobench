@@ -16,15 +16,14 @@ machines:
       known_hosts: ~/.ssh/known_hosts
       client_keys: [~/.ssh/id_ed25519]
       agent: true
-      # For password login, remove client_keys and use one of:
-      # password_env: AUTOBENCH_SSH_PASSWORD
-      # prompt_password: true
+      # For password login, set client_keys: [], agent: false, and:
+      # password: "your-ssh-password"
       # Optional existing SOCKS5 proxy, also used for SFTP and reconnects:
       # proxy:
       #   host: 127.0.0.1
       #   port: 1080  # Default: 1080. Target names are resolved by the proxy.
       #   username: proxy-user  # Omit both authentication fields for no auth.
-      #   password_env: AUTOBENCH_PROXY_PASSWORD
+      #   password: "your-proxy-password"
     remote_dir: .local/state/autobench
     systems:
       - id: ubuntu
@@ -39,7 +38,7 @@ machines:
         # Override endpoint/authentication if this OS uses different settings:
         # ssh:
         #   username: another-user
-        #   password_env: DEBIAN_SSH_PASSWORD
+        #   password: "your-debian-password"  # Use null to clear the inherited password.
         #   client_keys: []
         #   agent: false
         #   proxy: null  # Disable inherited proxy, or supply a complete replacement object.
