@@ -253,7 +253,13 @@ def inspect_archive(benchmark: Benchmark) -> None:
 
 def load_config(path: Path, *, check_sources: bool = True) -> Config:
     path = path.expanduser().resolve()
-    config = Config.model_validate(yaml.safe_load(path.read_text()))
+    return load_config_text(path.read_text(encoding="utf-8"), path, check_sources=check_sources)
+
+
+def load_config_text(text: str, path: Path, *, check_sources: bool = True) -> Config:
+    """Parse a captured document with the same path semantics as the CLI loader."""
+    path = path.expanduser().resolve()
+    config = Config.model_validate(yaml.safe_load(text))
 
     def local(value: Path) -> Path:
         expanded = value.expanduser()

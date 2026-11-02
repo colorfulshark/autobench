@@ -1,5 +1,7 @@
 import json
 
+import pytest
+from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
 from autobench.cli import app
@@ -39,3 +41,79 @@ def test_status_uses_local_snapshot_without_connecting(config):
 def test_unknown_run_has_clean_error(tmp_path):
     result = runner.invoke(app, ["status", "missing", "--state-dir", str(tmp_path)])
     assert result.exit_code == 1 and "unknown run" in result.output
+
+
+def test_web_command_launches_loopback_with_startup_options(tmp_path, monkeypatch):
+    import uvicorn
+
+    calls = []
+    monkeypatch.setattr(uvicorn, "run", lambda app, **options: calls.append((app, options)))
+    result = runner.invoke(
+        app,
+        [
+            "web",
+            "--config",
+            str(tmp_path / "example.yaml"),
+            "--state-dir",
+            str(tmp_path),
+            "--port",
+            "9876",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "http://127.0.0.1:9876" in result.output
+    assert calls[0][1] == {"host": "127.0.0.1", "port": 9876, "access_log": False}
+    assert runner.invoke(app, ["web", "--port", "0"]).exit_code != 0
+
+
+@pytest.mark.parametrize(
+    "host, normalized, browser_host",
+    [
+        ("192.168.1.100", "192.168.1.100", "192.168.1.100"),
+        ("0.0.0.0", "0.0.0.0", "127.0.0.1"),
+        ("::", "::", "[::1]"),
+        ("::1", "::1", "[::1]"),
+        ("2001:0DB8:0:0::1", "2001:db8::1", "[2001:db8::1]"),
+    ],
+)
+def test_web_host_controls_listener_and_browser(host, normalized, browser_host, monkeypatch):
+    import threading
+    import webbrowser
+
+    import uvicorn
+
+    calls = []
+    opened = []
+    timers = []
+
+    class Timer:
+        def __init__(self, interval, function, args):
+            self.function, self.args = function, args
+            timers.append(interval)
+
+        def start(self):
+            self.function(*self.args)
+
+    monkeypatch.setattr(uvicorn, "run", lambda app, **options: calls.append((app, options)))
+    monkeypatch.setattr(webbrowser, "open", opened.append)
+    monkeypatch.setattr(threading, "Timer", Timer)
+    result = runner.invoke(app, ["web", "--host", host, "--port", "9876", "--open-browser"])
+    assert result.exit_code == 0, result.output
+    assert calls[0][1] == {"host": normalized, "port": 9876, "access_log": False}
+    with TestClient(calls[0][0], base_url="http://localhost") as client:
+        assert client.get("/api/info").json()["listen_host"] == normalized
+    authority = f"[{normalized}]" if ":" in normalized else normalized
+    assert f"http://{authority}:9876" in result.output
+    assert opened == [f"http://{browser_host}:9876"]
+    assert timers == [0.8]
+
+
+@pytest.mark.parametrize("host", ["localhost", "example.com", "256.0.0.1", "[::1]", "", "bad::ip"])
+def test_web_rejects_invalid_bind_address_before_launch(host, monkeypatch):
+    import uvicorn
+
+    calls = []
+    monkeypatch.setattr(uvicorn, "run", lambda *args, **kwargs: calls.append(args))
+    result = runner.invoke(app, ["web", "--host", host])
+    assert result.exit_code == 1 and "Error:" in result.output
+    assert not calls

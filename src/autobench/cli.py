@@ -4,6 +4,7 @@ import asyncio
 import json
 import tarfile
 from contextlib import contextmanager
+from ipaddress import ip_address
 from pathlib import Path
 from typing import Annotated
 
@@ -11,10 +12,9 @@ import typer
 import yaml
 from pydantic import ValidationError
 
-from autobench import __version__
+from autobench import __version__, services
 from autobench.config import load_config
 from autobench.errors import AutoBenchError
-from autobench.scheduler import Scheduler, inspect_machine
 from autobench.storage import Store
 
 app = typer.Typer(
@@ -61,12 +61,7 @@ def validate(config: Path):
     """Validate YAML, source archive/checksum and local key/known_hosts paths."""
     with errors():
         parsed = load_config(config)
-        for machine in parsed.machines:
-            for system in [None, *machine.systems]:
-                ssh = machine.connection(system)
-                for path in [ssh.known_hosts, *ssh.client_keys]:
-                    if not path.is_file():
-                        raise ValueError(f"local SSH file does not exist: {path}")
+        services.validate_config(parsed)
         typer.echo(f"Valid: {len(parsed.machines)} machines, {len(parsed.benchmarks)} benchmarks")
         for benchmark in parsed.benchmarks:
             typer.echo(
@@ -77,17 +72,7 @@ def validate(config: Path):
 
 async def inspections(config: Path, selected: str | None):
     parsed = load_config(config, check_sources=False)
-    machines = [m for m in parsed.machines if selected is None or m.id == selected]
-    if not machines:
-        raise ValueError(f"unknown machine: {selected}")
-    result = []
-    # Discovery is intentionally read-only and only inspects the currently booted OS.
-    for machine in machines:
-        try:
-            result.append(await inspect_machine(parsed, machine))
-        except AutoBenchError as exc:
-            result.append({"machine": machine.id, "errors": [str(exc)]})
-    return result
+    return await services.inspections(parsed, selected)
 
 
 @app.command()
@@ -111,39 +96,28 @@ def run(config: Path):
     """Freeze a configuration, create a run, and execute its matrix."""
     with errors():
         parsed = load_config(config)
-        store = Store(parsed.policy.state_dir)
-        try:
-            run_id = store.create(parsed)
-            typer.echo(f"Run ID: {run_id}\nState: {store.directory}")
-            outcome = asyncio.run(Scheduler(store, run_id, report=typer.echo).execute())
-            typer.echo(f"Run {run_id}: {outcome}")
-            if outcome != "succeeded":
-                raise typer.Exit(1)
-        finally:
-            store.close()
+        run_id = services.create_run(parsed)
+        typer.echo(f"Run ID: {run_id}\nState: {parsed.policy.state_dir}")
+        outcome = asyncio.run(
+            services.execute_run(run_id, parsed.policy.state_dir, report=typer.echo)
+        )
+        typer.echo(f"Run {run_id}: {outcome}")
+        if outcome != "succeeded":
+            raise typer.Exit(1)
 
 
 def operate(run_id: str, state_dir: Path, *, fetch_only=False, cancel=False):
     with errors():
-        store = Store(state_dir)
-        try:
-            if cancel:
-                # Persist even if another controller owns the run lock. Its poll loop will observe it.
-                store.request_cancel(run_id)
-                try:
-                    with store.run_lock(run_id):
-                        pass
-                except AutoBenchError:
-                    typer.echo("Cancellation requested; the active controller will apply it.")
-                    return
-            outcome = asyncio.run(
-                Scheduler(store, run_id, report=typer.echo).execute(fetch_only=fetch_only)
+        outcome = asyncio.run(
+            services.execute_run(
+                run_id, state_dir, fetch_only=fetch_only, cancel=cancel, report=typer.echo
             )
-            typer.echo(f"Run {run_id}: {outcome}")
-            if outcome != "succeeded" and not (cancel and outcome == "cancelled"):
-                raise typer.Exit(1)
-        finally:
-            store.close()
+        )
+        if outcome == "cancel_requested":
+            return
+        typer.echo(f"Run {run_id}: {outcome}")
+        if outcome != "succeeded" and not (cancel and outcome == "cancelled"):
+            raise typer.Exit(1)
 
 
 @app.command()
@@ -170,39 +144,50 @@ def status(run_id: str, state_dir: StateDir = DEFAULT_STATE):
     with errors():
         store = Store(state_dir)
         try:
-            run = store.run(run_id)
-            jobs = store.jobs(run_id)
-            typer.echo(
-                json.dumps(
-                    {
-                        "run_id": run_id,
-                        "status": run["status"],
-                        "cancel_requested": bool(run["cancel_requested"]),
-                        "jobs": [
-                            {
-                                **{
-                                    key: job[key]
-                                    for key in (
-                                        "id",
-                                        "machine",
-                                        "system",
-                                        "benchmark",
-                                        "repetition",
-                                        "status",
-                                    )
-                                },
-                                "reason": job["details"].get("reason"),
-                                "output": job["details"].get("output"),
-                            }
-                            for job in jobs
-                        ],
-                    },
-                    ensure_ascii=False,
-                    indent=2,
-                )
-            )
+            typer.echo(json.dumps(services.run_status(store, run_id), ensure_ascii=False, indent=2))
         finally:
             store.close()
+
+
+@app.command()
+def web(
+    config: Annotated[Path | None, typer.Option(help="YAML file to open initially.")] = None,
+    state_dir: StateDir = DEFAULT_STATE,
+    host: Annotated[str, typer.Option(help="IPv4 or IPv6 address to listen on.")] = "127.0.0.1",
+    port: Annotated[int, typer.Option(min=1, max=65535)] = 8765,
+    open_browser: Annotated[bool, typer.Option(help="Open the local UI in a browser.")] = False,
+):
+    """Start the web UI for configuration, diagnostics and run management."""
+    import uvicorn
+
+    from autobench.web import create_app
+
+    with errors():
+        address = ip_address(host)
+        listen_host = str(address)
+        browser_host = (
+            ("127.0.0.1" if address.version == 4 else "::1")
+            if address.is_unspecified
+            else listen_host
+        )
+
+        def url(value: str) -> str:
+            authority = f"[{value}]" if ":" in value else value
+            return f"http://{authority}:{port}"
+
+        application = create_app(config=config, state_dir=state_dir, host=listen_host)
+        typer.echo(f"AutoBench Web: {url(listen_host)}")
+        if address.is_unspecified:
+            typer.echo(f"Local URL: {url(browser_host)}")
+        typer.echo("Remote jobs survive controller exit; use resume to reconnect.")
+        if open_browser:
+            import threading
+            import webbrowser
+
+            timer = threading.Timer(0.8, webbrowser.open, args=(url(browser_host),))
+            timer.daemon = True
+            timer.start()
+        uvicorn.run(application, host=listen_host, port=port, access_log=False)
 
 
 if __name__ == "__main__":

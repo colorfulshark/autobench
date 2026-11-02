@@ -155,7 +155,7 @@ class RemoteClient:
 
     async def stage(self, job_id: str, directory: str, manifest: dict, source: Path):
         # The local source may have changed after the run snapshot was created.
-        if file_sha256(source) != manifest["source_sha256"]:
+        if await asyncio.to_thread(file_sha256, source) != manifest["source_sha256"]:
             raise RemoteError("local source no longer matches the frozen source checksum")
         payload = self.payload(job_id, directory)
         staged = await self.call("stage", {**payload, "manifest": manifest})
@@ -192,7 +192,7 @@ class RemoteClient:
         files = validate_inventory(inventory)
         private_dir(destination.parent)
         if destination.exists():
-            verify_download(destination, files)
+            await asyncio.to_thread(verify_download, destination, files)
             return
         partial = private_dir(destination.with_name(destination.name + ".partial"))
         async with self.connection() as connection:
@@ -224,10 +224,10 @@ class RemoteClient:
                                 size += len(block)
                             outgoing.flush()
                             os.fsync(outgoing.fileno())
-                    if file_sha256(target) != item["sha256"]:
+                    if await asyncio.to_thread(file_sha256, target) != item["sha256"]:
                         target.unlink()  # Next attempt starts this file from zero.
                         raise ChecksumError(f"artifact checksum mismatch: {item['path']}")
-        verify_download(partial, files)
+        await asyncio.to_thread(verify_download, partial, files)
         manifest = partial / "archive-manifest.json"
         manifest.write_text(json.dumps(inventory, ensure_ascii=False, indent=2))
         manifest.chmod(0o600)

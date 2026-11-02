@@ -114,6 +114,15 @@ class Store:
     def config(self, run_id: str) -> Config:
         return Config.model_validate_json(self.run(run_id)["config"])
 
+    def runs(self) -> list[dict]:
+        return [
+            dict(row)
+            for row in self.db.execute(
+                "SELECT id, status, cancel_requested, created, updated FROM runs "
+                "ORDER BY created DESC, id"
+            )
+        ]
+
     def jobs(self, run_id: str, machine: str | None = None) -> list[dict]:
         sql = "SELECT * FROM jobs WHERE run_id = ?"
         args = [run_id]
@@ -150,13 +159,13 @@ class Store:
                 (run_id, job_id, time.time(), message),
             )
 
-    def events(self, run_id: str) -> list[dict]:
-        return [
-            dict(r)
-            for r in self.db.execute(
-                "SELECT * FROM events WHERE run_id=? ORDER BY sequence", (run_id,)
-            )
-        ]
+    def events(self, run_id: str, after: int = 0, limit: int | None = None) -> list[dict]:
+        sql = "SELECT * FROM events WHERE run_id=? AND sequence>? ORDER BY sequence"
+        args = [run_id, after]
+        if limit is not None:
+            sql += " LIMIT ?"
+            args.append(limit)
+        return [dict(r) for r in self.db.execute(sql, args)]
 
     def request_cancel(self, run_id: str):
         self.run(run_id)
