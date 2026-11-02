@@ -1,0 +1,64 @@
+version: 1
+policy:
+  state_dir: ~/.local/state/autobench
+  output_dir: ../results
+  parallel_machines: 4
+  poll_interval: 10
+  settle_seconds: 60
+  reconnect_timeout: 900
+  boot_timeout: 600
+
+machines:
+  - id: server01
+    ssh:
+      host: 192.0.2.10
+      username: bench
+      known_hosts: ~/.ssh/known_hosts
+      client_keys: [~/.ssh/id_ed25519]
+      agent: true
+      # For password login, remove client_keys and use one of:
+      # password_env: AUTOBENCH_SSH_PASSWORD
+      # prompt_password: true
+      # Optional existing SOCKS5 proxy, also used for SFTP and reconnects:
+      # proxy:
+      #   host: 127.0.0.1
+      #   port: 1080  # Default: 1080. Target names are resolved by the proxy.
+      #   username: proxy-user  # Omit both authentication fields for no auth.
+      #   password_env: AUTOBENCH_PROXY_PASSWORD
+    remote_dir: .local/state/autobench
+    systems:
+      - id: ubuntu
+        boot_entry: "0001"
+        machine_id: "11111111111111111111111111111111"
+        env:
+          PATH: /usr/local/bin:/usr/bin:/bin
+          MALLOC_ARENA_MAX: "2"
+      - id: debian
+        boot_entry: "0002"
+        machine_id: "22222222222222222222222222222222"
+        # Override endpoint/authentication if this OS uses different settings:
+        # ssh:
+        #   username: another-user
+        #   password_env: DEBIAN_SSH_PASSWORD
+        #   client_keys: []
+        #   agent: false
+        #   proxy: null  # Disable inherited proxy, or supply a complete replacement object.
+        env:
+          PATH: /usr/local/bin:/usr/bin:/bin
+          MALLOC_ARENA_MAX: "2"
+
+benchmarks:
+  - id: unixbench-default
+    type: unixbench
+    source_archive: ../sources/unixbench.tar.gz
+    # Optional: autodetected if exactly one directory contains Run and Makefile.
+    # source_subdir: byte-unixbench/UnixBench
+    # source_sha256: <64-character SHA-256>
+    make_args: ["CC=gcc"]
+    args: []  # E.g. ["-c", "1", "-c", "8", "-i", "10"]
+    repetitions: 1
+    build_timeout: 1800
+    timeout: 21600
+    env:
+      OMP_NUM_THREADS: "8"
+      MALLOC_ARENA_MAX: "4"
