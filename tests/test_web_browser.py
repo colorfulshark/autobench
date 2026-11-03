@@ -120,6 +120,22 @@ def load_existing(page, server):
     page.wait_for_function("() => document.querySelector('#save-state').textContent === '已保存'")
 
 
+def set_editor_mode(page, mode, *, succeeds=True):
+    toggle = page.get_by_role("switch", name="YAML 源码模式", exact=True)
+    checked = str(mode == "yaml").lower()
+    if toggle.get_attribute("aria-checked") != checked:
+        toggle.click()
+    if not succeeds:
+        page.wait_for_function("() => !document.querySelector('#mode-toggle').disabled")
+        assert toggle.get_attribute("aria-checked") != checked
+        assert page.locator('#notice[data-tone="error"]').is_visible()
+        return
+    page.wait_for_function(
+        "checked => document.querySelector('#mode-toggle').getAttribute('aria-checked') === checked",
+        arg=checked,
+    )
+
+
 def open_step(page, name):
     page.locator("#wizard-steps").get_by_role("button", name=name).click()
 
@@ -532,7 +548,7 @@ def test_tabs_support_keyboard_navigation(browser_page, ui_server):
     assert page.locator("#page-runs").evaluate("element => element === document.activeElement")
 
 
-@pytest.mark.parametrize("width", [1920, 1440, 1200, 1101, 1100, 768, 390])
+@pytest.mark.parametrize("width", [1920, 1440, 1200, 1101, 1100, 768, 700, 640, 390])
 def test_header_files_layout_and_independent_locations(browser_page, ui_server, width):
     page, server = browser_page, ui_server
     page.set_viewport_size({"width": width, "height": 900})
@@ -585,7 +601,10 @@ def test_header_files_layout_and_independent_locations(browser_page, ui_server, 
         assert page.locator(".topbar").bounding_box()["height"] == 44
         selectors = [".brand", "#tab-config", "#tab-runs", f"#header-{key}", ".service-info"]
         selectors += (
-            ["#file-name", "#save-state", "#file-menu summary", "#file-location", "#matrix-summary"]
+            [
+                "#file-name", "#save-state", "#mode-toggle", "#file-menu summary",
+                "#file-location", "#matrix-summary",
+            ]
             if key == "config"
             else ["#state-location", "#use-config-location", "#change-location"]
         )
@@ -597,6 +616,9 @@ def test_header_files_layout_and_independent_locations(browser_page, ui_server, 
         assert page.locator(".service-info").is_visible() == (width > 1200)
         if key == "config":
             assert page.locator("#matrix-summary").is_visible() == (width > 1600)
+            toggle = page.locator("#mode-toggle").bounding_box()
+            menu = page.locator("#file-menu summary").bounding_box()
+            assert toggle["x"] + toggle["width"] <= menu["x"]
         assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
         page.evaluate("window.scrollTo(0, 400)")
         assert page.locator(".topbar").bounding_box()["y"] == 0
@@ -606,7 +628,8 @@ def test_header_files_layout_and_independent_locations(browser_page, ui_server, 
     assert page.locator("#input-machines-0-ssh-host").input_value() == "unsaved.example"
     assert page.locator("#file-location").get_attribute("title") == str(saved_path)
     assert page.locator("#file-name").get_attribute("title") == str(saved_path)
-    assert page.locator("#save-state").inner_text() == "未保存"
+    assert page.locator("#save-state").text_content() == "未保存"
+    assert page.locator("#save-state").get_attribute("title") == "未保存"
     page.locator("#tab-runs").click()
     assert page.locator("#state-location").inner_text() == str(long_dir)
     page.locator("#use-config-location").click()
@@ -614,6 +637,63 @@ def test_header_files_layout_and_independent_locations(browser_page, ui_server, 
         "path => document.querySelector('#state-location').textContent === path",
         arg=str(server.config.policy.state_dir),
     )
+
+
+@pytest.mark.parametrize("width", [1440, 768, 390])
+def test_header_mode_switch_supports_keyboard_and_keeps_source(browser_page, ui_server, width):
+    page = browser_page
+    page.set_viewport_size({"width": width, "height": 900})
+    ready(page, ui_server)
+    load_existing(page, ui_server)
+    open_step(page, "运行设置")
+    toggle = page.get_by_role("switch", name="YAML 源码模式", exact=True)
+    assert page.locator(".topbar #mode-toggle").is_visible()
+    assert page.locator(".editor-toolbar, #mode-form, #mode-yaml").count() == 0
+    assert toggle.get_attribute("aria-checked") == "false"
+    toggle.focus()
+    page.keyboard.press("Space")
+    page.locator("#yaml-panel").wait_for()
+    assert toggle.get_attribute("aria-checked") == "true"
+    assert page.locator("#wizard-steps").is_hidden()
+    text = page.locator("#yaml-editor").input_value() + "\n# keep mode-switch comment\n"
+    page.locator("#yaml-editor").fill(text)
+    page.locator("#tab-runs").click()
+    assert toggle.is_hidden()
+    page.locator("#tab-config").click()
+    assert toggle.get_attribute("aria-checked") == "true"
+    assert page.locator("#yaml-editor").input_value() == text
+    toggle.focus()
+    page.keyboard.press("Enter")
+    page.locator("#config-layout").wait_for()
+    assert toggle.get_attribute("aria-checked") == "false"
+    assert "运行设置" in page.locator('.wizard-step[aria-current="step"]').inner_text()
+    set_editor_mode(page, "yaml")
+    assert page.locator("#yaml-editor").input_value() == text
+    assert page.locator(".topbar").bounding_box()["height"] == 44
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+
+def test_header_mode_switch_waits_for_parse_before_updating(browser_page, ui_server):
+    page = browser_page
+    ready(page, ui_server)
+    set_editor_mode(page, "yaml")
+    pending = []
+    page.route("**/api/config/parse", lambda route: pending.append(route))
+    toggle = page.get_by_role("switch", name="YAML 源码模式", exact=True)
+    toggle.click()
+    page.wait_for_function("() => document.querySelector('#mode-toggle').disabled")
+    assert len(pending) == 1
+    assert toggle.get_attribute("aria-checked") == "true"
+    assert page.locator("#yaml-panel").is_visible()
+    page.keyboard.press("Enter")
+    page.keyboard.press("Space")
+    assert len(pending) == 1
+    pending[0].continue_()
+    page.wait_for_function(
+        "() => document.querySelector('#mode-toggle').getAttribute('aria-checked') === 'false'"
+    )
+    assert toggle.is_enabled()
+    assert page.locator("#config-layout").is_visible()
 
 
 @pytest.mark.parametrize("width", [1440, 768, 390])
@@ -630,14 +710,14 @@ def test_tabs_keep_configuration_draft_and_step(browser_page, ui_server, width):
     assert "运行设置" in page.locator('.wizard-step[aria-current="step"]').inner_text()
     page.locator(".wizard-step").nth(0).click()
     assert page.locator("#input-machines-0-ssh-host").input_value() == "unsaved.example"
-    page.locator("#mode-yaml").click()
+    set_editor_mode(page, "yaml")
     text = page.locator("#yaml-editor").input_value() + "\n# unsaved tab draft\n"
     page.locator("#yaml-editor").fill(text)
     page.get_by_role("tab", name="运行记录", exact=True).click()
     page.get_by_role("tab", name="测试配置", exact=True).click()
     assert page.locator("#yaml-editor").is_visible()
     assert page.locator("#yaml-editor").input_value() == text
-    assert page.locator("#save-state").inner_text() == "未保存"
+    assert page.locator("#save-state").text_content() == "未保存"
     assert not (ui_server.root / "autobench.yaml").exists()
     assert page.locator(".brand").is_visible()
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
@@ -724,7 +804,7 @@ def test_auth_switches_are_exclusive_and_show_only_selected_controls(browser_pag
     assert page.locator("#input-machines-0-ssh-client_keys-0").count() == 0
     page.get_by_label("认证方式", exact=True).select_option("password")
     assert page.locator("#input-machines-0-ssh-password").input_value() == "remember-me"
-    page.locator("#mode-yaml").click()
+    set_editor_mode(page, "yaml")
     page.locator("#yaml-panel").wait_for()
     result = yaml.safe_load(page.locator("#yaml-editor").input_value())
     assert result["machines"][0]["ssh"]["password"] == "remember-me"
@@ -806,7 +886,7 @@ def test_connection_test_spinner_success_and_configuration_invalidation(browser_
     assert page.locator(".status-icon").count() == 0
     page.locator("#input-machines-0-ssh-host").fill("localhost")
     assert page.locator('.connection-test-status[data-phase="stale"]').count() == 1
-    page.locator("#mode-yaml").click()
+    set_editor_mode(page, "yaml")
     page.locator("#yaml-panel").wait_for()
     assert (
         yaml.safe_load(page.locator("#yaml-editor").input_value())["machines"][0]["systems"] == []
@@ -959,12 +1039,12 @@ def test_unixbench_tests_selection_save_reload_and_yaml_roundtrip(browser_page, 
     page.get_by_label("其他测试名", exact=True).fill("hanoi")
     page.get_by_role("button", name="添加测试项", exact=True).click()
     page.get_by_role("button", name="移除测试项 custom-test", exact=True).click()
-    page.locator("#mode-yaml").click()
+    set_editor_mode(page, "yaml")
     page.locator("#yaml-panel").wait_for()
     result = yaml.safe_load(page.locator("#yaml-editor").input_value())
     assert result["benchmarks"][0]["tests"] == ["execl", "shell", "hanoi"]
     assert result["benchmarks"][0]["args"] == ["-c", "1", "pipe"]
-    page.locator("#mode-form").click()
+    set_editor_mode(page, "form")
     page.get_by_role("checkbox", name="execl · 程序替换吞吐量", exact=True).wait_for()
     assert page.get_by_role("checkbox", name="execl · 程序替换吞吐量").is_checked()
     page.locator("#secondary-action").click()
@@ -985,7 +1065,7 @@ def test_unixbench_tests_selection_save_reload_and_yaml_roundtrip(browser_page, 
     page.get_by_role("button", name="移除测试项 hanoi", exact=True).click()
     page.get_by_role("button", name="清空选择", exact=True).click()
     assert page.get_by_role("list", name="已选测试项").count() == 0
-    page.locator("#mode-yaml").click()
+    set_editor_mode(page, "yaml")
     page.locator("#yaml-panel").wait_for()
     result = yaml.safe_load(page.locator("#yaml-editor").input_value())
     assert result["benchmarks"][0]["tests"] == []
@@ -1007,7 +1087,7 @@ def test_unixbench_tests_legacy_defaults_and_invalid_custom_name(browser_page, u
         page.get_by_role("button", name="添加测试项", exact=True).click()
         assert not custom.evaluate("input => input.validity.valid")
         assert page.get_by_role("list", name="已选测试项").count() == 0
-    page.locator("#mode-yaml").click()
+    set_editor_mode(page, "yaml")
     page.locator("#yaml-panel").wait_for()
     assert (
         "tests" not in yaml.safe_load(page.locator("#yaml-editor").input_value())["benchmarks"][0]
@@ -1061,10 +1141,10 @@ def test_mobile_and_validation_field_navigation(browser_page, ui_server):
     assert page.locator(".field-error").is_visible()
     page.set_viewport_size({"width": 390, "height": 844})
     assert page.evaluate("() => document.documentElement.scrollWidth <= innerWidth")
-    page.locator("#mode-yaml").click()
+    set_editor_mode(page, "yaml")
     page.locator("#yaml-panel").wait_for()
     page.locator("#yaml-editor").fill("machines: [\n")
-    page.locator("#mode-form").click()
+    set_editor_mode(page, "form", succeeds=False)
     assert page.locator("#yaml-editor").input_value() == "machines: [\n"
     assert page.locator("#yaml-panel").is_visible()
 
@@ -1079,9 +1159,9 @@ def test_plan_preview_tracks_systems_rounds_and_yaml_changes(browser_page, ui_se
     other = {**raw["benchmarks"][0], "id": "second-benchmark", "repetitions": 2}
     raw["benchmarks"].append(other)
     system_count = sum(len(machine["systems"]) for machine in raw["machines"])
-    page.locator("#mode-yaml").click()
+    set_editor_mode(page, "yaml")
     page.locator("#yaml-editor").fill(yaml.safe_dump(raw))
-    page.locator("#mode-form").click()
+    set_editor_mode(page, "form")
     plan.wait_for(state="visible")
     assert plan.locator(".plan-figure strong").text_content() == str(system_count * 5)
     assert plan.locator(".plan-route li").count() == system_count
@@ -1089,13 +1169,13 @@ def test_plan_preview_tracks_systems_rounds_and_yaml_changes(browser_page, ui_se
     plan.get_by_role("button", name="编辑测试 →", exact=True).click()
     page.locator("#input-benchmarks-0-repetitions").fill("4")
     assert plan.locator(".plan-figure strong").text_content() == str(system_count * 6)
-    page.locator("#mode-yaml").click()
+    set_editor_mode(page, "yaml")
     page.locator("#yaml-panel").wait_for()
     assert plan.is_hidden()
     result = yaml.safe_load(page.locator("#yaml-editor").input_value())
     assert result["benchmarks"][0]["repetitions"] == 4
     assert "plan" not in result
-    page.locator("#mode-form").click()
+    set_editor_mode(page, "form")
     plan.wait_for(state="visible")
     open_step(page, "运行设置")
     assert plan.is_visible()
@@ -1145,7 +1225,7 @@ def test_system_groups_reset_independently(browser_page, ui_server):
     page.get_by_label("单独设置此系统的连接地址或用户名", exact=True).uncheck()
     page.get_by_text("系统高级设置", exact=True).click()
     page.get_by_label("连接代理", exact=True).select_option("inherit")
-    page.locator("#mode-yaml").click()
+    set_editor_mode(page, "yaml")
     page.locator("#yaml-panel").wait_for()
     result = yaml.safe_load(page.locator("#yaml-editor").input_value())
     assert result["machines"][0]["systems"][0]["ssh"] == {
@@ -1154,10 +1234,10 @@ def test_system_groups_reset_independently(browser_page, ui_server):
         "host_key_alias": None,
     }
     assert result["machines"][0]["ssh"] == raw["machines"][0]["ssh"]
-    page.locator("#mode-form").click()
+    set_editor_mode(page, "form")
     page.locator("#config-body").wait_for()
     page.get_by_label("单独设置此系统的认证方式", exact=True).uncheck()
-    page.locator("#mode-yaml").click()
+    set_editor_mode(page, "yaml")
     page.locator("#yaml-panel").wait_for()
     result = yaml.safe_load(page.locator("#yaml-editor").input_value())
     assert result["machines"][0]["systems"][0]["ssh"] == {"host_key_alias": None}
@@ -1192,7 +1272,7 @@ def test_invalid_nested_document_keeps_source_accessible(browser_page, ui_server
         {"name": "broken.yaml", "mimeType": "text/yaml", "buffer": text.encode()}
     )
     page.get_by_text("配置结构需要修正", exact=True).wait_for()
-    page.locator("#mode-yaml").click()
+    set_editor_mode(page, "yaml")
     page.locator("#yaml-panel").wait_for()
     assert page.locator("#yaml-editor").input_value() == text
 
@@ -1243,16 +1323,16 @@ def test_host_key_switch_preserves_values_and_system_override(browser_page, ui_s
     page.get_by_label("主机密钥检查", exact=True).select_option("verify")
     assert page.locator("#input-machines-0-systems-0-ssh-known_hosts").input_value() == original
     assert page.get_by_text("已忽略主机密钥检查", exact=True).count() == 0
-    page.locator("#mode-yaml").click()
+    set_editor_mode(page, "yaml")
     page.locator("#yaml-panel").wait_for()
     data = yaml.safe_load(page.locator("#yaml-editor").input_value())
     assert data["machines"][0]["ssh"]["verify_host_key"] is False
     assert data["machines"][0]["systems"][0]["ssh"]["verify_host_key"] is True
-    page.locator("#mode-form").click()
+    set_editor_mode(page, "form")
     page.locator("#config-body").wait_for()
     page.get_by_label("主机密钥检查", exact=True).select_option("inherit")
     assert page.locator("#input-machines-0-systems-0-ssh-known_hosts").count() == 0
-    page.locator("#mode-yaml").click()
+    set_editor_mode(page, "yaml")
     page.locator("#yaml-panel").wait_for()
     data = yaml.safe_load(page.locator("#yaml-editor").input_value())
     assert "verify_host_key" not in data["machines"][0]["systems"][0]["ssh"]
@@ -1276,7 +1356,7 @@ def test_ignore_host_key_allows_connection_test_and_validation_without_hosts(
     assert not (server.root / "autobench.yaml").exists()
     data = server.config.model_dump(mode="json")
     data["machines"][0]["ssh"].update(verify_host_key=False, known_hosts="absent-hosts")
-    page.locator("#mode-yaml").click()
+    set_editor_mode(page, "yaml")
     page.locator("#yaml-panel").wait_for()
     page.locator("#yaml-editor").fill(yaml.safe_dump(data))
     page.locator("#primary-action").click()
@@ -1342,7 +1422,7 @@ def test_boot_entry_identification_spinner_choices_and_selection(
     assert page.locator(".boot-entry-controls input").count() == 1
     open_system(page, "os1")
     assert entry.evaluate("e => e.tagName") == "SELECT" and entry.input_value() == "0002"
-    page.locator("#mode-yaml").click()
+    set_editor_mode(page, "yaml")
     page.locator("#yaml-panel").wait_for()
     systems = yaml.safe_load(page.locator("#yaml-editor").input_value())["machines"][0]["systems"]
     assert len(systems) == 2 and systems[0]["boot_entry"] == "0002"
@@ -1458,7 +1538,7 @@ def test_five_steps_preserve_existing_config_and_fit_viewport(browser_page, ui_s
     load_existing(page, server)
     steps = ["连接机器", "选择系统", "设置测试", "运行设置", "检查运行"]
     assert page.locator("#workbench-switch").count() == 0
-    assert page.locator("#mode-form").text_content() == "引导配置"
+    assert page.locator("#mode-toggle").get_attribute("aria-checked") == "false"
     assert page.locator(".wizard-step").count() == 5
     for index, name in enumerate(steps):
         open_step(page, name)
@@ -1517,7 +1597,7 @@ def test_machine_management_in_guided_steps(browser_page, ui_server, step):
     page.get_by_role("button", name="＋ 添加机器", exact=True).click()
     assert page.locator(".machine-tabs .chip-button.active").text_content() == "server01"
     page.get_by_role("button", name="＋ 添加机器", exact=True).click()
-    page.locator("#mode-yaml").click()
+    set_editor_mode(page, "yaml")
     page.locator("#yaml-panel").wait_for()
     result = yaml.safe_load(page.locator("#yaml-editor").input_value())
     assert [m["id"] for m in result["machines"]] == ["server01", "server02"]
@@ -1597,10 +1677,10 @@ def test_imported_yaml_enters_guided_steps_without_changing_content(browser_page
     page.get_by_text("已导入 YAML 内容，请确认服务器上的保存位置。", exact=True).wait_for()
     assert page.locator(".wizard-step[aria-current=step]").text_content() == "1连接机器"
     open_step(page, "运行设置")
-    page.locator("#mode-yaml").click()
+    set_editor_mode(page, "yaml")
     page.locator("#yaml-panel").wait_for()
     assert page.locator("#yaml-editor").input_value() == text
-    page.locator("#mode-form").click()
+    set_editor_mode(page, "form")
     assert page.locator(".wizard-step[aria-current=step]").text_content() == "4运行设置"
     page.locator("#secondary-action").click()
     page.wait_for_function("() => document.querySelector('#save-state').textContent === '已保存'")
@@ -1623,7 +1703,7 @@ def test_guided_system_order_delete_and_readd(browser_page, ui_server):
     page.locator("#input-machines-0-systems-0-boot_entry").fill("00AB")
     page.get_by_role("button", name="← 返回系统列表", exact=True).click()
     assert page.locator(".system-item .object-title").all_text_contents() == ["linux01"]
-    page.locator("#mode-yaml").click()
+    set_editor_mode(page, "yaml")
     page.locator("#yaml-panel").wait_for()
     data = yaml.safe_load(page.locator("#yaml-editor").input_value())
     assert data["machines"][0]["systems"] == [{"id": "linux01", "boot_entry": "00AB"}]

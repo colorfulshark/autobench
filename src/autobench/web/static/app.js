@@ -63,13 +63,11 @@ function chrome() {
   $("file-name").title = $("file-location").textContent;
   $("file-location").title = $("file-location").textContent;
   $("save-state").textContent = saved ? "已保存" : "未保存";
+  $("save-state").title = $("save-state").textContent;
   $("save-state").dataset.tone = saved ? "success" : "warning";
   $("matrix-summary").textContent =
     `${c.machines} 台机器 · ${c.systems} 个系统 · ${c.benchmarks} 项测试`;
-  $("mode-form").classList.toggle("active", state.mode === "form");
-  $("mode-yaml").classList.toggle("active", state.mode === "yaml");
-  $("mode-form").setAttribute("aria-pressed", String(state.mode === "form"));
-  $("mode-yaml").setAttribute("aria-pressed", String(state.mode === "yaml"));
+  $("mode-toggle").setAttribute("aria-checked", String(state.mode === "yaml"));
   $("config-layout").hidden = state.mode !== "form";
   renderPlan();
   $("prev-step").hidden = state.step === 0 || state.mode === "yaml";
@@ -264,8 +262,7 @@ async function boot() {
       $("file-menu").open = false;
     }
   });
-  bind("mode-yaml", () => switchMode("yaml"));
-  bind("mode-form", () => switchMode("form"));
+  bind("mode-toggle", () => switchMode(state.mode === "yaml" ? "form" : "yaml"));
   $("yaml-editor").addEventListener("input", () =>
     sourceChanged($("yaml-editor").value),
   );

@@ -108,6 +108,19 @@
             </div>
             <div class="project-tools">
               <span id="matrix-summary" class="secondary"></span>
+              <button
+                id="mode-toggle"
+                class="mode-toggle"
+                type="button"
+                role="switch"
+                aria-checked="false"
+                aria-label="YAML 源码模式"
+                title="关闭：引导配置；开启：YAML 源码"
+              >
+                <span class="full-label">YAML 源码</span
+                ><span class="compact-label">YAML</span>
+                <span class="mode-track" aria-hidden="true"></span>
+              </button>
               <details id="file-menu" class="menu">
                 <summary aria-label="文件操作">
                   <span class="full-label">文件操作</span
@@ -171,12 +184,6 @@
           tabindex="0"
           hidden
         >
-          <div class="editor-toolbar">
-            <div class="segmented" aria-label="编辑模式">
-              <button id="mode-form" class="active">引导配置</button
-              ><button id="mode-yaml">YAML 源码</button>
-            </div>
-          </div>
           <div
             id="wizard-steps"
             class="wizard-steps"

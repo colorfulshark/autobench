@@ -519,37 +519,45 @@ main {
 .menu-items label:hover {
   background: var(--raised);
 }
-.editor-toolbar {
-  display: flex;
-  justify-content: space-between;
+.mode-toggle {
+  display: inline-flex;
   align-items: center;
-  gap: 12px;
-  margin-bottom: 16px;
-}
-.segmented {
-  display: flex;
-  width: fit-content;
+  gap: 8px;
+  height: 36px;
+  flex: none;
   border: 0;
-  border-bottom: 1px solid var(--line);
-  background: none;
-  gap: 24px;
-  padding: 0;
-}
-.segmented button {
-  border: 0;
-  border-bottom: 2px solid transparent;
-  margin-bottom: -1px;
+  border-radius: var(--radius-control);
   background: none;
   color: var(--muted);
-  font-size: 13px;
-  font-weight: 400;
-  min-height: 38px;
-  padding: 8px 0;
+  font-size: 12px;
+  padding: 0;
+  white-space: nowrap;
 }
-.segmented button.active {
-  border-bottom-color: var(--ink);
+.mode-toggle:hover {
   color: var(--ink);
-  font-weight: 500;
+}
+.mode-track {
+  width: 28px;
+  height: 18px;
+  border-radius: 9px;
+  background: var(--control);
+  flex: none;
+}
+.mode-track::after {
+  content: "";
+  display: block;
+  width: 12px;
+  height: 12px;
+  margin: 3px;
+  border-radius: 50%;
+  background: var(--panel);
+  transition: transform 120ms ease;
+}
+.mode-toggle[aria-checked="true"] .mode-track {
+  background: var(--ink);
+}
+.mode-toggle[aria-checked="true"] .mode-track::after {
+  transform: translateX(10px);
 }
 .wizard-steps {
   display: grid;
@@ -1774,6 +1782,12 @@ textarea:focus-visible {
   .history-location h1 {
     display: none;
   }
+  .mode-toggle .full-label {
+    display: none;
+  }
+  .mode-toggle .compact-label {
+    display: inline;
+  }
   .page-tab {
     min-width: 112px;
     padding-inline: 12px;
@@ -1792,6 +1806,9 @@ textarea:focus-visible {
   }
 }
 @media (max-width: 850px) {
+  .project-icon {
+    display: none;
+  }
   .config-layout {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -1800,6 +1817,14 @@ textarea:focus-visible {
   }
   .auth-editor {
     grid-template-columns: 180px minmax(0, 1fr);
+  }
+}
+@media (max-width: 700px) {
+  .topbar {
+    grid-template-columns: 30px auto minmax(0, 1fr);
+  }
+  .brand > span:last-child {
+    display: none;
   }
 }
 @media (max-width: 600px) {
@@ -1878,18 +1903,21 @@ textarea:focus-visible {
   }
   .project-tools {
     flex: none;
+    gap: 8px;
   }
-  .editor-toolbar {
-    gap: 12px;
-    margin-bottom: 16px;
+  .mode-toggle {
+    gap: 6px;
   }
-  .segmented {
-    gap: 16px;
-    flex: none;
+  #save-state {
+    width: 6px;
+    height: 6px;
+    padding: 0;
+    font-size: 0;
+    border-radius: 50%;
+    background: var(--warning-ink);
   }
-  .segmented button {
-    font-size: 12px;
-    min-height: 44px;
+  #save-state[data-tone="success"] {
+    background: var(--success-ink);
   }
   .wizard-steps {
     padding: 12px 4px;
