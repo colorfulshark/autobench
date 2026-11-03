@@ -67,7 +67,10 @@ def validate(config: Path):
             typer.echo(
                 f"{benchmark.id}: SHA256 {benchmark.source_sha256}; source {benchmark.source_subdir}"
             )
-        typer.echo("UnixBench may overwrite LANG internally. UB_RESULTDIR is managed by AutoBench.")
+        typer.echo(
+            "UnixBench may overwrite LANG internally. "
+            "UB_RESULTDIR, UB_BINDIR and MAKE are managed by AutoBench."
+        )
 
 
 async def inspections(config: Path, selected: str | None):

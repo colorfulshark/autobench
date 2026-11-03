@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import math
 import re
+import time
 from pathlib import Path
 from typing import Callable
 
@@ -175,7 +177,8 @@ async def execute_run(
 
 def run_status(store: Store, run_id: str) -> dict:
     run = store.run(run_id)
-    return {
+    jobs = store.jobs(run_id)
+    result = {
         "run_id": run_id,
         "status": run["status"],
         "cancel_requested": bool(run["cancel_requested"]),
@@ -187,7 +190,14 @@ def run_status(store: Store, run_id: str) -> dict:
                 },
                 "reason": job["details"].get("reason"),
                 "output": job["details"].get("output"),
+                "phase": job["status"],
             }
-            for job in store.jobs(run_id)
+            for job in jobs
         ],
     }
+    for job, stored in zip(result["jobs"], jobs):
+        ready_at = stored["details"].get("ready_at")
+        if job["status"] == "stabilizing" and isinstance(ready_at, (int, float)):
+            if math.isfinite(ready_at):
+                job["wait_seconds"] = max(0, math.ceil(ready_at - time.time()))
+    return result

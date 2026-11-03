@@ -117,8 +117,11 @@ class Store:
         for machine in config.machines:
             for system in machine.systems:
                 for benchmark in config.benchmarks:
+                    build_id = None
                     for repetition in range(1, benchmark.repetitions + 1):
                         job_id = uuid.uuid4().hex
+                        if build_id is None:
+                            build_id = job_id
                         self.db.execute(
                             "INSERT INTO jobs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                             (
@@ -130,7 +133,7 @@ class Store:
                                 repetition,
                                 ordinal,
                                 "pending",
-                                "{}",
+                                json.dumps({"build_id": build_id}),
                                 now,
                             ),
                         )

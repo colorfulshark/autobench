@@ -7,12 +7,13 @@ import socket
 import threading
 import time
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 
 import pytest
 import uvicorn
 import yaml
+from conftest import REMOVED_OUTPUTS
 from test_scheduler import FakeRemote, World
 
 from autobench.web import create_app
@@ -57,7 +58,12 @@ def ui_server(tmp_path, config, monkeypatch):
 
     async def download(self, directory, inventory, destination):
         await original_download(self, directory, inventory, destination)
+        if PurePosixPath(directory).parent.name == "builds":
+            (destination / "build.stdout").write_text("fixture build finished\n")
+            (destination / "build-environment.json").write_text('{"COMMON":"yes"}')
+            return
         (destination / "run.stdout").write_text("fixture benchmark finished\n")
+        (destination / "run-environment.json").write_text('{"COMMON":"yes","ROUND":"1"}')
         (destination / "report.html").write_text("<html>fixture report</html>")
 
     monkeypatch.setattr(FakeRemote, "status", slow_status)
@@ -358,6 +364,9 @@ def test_wizard_password_connection_test_manual_system_files_save_run_and_cancel
     with page.expect_download() as info:
         page.get_by_role("link", name="下载完整归档").click()
     assert info.value.suggested_filename.endswith(".zip")
+    assert not set(page.locator(".artifact-name strong").all_text_contents()) & REMOVED_OUTPUTS
+    with zipfile.ZipFile(info.value.path()) as zipped:
+        assert not {PurePosixPath(name).name for name in zipped.namelist()} & REMOVED_OUTPUTS
     assert len(server.world.starts) == 1
 
 

@@ -25,7 +25,7 @@ python3 -m venv .venv
 
 复制 [examples/autobench.yaml](examples/autobench.yaml)，填写机器、用户名、认证方式和启动项；将固定版本 UnixBench 的 tar/tar.gz 源码包保存到本地。支持上游仓库包或只包含 UnixBench 子目录的包，自动查找唯一包含 `Run` 与 `Makefile` 的目录，也可显式指定 `source_subdir`。源码包不允许路径越界、链接、设备或重复文件条目。
 
-配置中所有本地相对路径以 YAML 所在目录为基准。`remote_dir` 相对路径以远程登录用户 HOME 为基准。默认源码包和编译产物位于远端每个 job 的独立目录，不复用跨系统二进制。
+配置中所有本地相对路径以 YAML 所在目录为基准。`remote_dir` 相对路径以远程登录用户 HOME 为基准。源码压缩包按校验和缓存。每次运行中，同一机器、系统和测试配置的所有轮次共用一次构建；不同运行、机器、系统或测试配置分别构建。每轮使用独立工作目录，直接运行同一构建目录中的二进制。
 
 ```bash
 autobench discover examples/autobench.yaml --machine server01
@@ -146,7 +146,7 @@ args: ["-c", "1", "-i", "3"]
 
 变量名须匹配 `[A-Za-z_][A-Za-z0-9_]*`，值须是字符串；数字和布尔值需要加引号。允许空字符串，不允许 NUL。值不执行 Shell 展开：`$PATH`、`${VAR}`、`$(command)`、反引号均为原样字符。需要扩展 PATH 时请填写完整路径。
 
-运行 `env` 仅传给测试进程；构建使用服务基础环境，编译参数使用 `make_args`。`UB_RESULTDIR` 为工具保留，配置它会报错。UnixBench 自身可能覆盖 `LANG`，归档记录的是启动环境，不能将其理解为工具内部所有子进程的最终环境；工具不修改 UnixBench 源码。
+运行 `env` 仅传给测试进程；构建使用服务基础环境，编译参数使用 `make_args`。`UB_RESULTDIR`、`UB_BINDIR` 和 `MAKE` 为工具保留，配置它们会报字段错误。运行时通过 `MAKE` 检查入口校验既有产物，避免 UnixBench 内部 `make check/all` 重新编译；不修改上游源码。UnixBench 自身可能覆盖 `LANG`，归档记录的是启动环境，不能将其理解为工具内部所有子进程的最终环境。
 
 按配置要求，完整环境变量值会原样保存到归档；归档目录为 0700，工具创建的元信息和下载文件为 0600。
 
@@ -182,26 +182,30 @@ autobench resume 2026-11-03_14-30-25 --state-dir /path/to/state
 results/2026-11-03_14-30-25/
   config.json
   events.json
-  server01/kylin/unixbench/round-001/
-    results/                    # UnixBench 原始报告
-    build.stdout / build.stderr
-    run.stdout / run.stderr
-    environment.json            # 实际传入测试进程的完整环境
-    environment-overrides.json  # 系统、测试和工具生成值的来源
-    build-environment.json
-    system-before.json / system-after.json
-    source-metadata.json / toolchain.json
-    task.json                   # 执行清单、时间、退出码和状态
-    archive-manifest.json       # 文件大小与 SHA-256
+  server01/kylin/unixbench/
+    build.stdout / build.stderr # 一次构建的日志
+    build.json                  # 构建身份、命令、时间、退出状态
+    build-environment.json      # 实际传入构建进程的完整环境
+    toolchain.json
+    round-001/
+      results/                  # 本轮 UnixBench 原始报告
+      run.stdout / run.stderr
+      run-environment.json      # 实际传入本轮测试进程的完整环境
+    round-002/
+      ...
 ```
 
 运行名称采用控制端本地时间，格式为 `YYYY-MM-DD_HH-mm-ss`；同秒重名时依次追加 `-02`、`-03` 等序号。创建时检查状态库，并原子创建结果根目录预留名称，避免覆盖已有结果。运行名称创建后固定，恢复时不重新生成。
 
-归档路径为 `<运行名称>/<机器 ID>/<系统 ID>/<测试 ID>/round-NNN/`，三个 ID 分别取自配置的 `machine.id`、`system.id`、`benchmark.id`。轮次从 `round-001` 开始，至少补齐三位，超过 999 时自然扩展。同一个任务选择的多个 UnixBench 子测试归入同一轮次目录；下载未完成时使用相邻的 `round-NNN.partial/`。内部 Job ID 仍使用 UUID，用于远端执行和恢复，不作为结果目录名。本版本不迁移旧数据，使用前请自行清理旧状态库和旧结果目录。
+归档路径为 `<运行名称>/<机器 ID>/<系统 ID>/<测试 ID>/round-NNN/`，三个 ID 分别取自配置的 `machine.id`、`system.id`、`benchmark.id`。轮次从 `round-001` 开始，至少补齐三位，超过 999 时自然扩展。同一个任务选择的多个 UnixBench 子测试归入同一轮次目录。公共文件先下载到相邻的 `<测试 ID>.partial/` 并原子提交，后续轮次只核验已存在的公共文件；每轮下载未完成时使用相邻的 `round-NNN.partial/`。公共及本轮文件都校验完成后才确认采集。内部 Job ID 仍使用 UUID，用于远端执行和恢复，不作为结果目录名。本版本面向全新部署，不兼容旧状态、远端任务和旧归档格式，不执行历史迁移。
 
-可选系统信息采集失败会记录到 `errors`，不丢弃性能结果。第一版不解析 UnixBench 分数。`BenchmarkAdapter` 提供依赖、执行命令和工具元信息接口；SSH、环境合并、生命周期和归档由公共执行层管理。
+公共 `build-environment.json` 保存实际传入构建进程的完整环境；每轮 `run-environment.json` 直接保存实际传入本轮测试进程的完整环境变量表，包括空字符串、本轮结果路径、临时目录和 systemd 环境变量，无需合并其他文件。记录的是启动环境，不跟踪 UnixBench 启动后自行修改的变量。运行环境准备完成后，测试失败或取消时仍保留该文件；若在准备运行环境前已失败或取消，则不生成。公共构建归档封存后不再改变。
 
-默认并发 4 台机器；轮询 10 秒，系统就绪后稳定等待 60 秒；重连等待 15 分钟，启动等待 10 分钟，编译 30 分钟，测试 6 小时。重连按指数退避，最大间隔 30 秒并加入抖动。UnixBench 默认标准 `./Run`，重复一次。所有时间与并发限制可通过配置调整。存在失败或未完成任务时命令返回非零；取消命令在所有任务收尾完成后返回成功。
+构建成功后在远端内部 `ready.json` 记录二进制清单和原 boot ID，每轮运行前后校验；下载通过远端内部 `artifacts.json` 提供的清单校验文件大小和 SHA-256，结果目录与 ZIP 不输出独立校验清单或源码元信息文件。产物缺失、增加、内容变化或系统意外重启时停止该机器，不自动重建；构建失败、中断和取消时仍保留已有公共日志。控制端断线不影响远端构建、稳定等待或测试，恢复时查询原任务，不重复提交。
+
+框架负责构建、执行测试和归档结果，不主动采集用于性能分析或优化的系统快照，也不解析 UnixBench 分数。UnixBench 原生报告、构建与运行日志、工具链及启动环境记录会保留。`BenchmarkAdapter` 提供依赖、执行命令和工具元信息接口；SSH、环境合并、生命周期和归档由公共执行层管理。
+
+默认并发 4 台机器；轮询 10 秒，每轮实际测试前稳定等待 60 秒，首轮先完成构建再等待；重连等待 15 分钟，启动等待 10 分钟，编译 30 分钟，测试 6 小时。重连按指数退避，最大间隔 30 秒并加入抖动。UnixBench 默认标准 `./Run`，重复一次。所有时间与并发限制可通过配置调整。存在失败或未完成任务时命令返回非零；取消命令在所有任务收尾完成后返回成功。
 
 ## 测试
 

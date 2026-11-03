@@ -28,8 +28,8 @@ def validate_env(value: Environment) -> Environment:
     for name, item in value.items():
         if not ENV_NAME.fullmatch(name) or "\x00" in item:
             raise ValueError(f"invalid environment entry: {name!r}")
-        if name == "UB_RESULTDIR":
-            raise ValueError("UB_RESULTDIR is reserved for AutoBench result isolation")
+        if name in {"UB_RESULTDIR", "UB_BINDIR", "MAKE"}:
+            raise ValueError(f"{name} is reserved for AutoBench build and result isolation")
     return value
 
 

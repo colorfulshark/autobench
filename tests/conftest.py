@@ -13,6 +13,22 @@ out = pathlib.Path(os.environ["UB_RESULTDIR"])
 print("benchmark finished")
 """
 
+REMOVED_OUTPUTS = {
+    "archive-manifest.json",
+    "binaries-manifest.json",
+    "source-metadata.json",
+    "system-before.json",
+    "system-after.json",
+    "task.json",
+    "environment.json",
+    "environment-overrides.json",
+    "environment-delta.json",
+}
+
+
+def assert_no_removed_outputs(root: Path):
+    assert not [path for path in root.rglob("*") if path.name in REMOVED_OUTPUTS]
+
 
 def source_archive(path: Path, run=RUN, make=None):
     make = make or "all:\n\t@echo build-ok\n\t@printenv RUNTIME_ONLY || true\n"
@@ -20,6 +36,13 @@ def source_archive(path: Path, run=RUN, make=None):
         for name, value, mode in (
             ("UnixBench/Run", f"#!{sys.executable}\n" + run, 0o755),
             ("UnixBench/Makefile", make, 0o644),
+            ("UnixBench/pgms/probe", "#!/bin/sh\necho fixture-binary\n", 0o755),
+            ("UnixBench/testdir/input", "fresh input\n", 0o644),
+            (
+                "UnixBench/src/probe.c",
+                '#include <stdio.h>\nint main(void) { puts("built"); }\n',
+                0o644,
+            ),
         ):
             data = value.encode()
             member = tarfile.TarInfo(name)

@@ -4,6 +4,7 @@ import json
 from pathlib import PurePosixPath
 
 import pytest
+from conftest import assert_no_removed_outputs
 
 from autobench.errors import ConnectionLost
 from autobench.scheduler import Scheduler
@@ -38,6 +39,7 @@ class World:
         self.fail = False
         self.active = 0
         self.max_active = 0
+        self.common_downloaded = set()
 
     def factory(self, machine, system, policy):
         return FakeRemote(self, machine, system)
@@ -113,6 +115,10 @@ class FakeRemote:
             "phase": job["phase"],
             "state": {"status": job.get("outcome", "running")},
             "inventory": {"schema_version": 1, "files": []},
+            "common": {
+                "directory": self.root({}) + "/builds/" + job["manifest"]["build_id"],
+                "inventory": {"schema_version": 1, "files": []},
+            },
         }
 
     async def download(self, directory, inventory, destination):
@@ -120,7 +126,13 @@ class FakeRemote:
             self.world.drop_download = False
             raise ConnectionLost("download interrupted")
         destination.mkdir(parents=True, exist_ok=True)
-        (destination / "archive-manifest.json").write_text(json.dumps(inventory))
+        if PurePosixPath(directory).parent.name == "builds":
+            (destination / "build.json").write_text(
+                json.dumps({"build_id": PurePosixPath(directory).name})
+            )
+            self.world.common_downloaded.add(PurePosixPath(directory).name)
+            self.world.events.append((self.machine.id, "common_download"))
+            return
         job = self.world.jobs[PurePosixPath(directory).name]
         job["downloaded"] = True
         self.world.events.append((self.machine.id, "download"))
@@ -128,6 +140,7 @@ class FakeRemote:
     async def acknowledge(self, job_id, directory):
         job = self.world.jobs[job_id]
         assert job["downloaded"]
+        assert job["manifest"]["build_id"] in self.world.common_downloaded
         if not job.get("acked"):
             self.world.active -= 1
         job["acked"] = True
@@ -204,7 +217,9 @@ async def test_readable_archives_separate_machines_systems_benchmarks_and_rounds
         for benchmark in ("ub", "ub2")
         for repetition in (1, 2)
     }
-    assert {path.parent for path in root.rglob("archive-manifest.json")} == expected
+    assert {path for path in root.rglob("round-*") if path.is_dir()} == expected
+    assert {path.parent for path in root.rglob("build.json")} == {path.parent for path in expected}
+    assert_no_removed_outputs(root)
     assert {job["details"]["output"] for job in store.jobs(run_id)} == {
         str(path) for path in expected
     }
@@ -357,4 +372,78 @@ async def test_remote_reboot_recovered_as_interruption_not_rerun(config):
     assert await execute(store, run_id, world) == "failed"
     assert world.starts == [job_id]
     assert store.jobs(run_id)[0]["status"] == "interrupted"
+    store.close()
+
+
+async def test_resume_after_first_round_preserves_shared_build(config, monkeypatch):
+    config.benchmarks[0].repetitions = 3
+    config.policy.settle_seconds = 123
+    store, run_id, world = setup(config)
+    original = FakeRemote.start
+
+    async def interrupt_second(self, job_id, directory):
+        if self.world.jobs[job_id]["manifest"]["repetition"] == 2:
+            self.world.crash_controller = True
+        await original(self, job_id, directory)
+
+    monkeypatch.setattr(FakeRemote, "start", interrupt_second)
+    assert await execute(store, run_id, world) == "paused"
+    first, second, *_ = store.jobs(run_id)
+    assert first["status"] == "succeeded"
+    assert second["status"] == "submitting"
+    monkeypatch.setattr(FakeRemote, "start", original)
+    assert await execute(store, run_id, world) == "succeeded"
+    rounds = [job for job in world.jobs.values() if job["manifest"]["system"] == "os1"]
+    assert {job["manifest"]["build_id"] for job in rounds} == {first["id"]}
+    assert all(job["manifest"]["settle_seconds"] == 123 for job in rounds)
+    assert len(world.starts) == len(set(world.starts)) == 6
+    store.close()
+
+
+async def test_common_download_failure_never_acknowledges_round(config, monkeypatch):
+    from autobench.errors import ChecksumError
+
+    store, run_id, world = setup(config)
+    original = FakeRemote.download
+
+    async def fail_common(self, directory, inventory, destination):
+        if PurePosixPath(directory).parent.name == "builds":
+            raise ChecksumError("bad common artifact")
+        await original(self, directory, inventory, destination)
+
+    monkeypatch.setattr(FakeRemote, "download", fail_common)
+    assert await execute(store, run_id, world) == "paused"
+    assert not any(job.get("acked") or job.get("downloaded") for job in world.jobs.values())
+    assert len(world.starts) == 1
+    monkeypatch.setattr(FakeRemote, "download", original)
+    assert await execute(store, run_id, world) == "succeeded"
+    assert len(world.starts) == 2
+    store.close()
+
+
+async def test_worker_build_and_wait_phases_are_persisted(config, monkeypatch):
+    import time
+
+    store, run_id, world = setup(config)
+    original = FakeRemote.status
+    seen = []
+
+    async def phases(self, job_id, directory):
+        job = self.world.jobs.get(job_id)
+        if job and job["phase"] == "active":
+            count = job.setdefault("phase_polls", 0)
+            job["phase_polls"] += 1
+            if count < 2:
+                phase = ("building", "stabilizing")[count]
+                seen.append(phase)
+                return {"phase": "active", "state": {"status": phase, "ready_at": time.time() + 30}}
+            if count == 2:
+                assert store.job(job_id)["status"] == "stabilizing"
+                assert store.job(job_id)["details"]["ready_at"] > time.time()
+        return await original(self, job_id, directory)
+
+    monkeypatch.setattr(FakeRemote, "status", phases)
+    assert await execute(store, run_id, world) == "succeeded"
+    assert seen == ["building", "stabilizing"] * 2
+    assert any("stabilizing" in event["message"] for event in store.events(run_id))
     store.close()

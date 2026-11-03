@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import math
 import tarfile
 import tempfile
 import threading
@@ -522,20 +521,6 @@ def create_app(
                 result["controller_active"] = True
             for job in result["jobs"]:
                 job["reason"] = clean(job["reason"])
-            progress = {job["id"]: job for job in store.jobs(run_id)}
-            for job in result["jobs"]:
-                details = progress[job["id"]]["details"]
-                ready_at = details.get("ready_at")
-                job["phase"] = job["status"]
-                if (
-                    isinstance(ready_at, (int, float))
-                    and math.isfinite(ready_at)
-                    and ready_at > time.time()
-                    and not details.get("remote_dir")
-                    and job["status"] in {"pending", "preparing", "switching"}
-                ):
-                    job["phase"] = "stabilizing"
-                    job["wait_seconds"] = max(0, math.ceil(ready_at - time.time()))
             return result
 
     @app.post("/api/runs/{run_id}/{action}", status_code=202)

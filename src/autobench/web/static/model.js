@@ -174,6 +174,7 @@ export function connectionTestSignature(machine, system, target, timeout) {
 export const statusLabels = {
   pending: "待执行",
   preparing: "准备中",
+  building: "构建中",
   submitting: "提交中",
   running: "运行中",
   switching: "切换系统",
@@ -197,6 +198,8 @@ export const statusTone = (status) =>
       : [
             "running",
             "preparing",
+            "building",
+            "stabilizing",
             "submitting",
             "switching",
             "collecting",

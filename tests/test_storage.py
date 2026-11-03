@@ -120,3 +120,27 @@ def test_failed_creation_rolls_back_database_and_directory(config, frozen_clock,
     assert list(config.policy.output_dir.iterdir()) == []
     assert store.create(config) == NAME
     store.close()
+
+
+def test_build_groups_are_persisted_and_isolated(config):
+    config.benchmarks[0].repetitions = 3
+    config.benchmarks.append(config.benchmarks[0].model_copy(deep=True, update={"id": "other"}))
+    config.machines.append(config.machines[0].model_copy(deep=True, update={"id": "host2"}))
+    store = Store(config.policy.state_dir)
+    run_id = store.create(config)
+    groups = {}
+    for job in store.jobs(run_id):
+        key = (job["machine"], job["system"], job["benchmark"])
+        groups.setdefault(key, []).append(job)
+    build_ids = []
+    for jobs in groups.values():
+        build_id = jobs[0]["id"]
+        assert {job["details"]["build_id"] for job in jobs} == {build_id}
+        build_ids.append(build_id)
+    assert len(set(build_ids)) == len(groups) == 8
+    store.close()
+    store = Store(config.policy.state_dir)
+    assert {job["details"]["build_id"] for job in store.jobs(run_id)} == set(build_ids)
+    new_run = store.create(config)
+    assert not set(build_ids) & {job["details"]["build_id"] for job in store.jobs(new_run)}
+    store.close()

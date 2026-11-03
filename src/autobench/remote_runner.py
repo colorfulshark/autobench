@@ -11,12 +11,13 @@ import json
 import os
 import platform
 import re
-import resource
+import shlex
 import shutil
 import signal
 import subprocess
 import sys
 import tarfile
+import time
 import uuid
 from pathlib import Path, PurePosixPath
 
@@ -181,21 +182,10 @@ def service(directory):
     return properties
 
 
-def finalize(directory, state):
-    """Seal an immutable inventory only after the process tree is no longer writing."""
-    artifacts = directory / "artifacts"
-    artifacts.mkdir(mode=0o700, exist_ok=True)
-    atomic_json(directory / "state.json", state)
-    atomic_json(
-        artifacts / "task.json",
-        {
-            "schema_version": 1,
-            "state": state,
-            "manifest": read_json(directory / "manifest.json"),
-        },
-    )
+def file_inventory(artifacts):
     files = []
     for current, dirs, names in os.walk(str(artifacts), followlinks=False):
+        dirs.sort()
         for name in dirs:
             if (Path(current) / name).is_symlink():
                 raise RuntimeError("artifact directory symlink is not allowed")
@@ -210,7 +200,54 @@ def finalize(directory, state):
                     "sha256": digest(path),
                 }
             )
-    atomic_json(directory / "artifacts.json", {"schema_version": 1, "files": files})
+    return {"schema_version": 1, "files": files}
+
+
+def build_path(directory, manifest):
+    build_id = manifest["build_id"]
+    if not re.fullmatch(r"[0-9a-f]{32}", build_id):
+        raise ValueError("invalid build id")
+    return directory.parent.parent / "builds" / build_id
+
+
+def seal_build(directory, manifest, state):
+    """Also preserve partial build evidence when systemd killed a worker."""
+    build = build_path(directory, manifest)
+    if (build / "artifacts.json").exists() or manifest["build_id"] != directory.name:
+        return
+    artifacts = build / "artifacts"
+    artifacts.mkdir(parents=True, exist_ok=True, mode=0o700)
+    record = read_json(
+        artifacts / "build.json",
+        {
+            "schema_version": 2,
+            "identity": build_identity(manifest),
+            "command": {},
+        },
+    )
+    record.update({"status": state["status"], "finished": now(), "reason": state.get("reason")})
+    atomic_json(artifacts / "build.json", record)
+    atomic_json(build / "artifacts.json", file_inventory(artifacts))
+
+
+def finalize(directory, state):
+    """Seal inventories only after the process tree is no longer writing."""
+    artifacts = directory / "artifacts"
+    artifacts.mkdir(mode=0o700, exist_ok=True)
+    manifest = read_json(directory / "manifest.json")
+    seal_build(directory, manifest, state)
+    atomic_json(directory / "state.json", state)
+    atomic_json(directory / "artifacts.json", file_inventory(artifacts))
+
+
+def terminal_status(directory, manifest, state):
+    build = build_path(directory, manifest)
+    return {
+        "phase": "terminal",
+        "state": state,
+        "inventory": read_json(directory / "artifacts.json"),
+        "common": {"directory": str(build), "inventory": read_json(build / "artifacts.json")},
+    }
 
 
 def status(payload):
@@ -225,11 +262,12 @@ def status(payload):
         inventory = read_json(directory / "artifacts.json")
         # A completed worker may still be returning to systemd; wait for quiescence.
         if inventory and not active:
-            return {"phase": "terminal", "state": state, "inventory": inventory}
+            return terminal_status(directory, manifest, state)
         if manifest["boot_id"] != boot_id():
             if active:
                 return {"phase": "uncertain", "message": "unexpected active unit after boot change"}
             state = {
+                **state,
                 "status": "interrupted",
                 "reason": "remote boot ID changed",
                 "finished": now(),
@@ -243,6 +281,7 @@ def status(payload):
             finalize(directory, state)
         elif unit.get("LoadState") == "loaded" or unit.get("ActiveState") == "failed":
             state = {
+                **state,
                 "status": "interrupted",
                 "reason": "service exited without final state",
                 "finished": now(),
@@ -254,11 +293,7 @@ def status(payload):
             return {"phase": "uncertain", "message": "submission recorded but unit/state is absent"}
         else:
             return {"phase": "staged"}
-        return {
-            "phase": "terminal",
-            "state": state,
-            "inventory": read_json(directory / "artifacts.json"),
-        }
+        return terminal_status(directory, manifest, state)
 
 
 def start(payload):
@@ -320,7 +355,11 @@ def start(payload):
 
 def acknowledge(payload):
     directory = job_path(payload)
-    if not (directory / "artifacts.json").exists():
+    manifest = read_json(directory / "manifest.json")
+    if (
+        not (directory / "artifacts.json").exists()
+        or not (build_path(directory, manifest) / "artifacts.json").exists()
+    ):
         raise RuntimeError("cannot acknowledge an unsealed job")
     root = directory.parent.parent
     with lock(root / "reservation.lock"):
@@ -345,7 +384,15 @@ def cancel(payload):
             )
         state = read_json(directory / "state.json", {})
         if state.get("status") not in TERMINAL:
-            finalize(directory, {"status": "cancelled", "finished": now(), "boot_id": boot_id()})
+            finalize(
+                directory,
+                {
+                    **state,
+                    "status": "cancelled",
+                    "finished": now(),
+                    "boot_id": boot_id(),
+                },
+            )
     return status(payload)
 
 
@@ -398,61 +445,8 @@ def extract_source(source, destination):
                 target.chmod(0o700 if member.mode & 0o111 else 0o600)
 
 
-def collect_system():
-    result = {"schema_version": 1, "time": now(), "boot_id": boot_id(), "errors": {}}
-    for name in (
-        "/etc/os-release",
-        "/proc/cpuinfo",
-        "/proc/meminfo",
-        "/proc/cmdline",
-        "/proc/loadavg",
-        "/proc/mounts",
-        "/proc/self/cgroup",
-    ):
-        try:
-            with open(name) as stream:
-                result[name] = stream.read(4 * 1024 * 1024)
-        except Exception as exc:
-            result["errors"][name] = str(exc)
-    result["limits"] = {}
-    if hasattr(os, "sched_getaffinity"):
-        result["cpu_affinity"] = sorted(os.sched_getaffinity(0))
-    for name in dir(resource):
-        if name.startswith("RLIMIT_"):
-            try:
-                result["limits"][name] = list(resource.getrlimit(getattr(resource, name)))
-            except (OSError, ValueError):
-                pass
-    result["cpu_policy"] = {}
-    for pattern in (
-        "devices/system/cpu/cpu*/cpufreq/scaling_governor",
-        "devices/system/cpu/cpu*/cpufreq/scaling_min_freq",
-        "devices/system/cpu/cpu*/cpufreq/scaling_max_freq",
-    ):
-        for path in Path("/sys").glob(pattern):
-            try:
-                result["cpu_policy"][str(path)] = path.read_text().strip()
-            except OSError as exc:
-                result["errors"][str(path)] = str(exc)
-    for name, argv in {
-        "uname": ["uname", "-a"],
-        "cpu": ["lscpu"],
-        "numa": ["numactl", "--hardware"],
-        "disks": ["lsblk", "-J", "-O"],
-        "mounts": ["findmnt", "-J"],
-        "efi": ["efibootmgr"],
-        "compiler": ["gcc", "--version"],
-    }.items():
-        try:
-            # Optional collectors never prompt for sudo.
-            result[name] = command(argv, timeout=5)
-        except Exception as exc:
-            result["errors"][name] = str(exc)
-    return result
-
-
-class WorkerCancelled(Exception):
-    pass
+class WorkerCancelled(BaseException):
+    """Escape optional toolchain probe handlers, just as KeyboardInterrupt does."""
 
 
 def cancellation_signal(signum, frame):
@@ -491,45 +485,81 @@ def run_process(argv, cwd, env, timeout, stdout, stderr, record):
         record["finished"] = now()
 
 
-def worker(manifest_path):
-    os.umask(0o077)
-    manifest_path = Path(manifest_path)
-    directory = manifest_path.parent
-    manifest = read_json(manifest_path)
-    artifacts = directory / "artifacts"
-    artifacts.mkdir(mode=0o700, exist_ok=True)
-    state = {"status": "preparing", "started": now(), "boot_id": boot_id(), "commands": {}}
-    held_lock = None
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        signal.signal(sig, cancellation_signal)
+def build_identity(manifest):
+    return {
+        key: manifest[key]
+        for key in (
+            "build_id",
+            "boot_id",
+            "source_sha256",
+            "system_env",
+            "benchmark_env",
+            "execution",
+        )
+    }
+
+
+def verify_build(build):
+    ready = read_json(build / "ready.json")
+    if ready is None or ready["identity"]["boot_id"] != boot_id():
+        raise RuntimeError("shared build is not ready or its boot ID changed; rebuild is disabled")
+    cwd = build / "source" / ready["identity"]["execution"]["source_subdir"]
+    binary_dir = cwd / "pgms"
+    if binary_dir.is_symlink() or not binary_dir.is_dir():
+        raise RuntimeError("shared binary directory is missing or unsafe")
+    expected = ready["binaries"]
+    if file_inventory(binary_dir) != expected:
+        raise RuntimeError("shared binaries changed; automatic rebuild is disabled")
+    return cwd
+
+
+def runtime_environment(manifest, build, directory):
+    env = dict(os.environ)
+    env.update(manifest["system_env"])
+    env.update(manifest["benchmark_env"])
+    env["UB_BINDIR"] = str(build / "source" / manifest["execution"]["source_subdir"] / "pgms")
+    # Upstream Run passes MAKE through a shell, so quote the complete command.
+    env["MAKE"] = shlex.join([sys.executable, str(build / "runner.py"), "check-build", str(build)])
+    env["UB_RESULTDIR"] = str(directory / "artifacts" / manifest["execution"]["artifact_dir"])
+    env.setdefault("UB_TMPDIR", str(directory / "work" / "tmp"))
+    return env
+
+
+def prepare_build(directory, manifest, state):
+    build = build_path(directory, manifest)
+    identity = build_identity(manifest)
+    if (build / "ready.json").exists():
+        if read_json(build / "ready.json")["identity"] != identity:
+            raise RuntimeError("shared build identity changed; automatic rebuild is disabled")
+        if not (build / "artifacts.json").exists():
+            raise RuntimeError("shared build artifacts are not sealed")
+        return build, verify_build(build)
+    if manifest["build_id"] != directory.name or (build / "artifacts" / "build.json").exists():
+        raise RuntimeError("shared build missing or incomplete; automatic rebuild is disabled")
+    artifacts = build / "artifacts"
+    artifacts.mkdir(parents=True, exist_ok=True, mode=0o700)
+    record = {
+        "schema_version": 2,
+        "identity": identity,
+        "status": "building",
+        "started": now(),
+        "command": {},
+        "tool": manifest.get("tool"),
+    }
+    atomic_json(artifacts / "build.json", record)
+    state["status"] = "building"
+    atomic_json(directory / "state.json", state)
     try:
-        held_lock = lock(directory.parent.parent / "worker.lock")
-        if state["boot_id"] != manifest["boot_id"]:
-            raise RuntimeError("boot ID changed before worker startup")
-        atomic_json(directory / "state.json", state)
-        atomic_json(artifacts / "system-before.json", collect_system())
         source = Path(manifest["source_path"])
         if digest(source) != manifest["source_sha256"]:
             raise RuntimeError("source archive checksum mismatch")
-        source_root = directory / "source"
-        extract_source(source, source_root)
-        execution = manifest["execution"]
-        subdir = PurePosixPath(execution["source_subdir"])
+        extract_source(source, build / "source")
+        subdir = PurePosixPath(manifest["execution"]["source_subdir"])
         if subdir.is_absolute() or ".." in subdir.parts:
             raise ValueError("invalid source directory")
-        cwd = source_root.joinpath(*subdir.parts)
-        base = dict(os.environ)
-        run_source = (cwd / "Run").read_text(errors="replace")
-        version = re.search(r'\$version\s*=\s*[\'"]([^\'"]+)', run_source)
-        atomic_json(
-            artifacts / "source-metadata.json",
-            {
-                "sha256": manifest["source_sha256"],
-                "source_subdir": str(subdir),
-                "detected_version": version.group(1) if version else None,
-            },
-        )
+        cwd = (build / "source").joinpath(*subdir.parts)
         toolchain = {}
+        execution = manifest["execution"]
         for name, argv in {
             "compiler": execution["compiler_argv"] + ["--version"],
             "make": ["make", "--version"],
@@ -539,36 +569,99 @@ def worker(manifest_path):
             except Exception as exc:
                 toolchain[name] = {"argv": argv, "error": str(exc)}
         atomic_json(artifacts / "toolchain.json", toolchain)
-        atomic_json(artifacts / "build-environment.json", base)
-        state["commands"]["build"] = {}
+        build_env = dict(os.environ)
+        atomic_json(artifacts / "build-environment.json", build_env)
+        record["command"] = {
+            "argv": execution["build_argv"],
+            "cwd": str(cwd),
+            "started": now(),
+            "timeout": execution["build_timeout"],
+        }
+        atomic_json(artifacts / "build.json", record)
         run_process(
             execution["build_argv"],
             cwd,
-            base,
+            build_env,
             execution["build_timeout"],
             artifacts / "build.stdout",
             artifacts / "build.stderr",
-            state["commands"]["build"],
+            record["command"],
         )
-        result_dir = artifacts / execution["artifact_dir"]
-        result_dir.mkdir(mode=0o700, exist_ok=True)
-        env = dict(base)
-        env.update(manifest["system_env"])
-        env.update(manifest["benchmark_env"])
-        env[execution["result_env"]] = str(result_dir)
-        atomic_json(artifacts / "environment.json", env)
-        atomic_json(
-            artifacts / "environment-overrides.json",
-            {
-                "system": manifest["system_env"],
-                "benchmark": manifest["benchmark_env"],
-                "generated": {execution["result_env"]: str(result_dir)},
-                "meaning": "launch environment; the benchmark may change variables internally",
-            },
-        )
-        state["status"] = "running"
+        if not (cwd / "pgms").is_dir() or (cwd / "pgms").is_symlink():
+            raise RuntimeError("build did not produce a pgms directory")
+        binaries = file_inventory(cwd / "pgms")
+        if not binaries["files"]:
+            raise RuntimeError("build did not produce any programs")
+        shutil.copyfile(__file__, build / "runner.py")
+        record.update({"status": "succeeded", "finished": now()})
+        atomic_json(artifacts / "build.json", record)
+        atomic_json(build / "artifacts.json", file_inventory(artifacts))
+        atomic_json(build / "ready.json", {"identity": identity, "binaries": binaries})
+    except BaseException as exc:
+        # Do not change a sealed common archive, even if readiness publication failed.
+        if not (build / "artifacts.json").exists():
+            record.update(
+                {
+                    "status": "cancelled" if isinstance(exc, WorkerCancelled) else "failed",
+                    "finished": now(),
+                    "reason": str(exc),
+                }
+            )
+            atomic_json(artifacts / "build.json", record)
+            atomic_json(build / "artifacts.json", file_inventory(artifacts))
+        raise
+    return build, verify_build(build)
+
+
+def worker(manifest_path):
+    os.umask(0o077)
+    manifest_path = Path(manifest_path)
+    directory = manifest_path.parent
+    manifest = read_json(manifest_path)
+    artifacts = directory / "artifacts"
+    artifacts.mkdir(mode=0o700, exist_ok=True)
+    state = {"status": "preparing", "started": now(), "boot_id": boot_id(), "commands": {}}
+    held_lock = None
+    verified_build = None
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(sig, cancellation_signal)
+    try:
+        held_lock = lock(directory.parent.parent / "worker.lock")
+        if state["boot_id"] != manifest["boot_id"]:
+            raise RuntimeError("boot ID changed before worker startup")
         atomic_json(directory / "state.json", state)
-        state["commands"]["run"] = {}
+        build, source = prepare_build(directory, manifest, state)
+        verified_build = build
+        cwd = directory / "work"
+        shutil.copytree(source, cwd, ignore=shutil.ignore_patterns("pgms", "tmp", "results"))
+        (cwd / "tmp").mkdir(mode=0o700)
+        execution = manifest["execution"]
+        (artifacts / execution["artifact_dir"]).mkdir(mode=0o700, exist_ok=True)
+        env = runtime_environment(manifest, build, directory)
+        atomic_json(artifacts / "run-environment.json", env)
+        verify_build(build)
+        state.update(
+            {
+                "status": "stabilizing",
+                "wait_started": now(),
+                "ready_at": time.time() + manifest["settle_seconds"],
+            }
+        )
+        atomic_json(directory / "state.json", state)
+        # The monotonic deadline prevents a wall-clock adjustment shortening the wait.
+        deadline = time.monotonic() + manifest["settle_seconds"]
+        while time.monotonic() < deadline:
+            time.sleep(min(1, max(0, deadline - time.monotonic())))
+        state["wait_finished"] = now()
+        verify_build(build)
+        state["status"] = "running"
+        state["commands"]["run"] = {
+            "argv": execution["run_argv"],
+            "cwd": str(cwd),
+            "started": now(),
+            "timeout": execution["timeout"],
+        }
+        atomic_json(directory / "state.json", state)
         run_process(
             execution["run_argv"],
             cwd,
@@ -587,10 +680,13 @@ def worker(manifest_path):
         # Let systemd enforce its stop deadline rather than interrupting a manifest write.
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
         signal.signal(signal.SIGINT, signal.SIG_IGN)
-        try:
-            atomic_json(artifacts / "system-after.json", collect_system())
-        except Exception as exc:
-            state["collection_error"] = str(exc)
+        if verified_build is not None:
+            try:
+                verify_build(verified_build)
+            except Exception as exc:
+                state["binary_error"] = str(exc)
+                if state["status"] == "succeeded":
+                    state.update({"status": "failed", "reason": str(exc)})
         state["finished"] = now()
         finalize(directory, state)
         if held_lock:
@@ -603,6 +699,11 @@ def main():
     action = sys.argv[1]
     if action == "worker":
         return worker(sys.argv[2])
+    if action == "check-build":
+        if sys.argv[3:] not in (["check"], ["all"]):
+            raise RuntimeError("building during a benchmark is disabled")
+        verify_build(Path(sys.argv[2]))
+        return 0
     payload = json.loads(sys.argv[2])
     actions = {
         "probe": probe,

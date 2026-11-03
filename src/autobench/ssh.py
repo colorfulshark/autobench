@@ -237,11 +237,6 @@ class RemoteClient(SSHClient):
                         target.unlink()  # Next attempt starts this file from zero.
                         raise ChecksumError(f"artifact checksum mismatch: {item['path']}")
         await asyncio.to_thread(verify_download, partial, files)
-        manifest = partial / "archive-manifest.json"
-        manifest.write_text(json.dumps(inventory, ensure_ascii=False, indent=2))
-        manifest.chmod(0o600)
-        with manifest.open("rb") as stream:
-            os.fsync(stream.fileno())
         for directory_path, _, _ in os.walk(partial, topdown=False):
             fd = os.open(directory_path, os.O_RDONLY | os.O_DIRECTORY)
             try:
@@ -267,7 +262,6 @@ def validate_inventory(inventory: dict) -> list[dict]:
             or path.is_absolute()
             or ".." in path.parts
             or str(path) in seen
-            or str(path) == "archive-manifest.json"
             or not isinstance(item["size"], int)
             or item["size"] < 0
             or not re.fullmatch(r"[0-9a-f]{64}", item["sha256"])

@@ -305,6 +305,7 @@ function renderDetail() {
   const active = d.jobs.filter((j) =>
     [
       "preparing",
+      "building",
       "submitting",
       "running",
       "switching",
@@ -330,6 +331,7 @@ function renderDetail() {
   const current = d.jobs.filter((j) =>
     [
       "preparing",
+      "building",
       "submitting",
       "running",
       "switching",
@@ -426,8 +428,7 @@ function artifactCategory(path) {
   if (/(^|\/)build\.(stdout|stderr)$/.test(path)) return "编译日志";
   if (/(^|\/)run\.(stdout|stderr)$/.test(path)) return "运行日志";
   if (path.includes("/results/") || /\.html?$/i.test(path)) return "测试报告";
-  if (/environment|system-before|system-after|toolchain/.test(path))
-    return "环境信息";
+  if (/environment|toolchain/.test(path)) return "环境信息";
   return "其他文件";
 }
 function artifactPanel() {

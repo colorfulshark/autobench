@@ -277,7 +277,7 @@ async def test_real_sftp_disconnect_resume_and_atomic_commit(ssh_server, tmp_pat
     await client.download(str(remote), inventory, destination)
     assert (destination / "data.bin").read_bytes() == data
     assert 65536 in fault["offsets"]
-    assert (destination / "archive-manifest.json").exists()
+    assert {path.name for path in destination.iterdir()} == {"data.bin"}
     assert not partial.exists()
 
 
@@ -309,9 +309,7 @@ async def test_atomic_source_upload(ssh_server, tmp_path):
     assert not list(destination.parent.glob("*.upload-*"))
 
 
-@pytest.mark.parametrize(
-    "name", ["../escape", "/etc/passwd", "a/../../escape", "archive-manifest.json"]
-)
+@pytest.mark.parametrize("name", ["../escape", "/etc/passwd", "a/../../escape"])
 def test_inventory_traversal_rejected(name):
     with pytest.raises(RemoteError):
         validate_inventory(
@@ -531,3 +529,137 @@ async def test_ignored_host_key_still_rejects_bad_password_and_key(ssh_server, t
     client.ssh.client_keys = [unauthorized]
     with pytest.raises(AuthenticationFailed):
         await client.probe()
+
+
+async def test_common_archive_resumes_then_is_verified_without_redownload(ssh_server, tmp_path):
+    client, fault = ssh_server
+    remote = tmp_path / "remote-build"
+    (remote / "artifacts").mkdir(parents=True)
+    source = remote / "artifacts/build.stdout"
+    data = b"build log\n" * 200000
+    source.write_bytes(data)
+    inventory = inventory_for(source)
+    destination = tmp_path / "results/host1/os1/ub"
+    partial = destination.with_name("ub.partial")
+    partial.mkdir(parents=True)
+    (partial / "build.stdout").write_bytes(data[:65536])
+    fault["drop"] = True
+    with pytest.raises(ConnectionLost):
+        await client.download(str(remote), inventory, destination)
+    assert not destination.exists()
+    await client.download(str(remote), inventory, destination)
+    assert (destination / "build.stdout").read_bytes() == data
+    assert not partial.exists()
+    # Existing rounds are outside the common inventory and must survive verification.
+    round_dir = destination / "round-001"
+    round_dir.mkdir()
+    (round_dir / "run.stdout").write_text("result")
+    offsets = list(fault["offsets"])
+    await client.download(str(remote), inventory, destination)
+    assert fault["offsets"] == offsets
+    assert (round_dir / "run.stdout").read_text() == "result"
+
+
+@pytest.mark.parametrize("outcome", ["succeeded", "failed", "cancelled", "cancelled-before-start"])
+async def test_real_archives_omit_removed_outputs(
+    ssh_server, config, tmp_path, outcome, monkeypatch
+):
+    import io
+    import signal
+    import time
+    import zipfile
+    from pathlib import PurePosixPath
+
+    from conftest import REMOVED_OUTPUTS, assert_no_removed_outputs, source_archive
+    from fastapi.testclient import TestClient
+    from test_runner import completed_worker, launch, manifest_for
+
+    from autobench import remote_runner as rr
+    from autobench.config import inspect_archive
+    from autobench.scheduler import Scheduler
+    from autobench.storage import Store
+    from autobench.web import create_app
+
+    client, _ = ssh_server
+    if outcome == "failed":
+        benchmark = config.benchmarks[0]
+        source_archive(benchmark.source_archive, make="all:\n\t@echo failed >&2\n\t@exit 7\n")
+        benchmark.source_sha256 = None
+        inspect_archive(benchmark)
+    elif outcome == "cancelled":
+        config.policy.settle_seconds = 60
+    store = Store(config.policy.state_dir)
+    run_id = store.create(config)
+    job = store.jobs(run_id)[0]
+    directory, manifest, payload = manifest_for(config, tmp_path, job_id=job["id"])
+    if outcome == "cancelled-before-start":
+        monkeypatch.setattr(
+            rr, "service", lambda _: {"LoadState": "not-found", "ActiveState": "inactive"}
+        )
+        assert rr.cancel(payload)["state"]["status"] == "cancelled"
+    elif outcome == "cancelled":
+        process = launch(directory)
+        try:
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline:
+                if rr.read_json(directory / "state.json", {}).get("status") == "stabilizing":
+                    break
+                await asyncio.sleep(0.01)
+            assert rr.read_json(directory / "state.json")["status"] == "stabilizing"
+            process.send_signal(signal.SIGTERM)
+            await asyncio.to_thread(process.communicate, timeout=15)
+            assert process.returncode == 1
+        finally:
+            if process.poll() is None:
+                process.kill()
+                await asyncio.to_thread(process.communicate)
+    else:
+        await asyncio.to_thread(
+            completed_worker, directory, expected=0 if outcome == "succeeded" else 1
+        )
+    expected_outcome = "cancelled" if outcome == "cancelled-before-start" else outcome
+    state = rr.read_json(directory / "state.json")
+    assert state["status"] == expected_outcome
+    assert_no_removed_outputs(directory.parent.parent)
+    root = config.policy.output_dir / run_id
+    common = root / "host1/os1/ub"
+    round_dir = common / "round-001"
+    store.update(job["id"], remote_dir=str(directory))
+    rr.atomic_json(directory.parent.parent / "reservation.json", {"job_id": job["id"]})
+    remote = rr.terminal_status(directory, manifest, state)
+    await Scheduler(store, run_id, report=lambda _: None).collect(
+        client, store.job(job["id"]), remote
+    )
+    archived = store.job(job["id"])
+    assert archived["status"] == expected_outcome and archived["details"]["archived"]
+    assert rr.read_json(directory / "collected.json")["time"]
+    assert not (directory.parent.parent / "reservation.json").exists()
+    assert not round_dir.with_name("round-001.partial").exists()
+    store.close()
+    assert_no_removed_outputs(root)
+    assert (common / "build.json").is_file() and round_dir.is_dir()
+    if outcome in {"failed", "cancelled-before-start"}:
+        assert remote["inventory"]["files"] == []
+        assert list(round_dir.iterdir()) == []
+    else:
+        environment = rr.read_json(round_dir / "run-environment.json")
+        assert environment["UB_RESULTDIR"] == str(directory / "artifacts/results")
+        if outcome == "succeeded":
+            assert environment == rr.read_json(round_dir / "results/observed.json")
+    assert not (common / "ready.json").exists()
+    assert not (common / "artifacts.json").exists()
+    # The normal file API and ZIP expose precisely the generated files, without filters.
+    with TestClient(
+        create_app(base_dir=tmp_path, state_dir=config.policy.state_dir),
+        base_url="http://127.0.0.1:8765",
+    ) as web:
+        url = f"/api/runs/{run_id}"
+        items = web.get(url + "/artifacts").json()
+        expected = {path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file()}
+        assert {item["path"] for item in items} == expected
+        assert not {PurePosixPath(item["path"]).name for item in items} & REMOVED_OUTPUTS
+        response = web.get(url + "/archive")
+        assert response.status_code == 200
+        with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+            assert set(archive.namelist()) == {f"{run_id}/{name}" for name in expected}
+            assert not {PurePosixPath(name).name for name in archive.namelist()} & REMOVED_OUTPUTS

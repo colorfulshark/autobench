@@ -632,11 +632,11 @@ def test_run_status_explains_system_stabilization_wait(client, config):
     store = Store(config.policy.state_dir)
     run_id = store.create(config)
     job = store.jobs(run_id)[0]
-    store.update(job["id"], ready_at=time.time() + 30)
+    store.update(job["id"], "stabilizing", remote_dir="/remote/job", ready_at=time.time() + 30)
     result = client.get(f"/api/runs/{run_id}").json()
     assert result["jobs"][0]["phase"] == "stabilizing"
     assert 1 <= result["jobs"][0]["wait_seconds"] <= 30
-    assert store.job(job["id"])["status"] == "pending"
+    assert store.job(job["id"])["status"] == "stabilizing"
     store.close()
 
 
@@ -851,3 +851,47 @@ def test_boot_entries_reports_failures_without_leaking_credentials(
     assert expected in operation["error"]
     assert operation["result"] is None
     assert "entry-secret" not in client.get("/api/operations").text
+
+
+def test_common_and_round_artifacts_preview_and_zip(client, config):
+    store = Store(config.policy.state_dir)
+    run_id = store.create(config)
+    root = config.policy.output_dir / run_id
+    store.close()
+    contents = {
+        "host1/os1/ub/build.stdout": "one build\n",
+        "host1/os1/ub/build-environment.json": '{"COMMON":"yes"}',
+        "host1/os1/ub/round-001/run.stdout": "first round\n",
+        "host1/os1/ub/round-002/run.stdout": "second round\n",
+        "host1/os1/ub/round-001/run-environment.json": '{"COMMON":"yes","ROUND":"1"}',
+        "host1/os1/ub/round-002/run-environment.json": '{"COMMON":"yes","ROUND":"2"}',
+    }
+    for relative, value in contents.items():
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(value)
+    url = f"/api/runs/{run_id}"
+    assert {item["path"] for item in client.get(url + "/artifacts").json()} == set(contents)
+    for relative, value in contents.items():
+        assert (
+            client.get(url + "/artifact", params={"path": relative, "preview": True}).json()["text"]
+            == value
+        )
+        assert client.get(url + "/artifact", params={"path": relative}).text == value
+    with zipfile.ZipFile(io.BytesIO(client.get(url + "/archive").content)) as archive:
+        assert set(archive.namelist()) == {f"{run_id}/{path}" for path in contents}
+        assert len([path for path in archive.namelist() if path.endswith("build.stdout")]) == 1
+        for relative, value in contents.items():
+            assert archive.read(f"{run_id}/{relative}").decode() == value
+
+
+@pytest.mark.parametrize("name", ["MAKE", "UB_BINDIR", "UB_RESULTDIR"])
+def test_reserved_build_environment_reports_field_error(client, saved, name):
+    document = saved["document"]
+    document["benchmarks"][0]["env"][name] = "override"
+    value = client.post(
+        "/api/config/save", json={**reference(saved), "text": yaml.safe_dump(document)}
+    ).json()
+    response = client.post("/api/config/validate", json=reference(value))
+    assert response.status_code == 422
+    assert response.json()["errors"][0]["path"] == ["benchmarks", 0, "env"]

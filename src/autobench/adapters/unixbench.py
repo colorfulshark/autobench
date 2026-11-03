@@ -34,7 +34,7 @@ class UnixBench:
             "args": benchmark.args,
             "tests": benchmark.tests,
             "warnings": [
-                "UnixBench may overwrite LANG internally; environment.json records "
+                "UnixBench may overwrite LANG internally; run-environment.json records "
                 "the launch environment. Source code is not modified."
             ],
         }

@@ -153,24 +153,8 @@ class Scheduler:
         if not self.is_target(target_probe, system) or target_probe["boot_id"] != probe["boot_id"]:
             raise RemoteError("system boot changed during preparation")
         check_probe(target_probe, requirements=requirements)
-        details = self.store.job(job["id"])["details"]
-        ready_at = details.get("ready_at")
-        if ready_at is None:
-            ready_at = time.time() + self.config.policy.settle_seconds
-            self.store.update(
-                job["id"], "stabilizing", ready_at=ready_at, verified_boot_id=probe["boot_id"]
-            )
-        elif details.get("verified_boot_id") != probe["boot_id"]:
-            raise RemoteError("remote rebooted during the stabilization interval")
-        while time.time() < ready_at:
-            if self.cancelled():
-                raise Paused("cancellation requested during system stabilization")
-            await asyncio.sleep(min(1, ready_at - time.time()))
-        # Recheck immediately before creating a job bound to this boot.
-        final_probe = await self.retry(lambda: target.probe(requirements))
-        if final_probe["boot_id"] != probe["boot_id"] or not self.is_target(final_probe, system):
-            raise RemoteError("remote rebooted during system stabilization")
-        return target, final_probe
+        # The detached worker waits after construction/preparation, before each test.
+        return target, target_probe
 
     async def wait_boot(self, machine: Machine, system: System, switch: dict) -> dict:
         while time.time() < switch["deadline"]:
@@ -204,6 +188,14 @@ class Scheduler:
         self.store.update(job["id"], "collecting", remote_outcome=outcome)
         directory = job["details"]["remote_dir"]
         self.event(job, f"collecting artifacts ({outcome})")
+        common = remote["common"]
+        if common["inventory"] is None:
+            raise RemoteError("shared build artifacts are not sealed")
+        await self.retry(
+            lambda: client.download(
+                common["directory"], common["inventory"], self.destination(job).parent
+            )
+        )
         await self.retry(
             lambda: client.download(directory, remote["inventory"], self.destination(job))
         )
@@ -240,11 +232,13 @@ class Scheduler:
             directory = str(PurePosixPath(root) / "jobs" / job["id"])
             adapter = get_adapter(benchmark.type)
             manifest = {
-                "schema_version": 1,
+                "schema_version": 2,
                 "job_id": job["id"],
+                "build_id": details["build_id"],
                 "run_id": self.run_id,
                 "machine": machine.id,
                 "system": system.id,
+                "benchmark": benchmark.id,
                 "repetition": job["repetition"],
                 "boot_id": probe["boot_id"],
                 "efi": probe["efi"],
@@ -256,6 +250,7 @@ class Scheduler:
                 "benchmark_env": benchmark.env,
                 "execution": adapter.execution(benchmark),
                 "tool": adapter.metadata(benchmark),
+                "settle_seconds": self.config.policy.settle_seconds,
             }
             self.store.update(
                 job["id"],
@@ -308,7 +303,19 @@ class Scheduler:
                 self.store.update(job["id"], "cancel_pending")
                 status = await self.retry(lambda: client.cancel(job["id"], directory))
             else:
-                self.store.update(job["id"], "running")
+                phase = status.get("state", {}).get("status", "preparing")
+                if phase not in {"preparing", "building", "stabilizing", "running"}:
+                    phase = "preparing"
+                previous = self.store.job(job["id"])["status"]
+                ready_at = status.get("state", {}).get("ready_at")
+                self.store.update(job["id"], phase, ready_at=ready_at)
+                if phase != previous:
+                    suffix = (
+                        f" ({max(0, ready_at - time.time()):.0f}s remaining)"
+                        if phase == "stabilizing" and ready_at is not None
+                        else ""
+                    )
+                    self.event(job, phase + suffix)
                 await asyncio.sleep(self.config.policy.poll_interval)
                 status = await self.retry(lambda: client.status(job["id"], directory))
         job = self.store.job(job["id"])

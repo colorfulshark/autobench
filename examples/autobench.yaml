@@ -4,7 +4,7 @@ policy:
   output_dir: ../results
   parallel_machines: 4
   poll_interval: 10
-  settle_seconds: 60
+  settle_seconds: 60  # 每轮实际测试前等待；首轮先构建，再等待
   reconnect_timeout: 900
   boot_timeout: 600
 

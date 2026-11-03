@@ -79,6 +79,8 @@ def test_test_selection_snapshot_and_legacy_restore(config):
         {"OK": True},
         {"OK": "a\x00b"},
         {"UB_RESULTDIR": "/tmp/out"},
+        {"UB_BINDIR": "/tmp/bin"},
+        {"MAKE": "make"},
     ],
 )
 def test_reject_invalid_environment(env, archive):

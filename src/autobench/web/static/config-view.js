@@ -586,7 +586,7 @@ function benchmarkEditor(b, index) {
   panel.append(
     heading(
       "UnixBench 测试",
-      "可选择测试项；默认执行标准 index 测试，使用每个系统各自编译的程序。",
+      "默认执行标准 index 测试；同一次运行内，每个系统的同一测试配置只构建一次，各轮复用相同二进制。",
     ),
   );
   panel.append(
@@ -689,7 +689,7 @@ function policyEditor() {
     node(
       "p",
       "callout",
-      "默认每 10 秒轮询；系统启动后稳定等待 60 秒。机器之间并行，同一机器的系统依次执行。",
+      "默认每 10 秒轮询；每轮测试开始前稳定等待 60 秒，首轮在构建完成后等待。机器之间并行，同一机器的系统依次执行。",
     ),
   );
   panel.append(
