@@ -164,6 +164,7 @@ async function refreshDetail() {
 }
 function renderList() {
   $("state-location").textContent = directory();
+  $("state-location").title = directory();
   const list = view.list.filter(
     (run) =>
       (!view.filter || run.status === view.filter) &&

@@ -197,7 +197,7 @@ button.busy {
   background: var(--primary-hover);
   border-color: var(--primary-hover);
 }
-.secondary:hover,
+.button.secondary:hover,
 .icon-button:hover,
 .browse-button:hover {
   background: var(--raised);
@@ -253,11 +253,12 @@ pre {
   position: sticky;
   top: 0;
   z-index: 30;
-  min-height: var(--topbar-height);
+  height: var(--topbar-height);
   display: grid;
-  grid-template-columns: 196px minmax(0, 1fr) auto;
+  grid-template-columns: 172px auto minmax(0, 1fr) auto;
+  grid-template-rows: var(--topbar-height);
   align-items: center;
-  gap: 24px;
+  gap: 20px;
   padding: 0 24px;
   background: var(--ground);
   color: var(--muted);
@@ -294,7 +295,7 @@ pre {
   align-items: center;
   justify-content: flex-start;
   gap: 10px;
-  flex: 0 1 188px;
+  flex: 0 1 152px;
   min-width: 128px;
   min-height: 44px;
   padding: 10px 20px;
@@ -338,6 +339,13 @@ pre {
   display: grid;
   justify-items: end;
   min-width: 0;
+}
+.header-files {
+  min-width: 0;
+  color: var(--ink);
+}
+.compact-label {
+  display: none;
 }
 .service-meta {
   display: flex;
@@ -408,32 +416,40 @@ main {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  padding: 16px 18px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-card);
-  background: var(--raised);
-  margin-bottom: 20px;
+  min-width: 0;
+  gap: 12px;
+  height: var(--topbar-height);
 }
 .project-file {
   display: flex;
-  gap: 13px;
+  gap: 10px;
   min-width: 0;
   align-items: center;
+  flex: 1;
 }
 .project-icon {
-  width: 24px;
-  height: 28px;
+  width: 18px;
+  height: 20px;
   color: var(--muted);
   flex: none;
 }
 .project-file > div {
   min-width: 0;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 .file-title {
   display: flex;
   align-items: center;
   gap: 9px;
+  margin: 0;
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 0;
+  line-height: 1.5;
+  min-width: 0;
 }
 .file-name {
   background: none;
@@ -443,6 +459,7 @@ main {
   text-align: left;
   padding: 0;
   max-width: 300px;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -453,13 +470,14 @@ main {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 430px;
-  margin-top: 4px;
+  margin-top: 0;
+  flex: 1;
+  min-width: 0;
 }
 .project-tools {
   display: flex;
   align-items: center;
-  gap: 22px;
+  gap: 12px;
   flex-shrink: 0;
 }
 .menu {
@@ -1202,23 +1220,42 @@ td .secondary {
 .history-location {
   display: flex;
   justify-content: space-between;
-  gap: 16px;
+  gap: 12px;
   align-items: center;
-  padding: 16px 20px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-card);
-  background: var(--raised);
-  margin-bottom: 24px;
+  min-width: 0;
+  height: var(--topbar-height);
 }
 .history-location > div:first-child {
   min-width: 0;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.history-location h1 {
+  margin: 0;
+  font-weight: 400;
+  letter-spacing: 0;
+  white-space: nowrap;
+  flex: none;
+}
+.history-location .actions {
+  flex: none;
+  gap: 8px;
+}
+.history-location .actions button {
+  font-size: 12px;
+  white-space: nowrap;
 }
 .history-location code {
   display: block;
   font-size: 12px;
   color: var(--muted);
-  overflow-wrap: anywhere;
-  margin-top: 5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1;
 }
 .run-filters {
   display: flex;
@@ -1693,7 +1730,18 @@ textarea:focus-visible {
 .menu-items label:hover {
   background: var(--raised);
 }
+@media (max-width: 1600px) {
+  .project-tools > #matrix-summary {
+    display: none;
+  }
+}
 @media (max-width: 1200px) {
+  .service-info {
+    display: none;
+  }
+  .topbar {
+    grid-template-columns: 172px auto minmax(0, 1fr);
+  }
   .page {
     padding: 24px 24px 0;
   }
@@ -1712,22 +1760,23 @@ textarea:focus-visible {
   .auth-editor {
     grid-template-columns: minmax(0, 1fr);
   }
-  .project-tools > #matrix-summary {
-    display: none;
-  }
   .run-filters input {
     width: 200px;
   }
 }
 @media (max-width: 1100px) {
   .topbar {
-    grid-template-columns: 172px minmax(0, 1fr) auto;
-    gap: 16px;
+    grid-template-columns: 156px auto minmax(0, 1fr);
+    gap: 12px;
     padding: 0 16px;
   }
+  #file-location,
+  .history-location h1 {
+    display: none;
+  }
   .page-tab {
-    flex-basis: 160px;
-    padding-inline: 16px;
+    min-width: 112px;
+    padding-inline: 12px;
   }
   .config-layout {
     grid-template-columns: minmax(0, 1fr) 240px;
@@ -1743,12 +1792,6 @@ textarea:focus-visible {
   }
 }
 @media (max-width: 850px) {
-  .service-info {
-    display: none;
-  }
-  .topbar {
-    grid-template-columns: 172px minmax(0, 1fr);
-  }
   .config-layout {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -1767,8 +1810,8 @@ textarea:focus-visible {
     padding: 0;
   }
   .topbar {
-    grid-template-columns: auto minmax(0, 1fr);
-    gap: 12px;
+    grid-template-columns: 24px auto minmax(0, 1fr);
+    gap: 8px;
     padding: 0 12px;
   }
   .brand {
@@ -1780,8 +1823,13 @@ textarea:focus-visible {
     width: 24px;
     height: 24px;
   }
-  .service-info {
+  .brand > span:last-child,
+  .page-tab .icon,
+  .header-files .full-label {
     display: none;
+  }
+  .header-files .compact-label {
+    display: inline;
   }
   .page-tabs {
     gap: 4px;
@@ -1802,32 +1850,31 @@ textarea:focus-visible {
     padding: 20px 16px 0;
   }
   .project-bar {
-    padding: 14px 12px;
-    gap: 10px;
-    align-items: flex-start;
-    margin-bottom: 12px;
-  }
-  .project-file {
-    gap: 10px;
+    gap: 8px;
   }
   .project-icon {
     display: none;
   }
   .file-title {
     gap: 6px;
-    flex-wrap: wrap;
   }
   .file-name {
     font-size: 13px;
-    max-width: 170px;
-  }
-  #file-location {
-    font-size: 12px;
-    max-width: 185px;
+    max-width: 100%;
   }
   .menu > summary {
     padding: 8px;
     white-space: nowrap;
+    height: 36px;
+    display: flex;
+    align-items: center;
+  }
+  .file-name {
+    min-height: 44px;
+  }
+  .menu-items button,
+  .menu-items label {
+    min-height: 44px;
   }
   .project-tools {
     flex: none;
@@ -1976,13 +2023,14 @@ textarea:focus-visible {
     padding: 8px 12px;
   }
   .history-location {
-    flex-wrap: wrap;
-    padding: 16px;
-    gap: 12px;
+    gap: 8px;
   }
   .history-location .actions {
-    width: 100%;
-    justify-content: space-between;
+    gap: 8px;
+  }
+  .history-location .actions button {
+    height: 36px;
+    padding: 6px;
   }
   .run-filters {
     width: 100%;

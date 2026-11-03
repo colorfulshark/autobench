@@ -37,7 +37,11 @@ function setPage(page) {
   const changed = state.page !== page;
   state.page = page;
   sessionStorage.setItem("autobench-page", page);
-  for (const key of Object.keys(titles)) $("page-" + key).hidden = key !== page;
+  for (const key of Object.keys(titles)) {
+    $("page-" + key).hidden = key !== page;
+    $("header-" + key).hidden = key !== page;
+  }
+  if (changed) $("file-menu").open = false;
   document.querySelectorAll("[data-page]").forEach((e) => {
     const selected = e.dataset.page === page;
     e.classList.toggle("active", selected);
@@ -56,6 +60,8 @@ function chrome() {
     saved = !!state.path && !state.dirty && state.target === state.path;
   $("file-name").textContent = state.target?.split("/").at(-1) || "未命名配置";
   $("file-location").textContent = state.target || "尚未选择保存位置";
+  $("file-name").title = $("file-location").textContent;
+  $("file-location").title = $("file-location").textContent;
   $("save-state").textContent = saved ? "已保存" : "未保存";
   $("save-state").dataset.tone = saved ? "success" : "warning";
   $("matrix-summary").textContent =

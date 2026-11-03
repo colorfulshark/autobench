@@ -81,23 +81,8 @@
             运行记录
           </button>
         </nav>
-        <div class="service-info">
-          <span class="service-meta"
-            ><span id="version">AutoBench</span><span id="server-address"></span
-          ></span>
-        </div>
-      </header>
-      <main id="main-content" tabindex="-1">
-        <div id="notice" role="status" aria-live="polite" hidden></div>
-        <section
-          id="page-config"
-          class="page"
-          role="tabpanel"
-          aria-labelledby="tab-config"
-          tabindex="0"
-          hidden
-        >
-          <div class="project-bar">
+        <div class="header-files">
+          <div id="header-config" class="project-bar" aria-label="配置文件" hidden>
             <div class="project-file">
               <svg
                 class="icon project-icon"
@@ -112,19 +97,22 @@
                 <path d="M14 3H6v18h12V7zM14 3v5h4M9 12h6M9 16h6" />
               </svg>
               <div>
-                <div class="file-title">
+                <h1 class="file-title">
                   <button id="file-name" class="file-name">正在加载…</button
                   ><span id="save-state" class="pill" data-tone="warning"
                     >未保存</span
                   >
-                </div>
+                </h1>
                 <span id="file-location" class="secondary mono"></span>
               </div>
             </div>
             <div class="project-tools">
               <span id="matrix-summary" class="secondary"></span>
               <details id="file-menu" class="menu">
-                <summary>文件操作 ⌄</summary>
+                <summary aria-label="文件操作">
+                  <span class="full-label">文件操作</span
+                  ><span class="compact-label">文件</span> ⌄
+                </summary>
                 <div class="menu-items">
                   <button id="new-config">新建配置</button
                   ><button id="open-config">打开服务器配置…</button
@@ -141,6 +129,48 @@
               </details>
             </div>
           </div>
+          <div id="header-runs" class="history-location" aria-label="历史记录位置" hidden>
+            <div>
+              <h1 class="secondary">历史记录位置</h1>
+              <code id="state-location"></code>
+            </div>
+            <div class="actions">
+              <button
+                id="use-config-location"
+                class="text-button"
+                aria-label="使用当前配置位置"
+                title="使用当前配置位置"
+              >
+                <span class="full-label">使用当前配置位置</span
+                ><span class="compact-label">配置位置</span></button
+              ><button
+                id="change-location"
+                class="button secondary"
+                aria-label="更改位置…"
+                title="更改历史记录位置"
+              >
+                <span class="full-label">更改位置…</span
+                ><span class="compact-label">更改…</span>
+              </button>
+            </div>
+          </div>
+        </div>
+        <div class="service-info">
+          <span class="service-meta"
+            ><span id="version">AutoBench</span><span id="server-address"></span
+          ></span>
+        </div>
+      </header>
+      <main id="main-content" tabindex="-1">
+        <div id="notice" role="status" aria-live="polite" hidden></div>
+        <section
+          id="page-config"
+          class="page"
+          role="tabpanel"
+          aria-labelledby="tab-config"
+          tabindex="0"
+          hidden
+        >
           <div class="editor-toolbar">
             <div class="segmented" aria-label="编辑模式">
               <button id="mode-form" class="active">引导配置</button
@@ -200,19 +230,6 @@
           tabindex="0"
           hidden
         >
-          <div class="history-location">
-            <div>
-              <span class="secondary">历史记录位置</span
-              ><code id="state-location"></code>
-            </div>
-            <div class="actions">
-              <button id="use-config-location" class="text-button">
-                使用当前配置位置</button
-              ><button id="change-location" class="button secondary">
-                更改位置…
-              </button>
-            </div>
-          </div>
           <section class="panel">
             <div class="section-heading">
               <div>

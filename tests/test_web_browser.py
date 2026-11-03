@@ -336,9 +336,11 @@ def assert_current_page(page, key):
         "id"
     )
     assert page.get_by_role("tabpanel").count() == 1
+    assert page.locator(f".topbar #header-{key}").is_visible()
     assert page.get_by_role("tab", selected=False).get_attribute("tabindex") == "-1"
     for other in titles.keys() - {key}:
         assert page.locator(f"#page-{other}").is_hidden()
+        assert page.locator(f"#header-{other}").is_hidden()
 
 
 @pytest.mark.parametrize("key", ["config", "runs"])
@@ -352,6 +354,8 @@ def test_reload_does_not_flash_config_while_script_or_api_is_loading(browser_pag
     page.reload(wait_until="commit")
     page.get_by_role("tablist").wait_for()
     assert page.locator("#page-config").is_hidden()
+    assert page.locator("#header-config").is_hidden()
+    assert page.locator("#header-runs").is_hidden()
     assert page.locator("[data-page].active").count() == 0
     assert page.get_by_role("tab", selected=True).count() == 0
     assert scripts
@@ -517,7 +521,99 @@ def test_tabs_support_keyboard_navigation(browser_page, ui_server):
         assert_current_page(page, selected)
         assert target.evaluate("element => element === document.activeElement")
     page.keyboard.press("Tab")
+    assert page.locator("#use-config-location").evaluate(
+        "element => element === document.activeElement"
+    )
+    page.keyboard.press("Tab")
+    assert page.locator("#change-location").evaluate(
+        "element => element === document.activeElement"
+    )
+    page.keyboard.press("Tab")
     assert page.locator("#page-runs").evaluate("element => element === document.activeElement")
+
+
+@pytest.mark.parametrize("width", [1920, 1440, 1200, 1101, 1100, 768, 390])
+def test_header_files_layout_and_independent_locations(browser_page, ui_server, width):
+    page, server = browser_page, ui_server
+    page.set_viewport_size({"width": width, "height": 900})
+    ready(page, server)
+    load_existing(page, server)
+    long_dir = server.root / ("history-" + "long-path-" * 18)
+    long_dir.mkdir()
+    saved_path = long_dir / ("configuration-" * 10 + ".yaml")
+    page.locator("#file-menu summary").click()
+    page.locator("#save-as").click()
+    page.locator("#save-path").fill(str(saved_path))
+    page.locator("#path-confirm").click()
+    page.wait_for_function(
+        "path => document.querySelector('#file-location').textContent === path",
+        arg=str(saved_path),
+    )
+    assert saved_path.is_file()
+    page.locator("#input-machines-0-ssh-host").fill("unsaved.example")
+    page.locator(".wizard-step").nth(3).click()
+    page.locator("#file-menu summary").click()
+    assert page.locator(".menu-items").is_visible()
+    page.locator("#tab-runs").click()
+    assert_current_page(page, "runs")
+    assert not page.locator("#file-menu").evaluate("el => el.open")
+    page.locator("#change-location").click()
+    page.wait_for_function("() => document.querySelector('#file-selected').textContent !== ''")
+    page.locator("#file-path").fill(str(long_dir))
+    page.locator("#file-go").click()
+    page.wait_for_function(
+        "path => document.querySelector('#file-selected').textContent === path",
+        arg=str(long_dir),
+    )
+    page.locator("#file-confirm").click()
+    page.wait_for_function(
+        "path => document.querySelector('#state-location').textContent === path",
+        arg=str(long_dir),
+    )
+    assert page.locator("#state-location").get_attribute("title") == str(long_dir)
+    for key in ("config", "runs"):
+        page.locator(f"#tab-{key}").click()
+        assert_current_page(page, key)
+        page.wait_for_function(
+            """() => Math.abs(parseFloat(getComputedStyle(document.documentElement)
+                .getPropertyValue('--topbar-height')) -
+                document.querySelector('.topbar').getBoundingClientRect().height) < 1"""
+        )
+        header = page.locator(f"#header-{key}").bounding_box()
+        tabs = page.locator(".page-tabs").bounding_box()
+        assert header["x"] >= tabs["x"] + tabs["width"]
+        assert page.locator(".topbar").bounding_box()["height"] == 44
+        selectors = [".brand", "#tab-config", "#tab-runs", f"#header-{key}", ".service-info"]
+        selectors += (
+            ["#file-name", "#save-state", "#file-menu summary", "#file-location", "#matrix-summary"]
+            if key == "config"
+            else ["#state-location", "#use-config-location", "#change-location"]
+        )
+        for selector in selectors:
+            element = page.locator(selector)
+            if element.is_visible():
+                box = element.bounding_box()
+                assert abs(box["y"] + box["height"] / 2 - 22) <= 1, (selector, box)
+        assert page.locator(".service-info").is_visible() == (width > 1200)
+        if key == "config":
+            assert page.locator("#matrix-summary").is_visible() == (width > 1600)
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+        page.evaluate("window.scrollTo(0, 400)")
+        assert page.locator(".topbar").bounding_box()["y"] == 0
+    page.locator("#tab-config").click()
+    assert "运行设置" in page.locator('.wizard-step[aria-current="step"]').inner_text()
+    page.locator(".wizard-step").nth(0).click()
+    assert page.locator("#input-machines-0-ssh-host").input_value() == "unsaved.example"
+    assert page.locator("#file-location").get_attribute("title") == str(saved_path)
+    assert page.locator("#file-name").get_attribute("title") == str(saved_path)
+    assert page.locator("#save-state").inner_text() == "未保存"
+    page.locator("#tab-runs").click()
+    assert page.locator("#state-location").inner_text() == str(long_dir)
+    page.locator("#use-config-location").click()
+    page.wait_for_function(
+        "path => document.querySelector('#state-location').textContent === path",
+        arg=str(server.config.policy.state_dir),
+    )
 
 
 @pytest.mark.parametrize("width", [1440, 768, 390])
