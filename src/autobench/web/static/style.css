@@ -57,6 +57,7 @@
   --radius-card: 8px;
   --radius-control: 6px;
   --gap: 24px;
+  --topbar-height: 44px;
   --font:
     "IBM Plex Sans", "PingFang SC", "Noto Sans CJK SC", "Microsoft YaHei",
     system-ui, sans-serif;
@@ -68,6 +69,9 @@
 }
 * {
   box-sizing: border-box;
+}
+html {
+  scroll-padding-top: calc(var(--topbar-height) + 8px);
 }
 body {
   margin: 0;
@@ -246,12 +250,16 @@ pre {
   padding: 0 8px 8px;
 }
 .topbar {
-  min-height: 64px;
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  min-height: var(--topbar-height);
   display: grid;
   grid-template-columns: 196px minmax(0, 1fr) auto;
   align-items: center;
   gap: 24px;
   padding: 0 24px;
+  background: var(--ground);
   color: var(--muted);
 }
 .brand {
@@ -264,6 +272,7 @@ pre {
   font-weight: 600;
   letter-spacing: -0.6px;
   width: fit-content;
+  white-space: nowrap;
 }
 .brand-mark {
   width: 30px;
@@ -273,18 +282,9 @@ pre {
   place-items: center;
   flex: none;
 }
-.brand small {
-  display: block;
-  color: var(--muted);
-  font-size: 12px;
-  letter-spacing: 0;
-  margin-top: 1px;
-  font-weight: 400;
-}
 .page-tabs {
   display: flex;
-  align-items: end;
-  align-self: end;
+  align-items: center;
   min-width: 0;
   gap: 4px;
 }
@@ -356,7 +356,7 @@ pre {
 }
 main {
   min-width: 0;
-  min-height: calc(100vh - 72px);
+  min-height: calc(100vh - var(--topbar-height) - 8px);
   position: relative;
   background: var(--panel);
   border: 1px solid var(--line);
@@ -1029,7 +1029,7 @@ main {
 }
 #notice {
   position: sticky;
-  top: 0;
+  top: var(--topbar-height);
   z-index: 25;
   padding: 12px 36px;
   background: var(--line);
@@ -1391,7 +1391,7 @@ dialog input {
 }
 .config-plan {
   position: sticky;
-  top: 24px;
+  top: calc(var(--topbar-height) + 24px);
   padding: 20px;
   background: var(--raised);
   border: 1px solid var(--line);
@@ -1656,7 +1656,7 @@ textarea:focus-visible {
   padding: 12px 32px;
   border-radius: 8px;
   margin-bottom: 8px;
-  top: 8px;
+  top: calc(var(--topbar-height) + 8px);
 }
 @media (max-width: 1200px) {
   .page {
@@ -1732,13 +1732,18 @@ textarea:focus-visible {
     padding: 0;
   }
   .topbar {
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: auto minmax(0, 1fr);
     gap: 12px;
-    padding: 14px 16px 0;
+    padding: 0 12px;
   }
   .brand {
-    font-size: 21px;
-    gap: 9px;
+    font-size: 18px;
+    gap: 6px;
+  }
+  .brand-mark,
+  .brand-symbol {
+    width: 24px;
+    height: 24px;
   }
   .service-info {
     display: none;
@@ -1748,13 +1753,15 @@ textarea:focus-visible {
   }
   .page-tab {
     flex: 1;
+    min-width: 0;
     justify-content: center;
-    padding: 10px 12px;
+    gap: 6px;
+    padding: 10px 6px;
   }
   main {
     border-width: 1px 0 0;
     border-radius: 0;
-    min-height: calc(100vh - 120px);
+    min-height: calc(100vh - var(--topbar-height));
   }
   .page {
     padding: 20px 16px 0;
@@ -2025,7 +2032,7 @@ textarea:focus-visible {
     margin: 0;
     border-radius: 0;
     padding: 12px 16px;
-    top: 0;
+    top: var(--topbar-height);
   }
   .config-plan {
     padding: 20px;
