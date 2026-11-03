@@ -27,12 +27,11 @@ import {
   focusError,
   errorLabel,
 } from "./config-view.js";
-import { renderChecksPage, inspectSaved } from "./checks.js";
 import { initRuns, renderRuns, refreshRuns, startRun } from "./runs.js";
 import { renderPlan } from "./config-plan.js";
 let ready = false,
   pathAction = "save";
-const titles = { config: "测试配置", inspect: "环境检查", runs: "运行记录" };
+const titles = { config: "测试配置", runs: "运行记录" };
 function setPage(page) {
   if (!Object.hasOwn(titles, page)) page = "config";
   const changed = state.page !== page;
@@ -40,18 +39,17 @@ function setPage(page) {
   sessionStorage.setItem("autobench-page", page);
   for (const key of Object.keys(titles)) $("page-" + key).hidden = key !== page;
   document.querySelectorAll("[data-page]").forEach((e) => {
-    e.classList.toggle("active", e.dataset.page === page);
-    if (e.dataset.page === page) e.setAttribute("aria-current", "page");
-    else e.removeAttribute("aria-current");
+    const selected = e.dataset.page === page;
+    e.classList.toggle("active", selected);
+    e.setAttribute("aria-selected", String(selected));
+    e.tabIndex = selected ? 0 : -1;
   });
-  $("breadcrumb").textContent = titles[page];
   if (changed) window.scrollTo(0, 0);
   if (!ready) return;
   if (page === "runs") {
     renderRuns();
     refreshRuns().catch((error) => show(error.message, "error"));
   }
-  if (page === "inspect") renderChecksPage();
 }
 function chrome() {
   const c = counts(state.document),
@@ -104,7 +102,6 @@ function chrome() {
   if (checked)
     $("validation-result").textContent =
       `检查通过 · ${state.validation.machines} 台机器 · 源码包已校验`;
-  renderChecksPage();
   updateConfig();
 }
 function render(layout) {
@@ -172,16 +169,29 @@ async function boot() {
   state.info = await api("/api/info");
   const initialPath =
     state.info.config || sessionStorage.getItem("autobench-config-path");
-  $("version").textContent = `AutoBench ${state.info.version}`;
+  $("version").textContent = `v${state.info.version}`;
   $("server-address").textContent = window.location.host;
   initFiles();
   subscribe(render);
   await createProject();
   ready = true;
   render(true);
-  document
-    .querySelectorAll("[data-page]")
-    .forEach((e) => e.addEventListener("click", () => setPage(e.dataset.page)));
+  const tabs = [...document.querySelectorAll("[data-page]")];
+  tabs.forEach((tab, index) => {
+    tab.addEventListener("click", () => setPage(tab.dataset.page));
+    tab.addEventListener("keydown", (event) => {
+      let next;
+      if (event.key === "ArrowRight") next = (index + 1) % tabs.length;
+      else if (event.key === "ArrowLeft")
+        next = (index + tabs.length - 1) % tabs.length;
+      else if (event.key === "Home") next = 0;
+      else if (event.key === "End") next = tabs.length - 1;
+      else return;
+      event.preventDefault();
+      setPage(tabs[next].dataset.page);
+      tabs[next].focus({ preventScroll: true });
+    });
+  });
   bind("new-config", async () => {
     if (!discard()) return;
     await createProject();
@@ -298,13 +308,6 @@ async function boot() {
         if (pathAction === "check") await validate();
       }
     });
-  });
-  bind("doctor", inspectSaved);
-  bind("inspect-config", () => {
-    setPage("config");
-    state.step = 0;
-    state.system = null;
-    emit(true);
   });
   window.addEventListener("beforeunload", (event) => {
     if (state.dirty && state.touched) {

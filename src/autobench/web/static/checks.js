@@ -1,16 +1,12 @@
-import { state, api, waitOperation, savedBody, emit } from "./state.js";
+import { state, api, waitOperation, emit } from "./state.js";
 import { mergedSSH, connectionTestSignature } from "./model.js";
 import {
-  $,
   node,
   button,
   hint,
   pill,
-  heading,
-  jsonDetails,
   statusIndicator,
   updateStatusIndicator,
-  icon,
 } from "./ui.js";
 const records = new WeakMap();
 const panelTargets = new WeakMap();
@@ -75,46 +71,6 @@ async function testConnection(machine, system = null) {
     if (records.get(key) === record) emit(true);
   }
 }
-function checkRows(checks) {
-  const e = node("div", "check-list");
-  for (const item of checks) {
-    const r = node("div", "check-row");
-    r.dataset.tone =
-      item.status === "passed"
-        ? "success"
-        : item.status === "unchecked"
-          ? "neutral"
-          : "error";
-    const content = node("div");
-    content.append(
-      node("strong", "", labels[item.id] || item.label || item.id),
-      hint(item.message),
-    );
-    const mark = node("span", "check-icon");
-    mark.append(
-      icon(
-        item.status === "passed"
-          ? "check"
-          : item.status === "unchecked"
-            ? "pending"
-            : "error",
-      ),
-    );
-    r.append(mark, content);
-    r.append(
-      pill(
-        item.status === "passed"
-          ? "通过"
-          : item.status === "unchecked"
-            ? "未检查"
-            : "需处理",
-        r.dataset.tone,
-      ),
-    );
-    e.append(r);
-  }
-  return e;
-}
 export function connectionTestPanel(machine, system = null) {
   const panel = node("div", "connection-test-panel");
   panelTargets.set(panel, { machine, system });
@@ -177,81 +133,4 @@ export function updateConnectionTestPanels() {
   document
     .querySelectorAll(".connection-test-panel")
     .forEach(updateConnectionTestPanel);
-}
-export async function inspectSaved() {
-  const operation = await api("/api/inspections", {
-    ...savedBody(),
-    kind: "doctor",
-    machine: $("inspection-machine").value || null,
-  });
-  $("inspection-result").replaceChildren(
-    node("p", "callout", "正在检查当前启动的系统…"),
-  );
-  const result = await waitOperation(operation);
-  renderInspection(result);
-}
-export function renderInspection(results) {
-  $("inspection-result").replaceChildren();
-  for (const item of results) {
-    const card = node("section", "panel");
-    card.append(heading(item.machine, "检查只针对当前启动的系统。"));
-    const p = item.probe;
-    const connection = !!p;
-    const current = item.systems?.find((s) => s.current);
-    const checks = [
-      {
-        id: "connection",
-        status: connection ? "passed" : "failed",
-        message: connection
-          ? item.verify_host_key === false
-            ? "连接成功，已忽略主机密钥校验"
-            : "连接成功"
-          : (item.errors || []).join("；") || "无法连接",
-      },
-      {
-        id: "system",
-        status: !p ? "unchecked" : current ? "passed" : "failed",
-        message: current
-          ? `当前系统：${current.id}`
-          : "当前启动项与配置不匹配或尚未读取",
-      },
-      {
-        id: "uefi",
-        status: !p ? "unchecked" : p.efi?.current ? "passed" : "failed",
-        message: p?.efi?.current
-          ? `BootCurrent ${p.efi.current}`
-          : "尚未读取有效启动项",
-      },
-      {
-        id: "runtime",
-        status: !p ? "unchecked" : item.errors?.length ? "failed" : "passed",
-        message: item.errors?.length
-          ? item.errors.join("；")
-          : "当前系统运行依赖通过",
-      },
-    ];
-    card.append(checkRows(checks));
-    for (const system of item.systems || [])
-      card.append(
-        node(
-          "p",
-          "system-check-summary",
-          `${system.id} · ${system.current ? "当前系统，已核对启动项与依赖" : "未启动，启动项与依赖尚未检查"}`,
-        ),
-      );
-    card.append(jsonDetails("技术详情与环境覆盖", item));
-    $("inspection-result").append(card);
-  }
-}
-export function renderChecksPage() {
-  const machineSelect = $("inspection-machine"),
-    old = machineSelect.value;
-  machineSelect.replaceChildren(new Option("全部机器", ""));
-  for (const m of state.document.machines || [])
-    if (m && typeof m.id === "string")
-      machineSelect.add(new Option(m.id, m.id));
-  machineSelect.value = old;
-  $("inspection-config").textContent = state.path || "当前配置尚未保存";
-  $("doctor").disabled =
-    state.dirty || !state.path || state.target !== state.path;
 }

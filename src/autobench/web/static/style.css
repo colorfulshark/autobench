@@ -56,7 +56,6 @@
   --overlay-shadow: 0 16px 48px var(--overlay-shadow-color);
   --radius-card: 8px;
   --radius-control: 6px;
-  --sidebar-width: 228px;
   --gap: 24px;
   --font:
     "IBM Plex Sans", "PingFang SC", "Noto Sans CJK SC", "Microsoft YaHei",
@@ -243,19 +242,17 @@ pre {
   font-family: var(--font-mono);
 }
 .app-shell {
-  display: grid;
-  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
   min-height: 100vh;
+  padding: 0 8px 8px;
 }
-.sidebar {
-  position: sticky;
-  top: 0;
-  height: 100vh;
-  background: var(--ground);
+.topbar {
+  min-height: 64px;
+  display: grid;
+  grid-template-columns: 196px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 24px;
+  padding: 0 24px;
   color: var(--muted);
-  padding: 28px 16px 20px;
-  display: flex;
-  flex-direction: column;
 }
 .brand {
   display: flex;
@@ -266,7 +263,7 @@ pre {
   font-size: 22px;
   font-weight: 600;
   letter-spacing: -0.6px;
-  margin: 0 10px 44px;
+  width: fit-content;
 }
 .brand-mark {
   width: 30px;
@@ -281,53 +278,79 @@ pre {
   color: var(--muted);
   font-size: 12px;
   letter-spacing: 0;
-  margin-top: 3px;
+  margin-top: 1px;
   font-weight: 400;
 }
-.nav-caption {
-  font-size: 12px;
-  color: var(--muted);
-  margin: 0 12px 12px;
-}
-nav {
-  display: grid;
+.page-tabs {
+  display: flex;
+  align-items: end;
+  align-self: end;
+  min-width: 0;
   gap: 4px;
 }
-.nav-item {
-  background: none;
-  border: 0;
-  border-radius: 6px;
-  color: var(--muted);
-  min-height: 42px;
-  padding: 10px 12px;
-  text-align: left;
+.page-tab {
+  position: relative;
   display: flex;
   align-items: center;
+  justify-content: flex-start;
   gap: 10px;
+  flex: 0 1 188px;
+  min-width: 128px;
+  min-height: 44px;
+  padding: 10px 20px;
+  margin-bottom: -1px;
+  border: 1px solid transparent;
+  border-radius: 12px 12px 0 0;
+  background: transparent;
+  color: var(--muted);
   font-size: 14px;
+  white-space: nowrap;
 }
-.nav-item span {
-  font-size: 19px;
+.page-tab + .page-tab::before {
+  content: "";
+  position: absolute;
+  left: -3px;
+  top: 12px;
+  bottom: 12px;
+  width: 1px;
+  background: var(--control);
 }
-.nav-item.active {
-  background: var(--active);
-  color: var(--ink);
-  font-weight: 500;
-}
-.nav-item:hover {
+.page-tab:hover {
   background: var(--hover);
   color: var(--ink);
 }
-.sidebar-note {
-  margin: auto 12px 24px;
-  font-size: 12px;
-  padding-top: 32px;
+.page-tab.active {
+  z-index: 1;
+  background: var(--panel);
+  border-color: var(--line);
+  border-bottom-color: var(--panel);
+  color: var(--ink);
+  font-weight: 500;
 }
-.sidebar-note p {
+.page-tab.active::before,
+.page-tab.active + .page-tab::before {
+  display: none;
+}
+.page-tab:focus-visible {
+  outline-offset: -5px;
+}
+.service-info {
+  display: grid;
+  justify-items: end;
+  gap: 3px;
+  min-width: 0;
+}
+.service-tag {
+  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.service-meta {
+  display: flex;
+  gap: 12px;
   font-size: 12px;
-  color: var(--muted);
-  line-height: 1.8;
-  margin: 10px 0 0;
+  white-space: nowrap;
 }
 .live-dot {
   display: inline-block;
@@ -338,51 +361,17 @@ nav {
   vertical-align: middle;
   margin-right: 6px;
 }
-footer {
-  border-top: 1px solid var(--line);
-  padding: 18px 12px 0;
-  display: grid;
-  gap: 4px;
-  font-size: 12px;
-  color: var(--muted);
-  overflow-wrap: anywhere;
-}
 main {
   min-width: 0;
-  padding: 48px 8px 8px 0;
+  min-height: calc(100vh - 72px);
   position: relative;
-}
-.topbar {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 8px;
-  height: 48px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 30px;
-  font-size: 12px;
-  color: var(--muted);
-  background: var(--ground);
-}
-.divider {
-  margin: 0 14px;
-  color: var(--control);
-}
-.service-tag {
-  font-size: 12px;
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-}
-.page {
-  min-height: calc(100vh - 56px);
-  margin: 0;
-  padding: 28px 32px 0;
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 16px;
+}
+.page {
+  margin: 0;
+  padding: 28px 32px 0;
 }
 .page-heading {
   display: flex;
@@ -949,42 +938,6 @@ main {
   flex: 0 1 auto;
   max-width: 40%;
 }
-.check-list {
-  margin-top: 17px;
-}
-.check-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 11px;
-  padding: 12px 0;
-  border-bottom: 1px solid var(--line);
-  font-size: 12px;
-}
-.check-row > div {
-  flex: 1;
-  min-width: 0;
-}
-.check-row strong {
-  font-size: 14px;
-  font-weight: 500;
-}
-.check-row .hint {
-  margin: 4px 0 0;
-}
-.check-icon {
-  display: grid;
-  place-items: center;
-  width: 21px;
-  height: 21px;
-  color: var(--accent);
-  flex: none;
-}
-.check-row[data-tone="error"] .check-icon {
-  color: var(--danger);
-}
-.check-row[data-tone="neutral"] .check-icon {
-  color: var(--muted);
-}
 .callout {
   border: 1px solid var(--line);
   background: var(--raised);
@@ -1224,23 +1177,6 @@ td .secondary {
   overflow: auto;
   border-radius: 4px;
 }
-.inspection-actions {
-  display: flex;
-  align-items: flex-end;
-  gap: 15px;
-}
-.inspection-actions .field {
-  width: 220px;
-  margin: 0;
-}
-.inspection-actions .button {
-  margin-bottom: 0;
-}
-.system-check-summary {
-  font-size: 12px;
-  color: var(--muted);
-  padding-top: 12px;
-}
 .history-location {
   display: flex;
   justify-content: space-between;
@@ -1434,8 +1370,8 @@ dialog input {
   min-height: 18px;
 }
 
-/* Desktop: 1440 - 228 sidebar - 8 inset - 64 padding - 2 border = 1138.
-   Editor 834 + gutter 24 + preview 280 = 1138; both columns share the sheet edges. */
+/* Desktop: 1440 - 16 outer insets - 64 padding - 2 border = 1358.
+   Editor 1054 + gutter 24 + preview 280 = 1358; both columns share the sheet edges. */
 .icon {
   width: 18px;
   height: 18px;
@@ -1708,14 +1644,6 @@ textarea:focus-visible {
   border-radius: 0;
   padding: 0;
 }
-#page-inspect .inspection-actions + p {
-  margin-bottom: 0;
-  margin-top: 16px;
-  overflow-wrap: anywhere;
-}
-#breadcrumb {
-  color: var(--ink);
-}
 #file-location {
   font-size: 12px;
 }
@@ -1725,10 +1653,6 @@ textarea:focus-visible {
 .status-icon .icon {
   width: 18px;
   height: 18px;
-}
-.check-row .icon {
-  width: 16px;
-  height: 16px;
 }
 .menu > summary {
   min-height: 36px;
@@ -1754,13 +1678,6 @@ textarea:focus-visible {
   top: 8px;
 }
 @media (max-width: 1200px) {
-  :root {
-    --sidebar-width: 204px;
-  }
-  .sidebar {
-    padding-left: 12px;
-    padding-right: 12px;
-  }
   .page {
     padding: 24px 24px 0;
   }
@@ -1787,49 +1704,14 @@ textarea:focus-visible {
   }
 }
 @media (max-width: 1100px) {
-  .app-shell {
-    display: block;
-  }
-  .sidebar {
-    position: static;
-    height: auto;
-    padding: 12px 24px;
-    display: flex;
-    flex-direction: row;
-    align-items: center;
-    gap: 24px;
-  }
-  .brand {
-    margin: 0 auto 0 0;
-    font-size: 20px;
-  }
-  .brand small {
-    display: none;
-  }
-  .brand-mark {
-    height: 30px;
-  }
-  .nav-caption,
-  .sidebar-note,
-  .sidebar footer {
-    display: none;
-  }
-  nav {
-    display: flex;
-    gap: 8px;
-  }
-  .nav-item {
-    min-height: 44px;
-    padding: 10px 14px;
-  }
-  main {
-    padding: 0 8px 8px;
-  }
   .topbar {
-    display: none;
+    grid-template-columns: 172px minmax(0, 1fr) auto;
+    gap: 16px;
+    padding: 0 16px;
   }
-  .page {
-    min-height: calc(100vh - 76px);
+  .page-tab {
+    flex-basis: 160px;
+    padding-inline: 16px;
   }
   .config-layout {
     grid-template-columns: minmax(0, 1fr) 240px;
@@ -1845,6 +1727,12 @@ textarea:focus-visible {
   }
 }
 @media (max-width: 850px) {
+  .service-info {
+    display: none;
+  }
+  .topbar {
+    grid-template-columns: 172px minmax(0, 1fr);
+  }
   .config-layout {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -1859,36 +1747,35 @@ textarea:focus-visible {
   :root {
     --gap: 16px;
   }
-  .sidebar {
-    padding: 12px 16px 8px;
-    display: block;
+  .app-shell {
+    padding: 0;
+  }
+  .topbar {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+    padding: 14px 16px 0;
   }
   .brand {
     font-size: 21px;
-    margin: 0 0 12px;
     gap: 9px;
   }
-  .brand small {
-    display: block;
-    font-size: 12px;
+  .service-info {
+    display: none;
   }
-  nav {
+  .page-tabs {
     gap: 4px;
   }
-  .nav-item {
+  .page-tab {
     flex: 1;
     justify-content: center;
-    padding: 10px 8px;
-    gap: 7px;
-    font-size: 13px;
+    padding: 10px 12px;
   }
   main {
-    padding: 0;
-  }
-  .page {
     border-width: 1px 0 0;
     border-radius: 0;
-    min-height: calc(100vh - 110px);
+    min-height: calc(100vh - 120px);
+  }
+  .page {
     padding: 20px 16px 0;
   }
   .page-heading {
@@ -2106,17 +1993,6 @@ textarea:focus-visible {
   .run-filters select {
     width: 118px;
   }
-  .inspection-actions {
-    flex-wrap: wrap;
-    gap: 16px;
-    align-items: end;
-  }
-  .inspection-actions .field {
-    width: 100%;
-  }
-  .inspection-actions .button {
-    width: 100%;
-  }
   .stat-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -2206,8 +2082,6 @@ textarea:focus-visible {
 }
 
 /* Keep operational labels readable; reserve 12px for paths and supporting text. */
-.nav-caption,
-.service-tag,
 .chip-button,
 #matrix-summary {
   font-size: 13px;

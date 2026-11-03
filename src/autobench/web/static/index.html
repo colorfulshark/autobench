@@ -10,7 +10,7 @@
   <body>
     <a class="skip-link" href="#main-content">跳转到主要内容</a>
     <div class="app-shell">
-      <aside class="sidebar">
+      <header class="topbar">
         <a class="brand" href="/" aria-label="AutoBench 首页"
           ><span class="brand-mark"
             ><svg
@@ -28,9 +28,21 @@
               /></svg></span
           ><span>AutoBench<small>Linux 性能测试</small></span></a
         >
-        <div class="nav-caption">工作空间</div>
-        <nav aria-label="主导航">
-          <button data-page="config" class="nav-item">
+        <nav
+          class="page-tabs"
+          role="tablist"
+          aria-label="主导航"
+          aria-orientation="horizontal"
+        >
+          <button
+            id="tab-config"
+            class="page-tab"
+            data-page="config"
+            role="tab"
+            aria-controls="page-config"
+            aria-selected="false"
+            tabindex="-1"
+          >
             <svg
               class="icon"
               viewBox="0 0 24 24"
@@ -43,22 +55,17 @@
             >
               <path d="M4 5h16v14H4zM4 10h16M9 10v9" />
             </svg>
-            测试配置</button
-          ><button data-page="inspect" class="nav-item">
-            <svg
-              class="icon"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.6"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              aria-hidden="true"
-            >
-              <path d="M3 12h4l3-7 4 14 3-7h4" />
-            </svg>
-            环境检查</button
-          ><button data-page="runs" class="nav-item">
+            测试配置
+          </button>
+          <button
+            id="tab-runs"
+            class="page-tab"
+            data-page="runs"
+            role="tab"
+            aria-controls="page-runs"
+            aria-selected="false"
+            tabindex="-1"
+          >
             <svg
               class="icon"
               viewBox="0 0 24 24"
@@ -74,25 +81,25 @@
             运行记录
           </button>
         </nav>
-        <div class="sidebar-note">
-          <span class="live-dot"></span> SSH 远程控制
-          <p>跨系统测试 · 断点恢复<br />UnixBench benchmark</p>
-        </div>
-        <footer>
-          <span id="version">AutoBench</span><span id="server-address"></span>
-        </footer>
-      </aside>
-      <main id="main-content" tabindex="-1">
-        <header class="topbar">
-          <span
-            >工作空间 <span class="divider">/</span>
-            <span id="breadcrumb"></span></span
-          ><span class="service-tag"
-            ><span class="live-dot"></span> 本地工作空间</span
+        <div class="service-info">
+          <span class="service-tag"
+            ><span class="live-dot"></span>本地工作空间</span
           >
-        </header>
+          <span class="service-meta"
+            ><span id="version">AutoBench</span><span id="server-address"></span
+          ></span>
+        </div>
+      </header>
+      <main id="main-content" tabindex="-1">
         <div id="notice" role="status" aria-live="polite" hidden></div>
-        <section id="page-config" class="page" hidden>
+        <section
+          id="page-config"
+          class="page"
+          role="tabpanel"
+          aria-labelledby="tab-config"
+          tabindex="0"
+          hidden
+        >
           <div class="page-heading">
             <div>
               <h1>测试配置</h1>
@@ -196,58 +203,14 @@
             </div>
           </div>
         </section>
-        <section id="page-inspect" class="page" hidden>
-          <div class="page-heading">
-            <div>
-              <h1>环境检查</h1>
-              <p>检查 SSH 连接、UEFI 启动项与当前系统的运行依赖。</p>
-            </div>
-            <span class="pill">只读检查</span>
-          </div>
-          <section class="panel">
-            <div class="section-heading">
-              <div>
-                <h2>检查范围</h2>
-                <p class="hint">
-                  完整检查使用已保存配置；保存前可在机器详情中测试连接。
-                </p>
-              </div>
-              <button id="inspect-config" class="text-button">
-                前往机器连接 →
-              </button>
-            </div>
-            <div class="inspection-actions">
-              <div class="field">
-                <label for="inspection-machine" class="field-label"
-                  >目标机器</label
-                ><select id="inspection-machine">
-                  <option value="">全部机器</option>
-                </select>
-              </div>
-              <button id="doctor" class="button primary">检查当前环境</button>
-            </div>
-            <p id="inspection-config" class="secondary mono"></p>
-          </section>
-          <div id="inspection-result">
-            <div class="empty">
-              <svg
-                class="icon empty-icon"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.6"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                aria-hidden="true"
-              >
-                <path d="M3 12h4l3-7 4 14 3-7h4" />
-              </svg>
-              <h3>准备检查当前系统</h3>
-              <p class="hint">只读启动项及运行依赖，不切换系统。</p>
-            </div>
-          </div>
-        </section>
-        <section id="page-runs" class="page" hidden>
+        <section
+          id="page-runs"
+          class="page"
+          role="tabpanel"
+          aria-labelledby="tab-runs"
+          tabindex="0"
+          hidden
+        >
           <div class="page-heading">
             <div>
               <h1>运行记录</h1>

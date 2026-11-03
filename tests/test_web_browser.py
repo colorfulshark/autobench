@@ -142,16 +142,25 @@ def assert_current_page(page, key):
         "key => sessionStorage.getItem('autobench-page') === key",
         arg=key,
     )
-    titles = {"config": "测试配置", "inspect": "环境检查", "runs": "运行记录"}
+    titles = {"config": "测试配置", "runs": "运行记录"}
     page.locator(f"#page-{key}").wait_for()
     assert page.locator("[data-page].active").count() == 1
     assert page.locator("[data-page].active").get_attribute("data-page") == key
-    assert page.locator("#breadcrumb").text_content() == titles[key]
+    selected = page.get_by_role("tab", selected=True)
+    assert selected.count() == 1
+    assert selected.inner_text() == titles[key]
+    assert selected.get_attribute("tabindex") == "0"
+    assert selected.get_attribute("aria-controls") == f"page-{key}"
+    assert page.locator(f"#page-{key}").get_attribute("aria-labelledby") == selected.get_attribute(
+        "id"
+    )
+    assert page.get_by_role("tabpanel").count() == 1
+    assert page.get_by_role("tab", selected=False).get_attribute("tabindex") == "-1"
     for other in titles.keys() - {key}:
         assert page.locator(f"#page-{other}").is_hidden()
 
 
-@pytest.mark.parametrize("key", ["config", "inspect", "runs"])
+@pytest.mark.parametrize("key", ["config", "runs"])
 def test_reload_does_not_flash_config_while_script_or_api_is_loading(browser_page, ui_server, key):
     page = browser_page
     ready(page, ui_server)
@@ -160,10 +169,10 @@ def test_reload_does_not_flash_config_while_script_or_api_is_loading(browser_pag
     page.route("**/static/app.js", lambda route: scripts.append(route))
     page.route("**/api/info", lambda route: requests.append(route))
     page.reload(wait_until="commit")
-    page.locator(".sidebar").wait_for()
+    page.get_by_role("tablist").wait_for()
     assert page.locator("#page-config").is_hidden()
     assert page.locator("[data-page].active").count() == 0
-    assert page.locator("#breadcrumb").text_content() == ""
+    assert page.get_by_role("tab", selected=True).count() == 0
     assert scripts
     with page.expect_request("**/api/info"):
         scripts[0].continue_()
@@ -175,8 +184,8 @@ def test_reload_does_not_flash_config_while_script_or_api_is_loading(browser_pag
     assert_current_page(page, key)
 
 
-@pytest.mark.parametrize("key", ["config", "inspect", "runs"])
-def test_sidebar_page_survives_reload_without_selected_run(browser_page, ui_server, key):
+@pytest.mark.parametrize("key", ["config", "runs"])
+def test_tab_page_survives_reload_without_selected_run(browser_page, ui_server, key):
     page = browser_page
     ready(page, ui_server)
     page.locator(f'[data-page="{key}"]').click()
@@ -190,7 +199,7 @@ def test_sidebar_page_survives_reload_without_selected_run(browser_page, ui_serv
     assert page.evaluate("sessionStorage.getItem('autobench-selection')") is None
 
 
-@pytest.mark.parametrize("key", ["config", "inspect", "runs"])
+@pytest.mark.parametrize("key", ["config", "runs"])
 def test_selected_run_does_not_override_page_after_reload(browser_page, ui_server, key):
     from autobench.storage import Store
 
@@ -299,13 +308,62 @@ def test_readable_run_names_and_nested_downloads(browser_page, ui_server, monkey
         assert zipped.read(f"{run_id}/{relative}") == result.read_bytes()
 
 
-def test_inspection_link_persists_return_to_config(browser_page, ui_server):
+@pytest.mark.parametrize("remembered", ["inspect", "unknown"])
+def test_removed_or_unknown_page_returns_to_config(browser_page, ui_server, remembered):
     page = browser_page
     ready(page, ui_server)
-    page.locator('[data-page="inspect"]').click()
-    page.locator("#inspect-config").click()
+    page.evaluate("value => sessionStorage.setItem('autobench-page', value)", remembered)
     page.reload()
     assert_current_page(page, "config")
+    assert page.locator("#page-inspect, [data-page=inspect], .sidebar, #breadcrumb").count() == 0
+    assert page.get_by_role("tab").count() == 2
+
+
+def test_tabs_support_keyboard_navigation(browser_page, ui_server):
+    page = browser_page
+    ready(page, ui_server)
+    config = page.get_by_role("tab", name="测试配置", exact=True)
+    runs = page.get_by_role("tab", name="运行记录", exact=True)
+    config.focus()
+    for key, selected, target in [
+        ("ArrowRight", "runs", runs),
+        ("ArrowRight", "config", config),
+        ("ArrowLeft", "runs", runs),
+        ("Home", "config", config),
+        ("End", "runs", runs),
+    ]:
+        page.keyboard.press(key)
+        assert_current_page(page, selected)
+        assert target.evaluate("element => element === document.activeElement")
+    page.keyboard.press("Tab")
+    assert page.locator("#page-runs").evaluate("element => element === document.activeElement")
+
+
+@pytest.mark.parametrize("width", [1440, 768, 390])
+def test_tabs_keep_configuration_draft_and_step(browser_page, ui_server, width):
+    page = browser_page
+    page.set_viewport_size({"width": width, "height": 900})
+    ready(page, ui_server)
+    page.locator("#input-machines-0-ssh-host").fill("unsaved.example")
+    page.locator(".wizard-step").nth(3).click()
+    page.get_by_role("tab", name="运行记录", exact=True).click()
+    assert_current_page(page, "runs")
+    page.get_by_role("tab", name="测试配置", exact=True).click()
+    assert page.locator('.wizard-step[aria-current="step"]').count() == 1
+    assert "运行设置" in page.locator('.wizard-step[aria-current="step"]').inner_text()
+    page.locator(".wizard-step").nth(0).click()
+    assert page.locator("#input-machines-0-ssh-host").input_value() == "unsaved.example"
+    page.locator("#mode-yaml").click()
+    text = page.locator("#yaml-editor").input_value() + "\n# unsaved tab draft\n"
+    page.locator("#yaml-editor").fill(text)
+    page.get_by_role("tab", name="运行记录", exact=True).click()
+    page.get_by_role("tab", name="测试配置", exact=True).click()
+    assert page.locator("#yaml-editor").is_visible()
+    assert page.locator("#yaml-editor").input_value() == text
+    assert page.locator("#save-state").inner_text() == "未保存"
+    assert not (ui_server.root / "autobench.yaml").exists()
+    assert page.locator(".brand").is_visible()
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
 
 def test_wizard_password_connection_test_manual_system_files_save_run_and_cancel(
@@ -948,12 +1006,6 @@ def test_ignore_host_key_allows_connection_test_and_validation_without_hosts(
         ]
         is False
     )
-
-    page.locator('[data-page="inspect"]').click()
-    page.locator("#doctor").click()
-    page.locator("#inspection-result").get_by_text(
-        "连接成功，已忽略主机密钥校验", exact=True
-    ).wait_for()
 
 
 @pytest.mark.parametrize("width", [1440, 390])
