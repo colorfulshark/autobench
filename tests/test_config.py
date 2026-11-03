@@ -35,7 +35,7 @@ def test_reject_invalid_environment(env, archive):
     with pytest.raises(ValidationError):
         Benchmark(id="test", source_archive=archive, env=env)
     with pytest.raises(ValidationError):
-        System(id="os", boot_entry="0001", machine_id="1" * 32, env=env)
+        System(id="os", boot_entry="0001", env=env)
 
 
 def test_environment_precedence_literals_and_isolation():
@@ -208,9 +208,11 @@ def test_snapshot_redacts_all_passwords_and_preserves_frozen_overrides(config, m
         store.close()
 
 
-def test_duplicate_os_identity_rejected(config):
+@pytest.mark.parametrize("boot_entry", ["0001", "aBcD"])
+def test_duplicate_boot_entry_rejected(config, boot_entry):
     value = config.model_dump()
-    value["machines"][0]["systems"][1]["machine_id"] = "1" * 32
+    value["machines"][0]["systems"][0]["boot_entry"] = boot_entry
+    value["machines"][0]["systems"][1]["boot_entry"] = boot_entry.upper()
     with pytest.raises(ValidationError, match="duplicate"):
         type(config).model_validate(value)
 
@@ -267,3 +269,34 @@ def test_proxy_inheritance_replacement_clear_and_snapshot(config):
         assert "frozen-proxy-secret" not in (config.policy.output_dir / "config.json").read_text()
     finally:
         store.close()
+
+
+@pytest.mark.parametrize("model", [SSHConfig, SSHOverride])
+@pytest.mark.parametrize("setting", ["false", "true", 0, 1, None])
+def test_host_key_verification_requires_strict_boolean(model, setting):
+    with pytest.raises(ValidationError):
+        model.model_validate({"host": "localhost", "username": "bench", "verify_host_key": setting})
+
+
+def test_host_key_check_inheritance_and_frozen_backward_compatibility(config):
+    machine = config.machines[0]
+    assert machine.connection().verify_host_key is True
+    assert machine.connection(machine.systems[0]).verify_host_key is True
+    machine.ssh.verify_host_key = False
+    machine.systems[1].ssh = SSHOverride(verify_host_key=True)
+    assert machine.connection(machine.systems[0]).verify_host_key is False
+    assert machine.connection(machine.systems[1]).verify_host_key is True
+    store = Store(config.policy.state_dir)
+    run_id = store.create(config)
+    machine.ssh.verify_host_key = True
+    frozen = store.config(run_id)
+    assert frozen.machines[0].ssh.verify_host_key is False
+    assert frozen.machines[0].systems[0].ssh.model_dump() == {}
+    assert frozen.machines[0].systems[1].ssh.model_dump() == {"verify_host_key": True}
+    legacy = json.loads(store.run(run_id)["config"])
+    legacy["machines"][0]["ssh"].pop("verify_host_key")
+    legacy["machines"][0]["systems"][1]["ssh"].pop("verify_host_key")
+    with store.db:
+        store.db.execute("UPDATE runs SET config=? WHERE id=?", (json.dumps(legacy), run_id))
+    assert store.config(run_id).machines[0].connection().verify_host_key is True
+    store.close()

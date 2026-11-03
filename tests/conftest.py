@@ -48,13 +48,11 @@ def config(tmp_path, archive):
                         {
                             "id": "os1",
                             "boot_entry": "0001",
-                            "machine_id": "1" * 32,
                             "env": {"SHARED": "system", "SYSTEM_ONLY": "yes"},
                         },
                         {
                             "id": "os2",
                             "boot_entry": "0002",
-                            "machine_id": "2" * 32,
                             "env": {"SHARED": "other-system"},
                         },
                     ],

@@ -11,6 +11,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    StrictBool,
     StrictStr,
     field_validator,
     model_serializer,
@@ -70,6 +71,7 @@ class SSHOverride(Model):
     password: StrictStr | None = Field(default=None, repr=False)
     client_keys: list[Path] | None = None
     agent: bool | None = None
+    verify_host_key: StrictBool | None = None
     known_hosts: Path | None = None
     host_key_alias: str | None = None
     proxy: SOCKS5Proxy | None = None
@@ -95,6 +97,7 @@ class SSHConfig(Model):
     password: StrictStr | None = Field(default=None, repr=False)
     client_keys: list[Path] = Field(default_factory=list)
     agent: bool = True
+    verify_host_key: StrictBool = True
     known_hosts: Path = Path("~/.ssh/known_hosts")
     host_key_alias: str | None = None
     proxy: SOCKS5Proxy | None = None
@@ -109,7 +112,6 @@ class SSHConfig(Model):
 class System(Model):
     id: str
     boot_entry: StrictStr
-    machine_id: StrictStr
     ssh: SSHOverride = Field(default_factory=SSHOverride)
     env: Environment = Field(default_factory=dict)
 
@@ -124,13 +126,6 @@ class System(Model):
             )
         return value.upper()
 
-    @field_validator("machine_id")
-    @classmethod
-    def machine_identity(cls, value):
-        if not re.fullmatch(r"[0-9a-fA-F]{32}", value):
-            raise ValueError("machine_id must contain 32 hexadecimal characters")
-        return value.lower()
-
 
 class Machine(Model):
     id: str
@@ -140,7 +135,7 @@ class Machine(Model):
 
     @model_validator(mode="after")
     def unique_systems(self):
-        for field in ("id", "boot_entry", "machine_id"):
+        for field in ("id", "boot_entry"):
             values = [getattr(item, field) for item in self.systems]
             if len(set(values)) != len(values):
                 raise ValueError(f"duplicate system {field} in machine {self.id}")

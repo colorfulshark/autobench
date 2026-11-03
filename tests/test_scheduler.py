@@ -3,9 +3,24 @@ import copy
 import json
 from pathlib import PurePosixPath
 
+import pytest
+
 from autobench.errors import ConnectionLost
 from autobench.scheduler import Scheduler
 from autobench.storage import Store
+
+
+@pytest.mark.parametrize(
+    ("probe", "expected"),
+    [
+        ({"efi": {"current": "0001"}}, True),
+        ({"efi": {"current": "0002"}}, False),
+        ({"efi": {}}, False),
+        ({}, False),
+    ],
+)
+def test_target_matches_current_boot_entry(config, probe, expected):
+    assert Scheduler.is_target(probe, config.machines[0].systems[0]) is expected
 
 
 class World:
@@ -36,7 +51,6 @@ class FakeRemote:
         current = self.world.current[self.machine.id]
         return {
             "boot_id": self.world.boot[self.machine.id],
-            "machine_id": current.machine_id,
             "home": "/home/bench",
             "python": [3, 8, 0],
             "systemd_version": 245,
@@ -249,7 +263,9 @@ async def test_machine_parallelism_but_each_machine_serial(config):
     store.close()
 
 
-async def test_wrong_boot_identity_never_runs(config):
+@pytest.mark.parametrize("verify_host_key", [True, False])
+async def test_wrong_boot_entry_never_runs(config, verify_host_key):
+    config.machines[0].ssh.verify_host_key = verify_host_key
     store, run_id, world = setup(config)
     # Force a reboot to the wrong system while still changing the boot ID.
     original = FakeRemote.switch

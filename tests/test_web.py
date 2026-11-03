@@ -58,7 +58,6 @@ machines:
     systems:
       - id: os
         boot_entry: "0001"
-        machine_id: "11111111111111111111111111111111"
         ssh: {password: null, client_keys: [], proxy: null}
         env: {EMPTY: '', NUMBER: '3', LITERAL: '$PATH $(id) `id` 雪'}
 benchmarks: [{id: ub, source_archive: ./source.tar.gz}]
@@ -501,7 +500,6 @@ def test_draft_probe_needs_only_connection_and_resolves_paths(client, tmp_path, 
         async def probe(self, requirements):
             return {
                 "hostname": "test-host",
-                "machine_id": "1" * 32,
                 "boot_id": "boot-1",
                 "efi": {"current": "0001", "entries": {"0001": {"active": True, "label": "Linux"}}},
                 "python": [3, 11],
@@ -530,7 +528,7 @@ def test_draft_probe_needs_only_connection_and_resolves_paths(client, tmp_path, 
     response = client.post("/api/connections/probe", json=body)
     assert response.status_code == 202, response.text
     result = wait_operation(client, response.json())
-    assert result["probe"]["machine_id"] == "1" * 32
+    assert result["probe"]["efi"]["current"] == "0001"
     assert all(check["status"] == "passed" for check in result["checks"])
     assert received[0][0].known_hosts == folder / "known_hosts"
     assert received[0][0].client_keys == [folder / "id_key"]
@@ -579,3 +577,73 @@ def test_missing_connection_file_error_locates_advanced_field(client, saved):
     assert response.status_code == 422
     assert response.json()["errors"][0]["path"] == ["machines", 0, "ssh", "known_hosts"]
     assert response.json()["errors"][0]["code"] == "file_missing"
+
+
+def test_validation_ignores_hosts_only_for_unverified_connections(client, saved):
+    document = saved["document"]
+    document["machines"][0]["ssh"].update(verify_host_key=False, known_hosts="missing-hosts")
+    saved = client.post(
+        "/api/config/save", json={**reference(saved), "text": yaml.safe_dump(document)}
+    ).json()
+    assert client.post("/api/config/validate", json=reference(saved)).status_code == 200
+    document["machines"][0]["systems"][1]["ssh"] = {"verify_host_key": True}
+    saved = client.post(
+        "/api/config/save", json={**reference(saved), "text": yaml.safe_dump(document)}
+    ).json()
+    result = client.post("/api/config/validate", json=reference(saved))
+    assert result.status_code == 422
+    assert result.json()["errors"][0]["path"] == ["machines", 0, "systems", 1, "ssh", "known_hosts"]
+    document["machines"][0]["systems"][1]["ssh"] = {}
+    document["machines"][0]["ssh"]["client_keys"] = ["missing-private-key"]
+    saved = client.post(
+        "/api/config/save", json={**reference(saved), "text": yaml.safe_dump(document)}
+    ).json()
+    result = client.post("/api/config/validate", json=reference(saved))
+    assert result.status_code == 422
+    assert result.json()["errors"][0]["path"] == ["machines", 0, "ssh", "client_keys", 0]
+
+
+def test_draft_probe_ignores_absent_hosts_and_reports_actual_mode(client, tmp_path, monkeypatch):
+    from autobench.errors import AuthenticationFailed
+
+    class Client:
+        def __init__(self, ssh, policy):
+            assert ssh.verify_host_key is False
+
+        async def probe(self, requirements):
+            return {
+                "efi": {"current": "0001"},
+                "python": [3, 11],
+                "systemd_available": True,
+                "systemd_version": 250,
+                "disk_free": 10**10,
+                "commands": {name: "/bin/" + name for name in requirements},
+            }
+
+    monkeypatch.setattr("autobench.services.SSHClient", Client)
+    body = {
+        "ssh": {
+            "host": "localhost",
+            "username": "bench",
+            "password": "no-echo",
+            "verify_host_key": False,
+            "known_hosts": "absent-hosts",
+        }
+    }
+    response = client.post("/api/connections/probe", json=body)
+    result = wait_operation(client, response.json())
+    assert result["checks"][0]["message"] == "连接成功，已忽略主机密钥校验"
+    assert result["checks"][0]["status"] == "passed"
+    assert "no-echo" not in client.get("/api/operations").text
+    body["ssh"]["client_keys"] = ["absent-key"]
+    result = wait_operation(client, client.post("/api/connections/probe", json=body).json())
+    assert result["checks"][0]["code"] == "key_missing"
+
+    class BadPassword(Client):
+        async def probe(self, requirements):
+            raise AuthenticationFailed("wrong password")
+
+    monkeypatch.setattr("autobench.services.SSHClient", BadPassword)
+    body["ssh"]["client_keys"] = []
+    result = wait_operation(client, client.post("/api/connections/probe", json=body).json())
+    assert result["checks"][0]["code"] == "authentication"

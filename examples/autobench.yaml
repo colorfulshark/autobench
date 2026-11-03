@@ -14,6 +14,8 @@ machines:
       host: 192.0.2.10
       username: bench
       known_hosts: ~/.ssh/known_hosts
+      # Default: true. Set false to skip server host-key checks across shared-IP OSes.
+      # verify_host_key: false
       client_keys: [~/.ssh/id_ed25519]
       agent: true
       # For password login, set client_keys: [], agent: false, and:
@@ -28,19 +30,18 @@ machines:
     systems:
       - id: ubuntu
         boot_entry: "0001"
-        machine_id: "11111111111111111111111111111111"
         env:
           PATH: /usr/local/bin:/usr/bin:/bin
           MALLOC_ARENA_MAX: "2"
       - id: debian
         boot_entry: "0002"
-        machine_id: "22222222222222222222222222222222"
         # Override endpoint/authentication if this OS uses different settings:
         # ssh:
         #   username: another-user
         #   password: "your-debian-password"  # Use null to clear the inherited password.
         #   client_keys: []
         #   agent: false
+        #   verify_host_key: true  # Override the machine setting; omit to inherit.
         #   proxy: null  # Disable inherited proxy, or supply a complete replacement object.
         env:
           PATH: /usr/local/bin:/usr/bin:/bin

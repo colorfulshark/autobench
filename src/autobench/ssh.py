@@ -20,7 +20,7 @@ from autobench.storage import private_dir
 
 
 class SSHClient:
-    """Authenticated, verified SSH RPCs independent of a benchmark configuration."""
+    """SSH RPCs using the configured authentication and host-key policy."""
 
     def __init__(self, ssh: SSHConfig, policy: Policy, label: str = "connection"):
         self.policy = policy
@@ -30,14 +30,14 @@ class SSHClient:
 
     @asynccontextmanager
     async def connection(self):
-        if not self.ssh.known_hosts.is_file():
+        if self.ssh.verify_host_key and not self.ssh.known_hosts.is_file():
             raise AuthenticationFailed(f"known_hosts file does not exist: {self.ssh.known_hosts}")
         kwargs = {
             "host": self.ssh.host,
             "port": self.ssh.port,
             "username": self.ssh.username,
             "password": self.ssh.password,
-            "known_hosts": str(self.ssh.known_hosts),
+            "known_hosts": str(self.ssh.known_hosts) if self.ssh.verify_host_key else None,
             "config": None,
             "client_keys": [str(p) for p in self.ssh.client_keys],
             "agent_path": () if self.ssh.agent else None,
@@ -46,7 +46,7 @@ class SSHClient:
             "keepalive_interval": 10,
             "keepalive_count_max": 3,
         }
-        if self.ssh.host_key_alias:
+        if self.ssh.verify_host_key and self.ssh.host_key_alias:
             kwargs["host_key_alias"] = self.ssh.host_key_alias
         sock = None
         stage = "SSH connection"
@@ -56,13 +56,14 @@ class SSHClient:
                     stage = "SOCKS5 proxy connection"
                     proxy = self.ssh.proxy
                     # The socket peer is the proxy, never a trusted identity for the target.
-                    kwargs["known_hosts"] = asyncssh.read_known_hosts(
-                        str(self.ssh.known_hosts)
-                    ).match(
-                        self.ssh.host_key_alias or self.ssh.host,
-                        "",
-                        self.ssh.port if self.ssh.port != 22 else None,
-                    )
+                    if self.ssh.verify_host_key:
+                        kwargs["known_hosts"] = asyncssh.read_known_hosts(
+                            str(self.ssh.known_hosts)
+                        ).match(
+                            self.ssh.host_key_alias or self.ssh.host,
+                            "",
+                            self.ssh.port if self.ssh.port != 22 else None,
+                        )
                     sock = await Proxy(
                         proxy_type=ProxyType.SOCKS5,
                         host=proxy.host,

@@ -163,7 +163,7 @@ def test_wizard_password_probe_files_save_run_and_cancel(browser_page, ui_server
         not saved["machines"][0]["ssh"]["agent"]
         and saved["machines"][0]["ssh"]["client_keys"] == []
     )
-    assert saved["machines"][0]["systems"][0]["machine_id"] == "1" * 32
+    assert saved["machines"][0]["systems"][0]["boot_entry"] == "0001"
     page.locator("#primary-action").click()
     page.get_by_role("button", name="取消运行", exact=True).wait_for()
     page.reload()
@@ -203,6 +203,24 @@ def test_auth_switches_are_exclusive_and_show_only_selected_controls(browser_pag
         result["machines"][0]["ssh"]["client_keys"] == []
         and result["machines"][0]["ssh"]["agent"] is False
     )
+
+
+def test_probe_selects_existing_system_by_boot_entry(browser_page, ui_server):
+    page, server = browser_page, ui_server
+    ready(page, server)
+    load_existing(page, server)
+    page.get_by_role("button", name="连接并识别当前系统", exact=True).click()
+    page.get_by_role("button", name="添加当前系统", exact=True).click()
+    page.locator("#input-machines-0-systems-0-boot_entry").wait_for()
+    page.locator("#input-machines-0-systems-0-id").fill("renamed")
+    page.get_by_role("button", name="连接并识别当前系统", exact=True).click()
+    page.get_by_role("button", name="更新此系统启动项", exact=True).click()
+    page.locator("#mode-yaml").click()
+    page.locator("#yaml-panel").wait_for()
+    systems = yaml.safe_load(page.locator("#yaml-editor").input_value())["machines"][0]["systems"]
+    assert len(systems) == 2
+    assert systems[0]["id"] == "renamed"
+    assert systems[0]["boot_entry"] == "0001"
 
 
 def test_existing_advanced_values_and_comments_survive_viewing_and_editing(browser_page, ui_server):
@@ -402,3 +420,77 @@ def test_pending_cancel_has_explicit_completion_action(browser_page, ui_server):
         "() => document.querySelector('#run-detail').textContent.includes('运行已取消')"
     )
     assert not server.world.starts
+
+
+def test_host_key_switch_preserves_values_and_system_override(browser_page, ui_server):
+    page, server = browser_page, ui_server
+    raw = server.config.model_dump(mode="json")
+    raw["machines"][0]["ssh"]["host_key_alias"] = "saved-alias"
+    server.existing.write_text(yaml.safe_dump(raw))
+    ready(page, server)
+    load_existing(page, server)
+    page.get_by_text("高级连接设置", exact=True).click()
+    original = page.locator("#input-machines-0-ssh-known_hosts").input_value()
+    page.get_by_label("忽略主机密钥检查", exact=True).check()
+    assert page.locator("#input-machines-0-ssh-known_hosts").count() == 0
+    assert page.locator("#input-machines-0-ssh-host_key_alias").count() == 0
+    assert page.get_by_text("已忽略主机密钥检查", exact=True).count() == 1
+    page.get_by_label("忽略主机密钥检查", exact=True).uncheck()
+    assert page.locator("#input-machines-0-ssh-known_hosts").input_value() == original
+    assert page.locator("#input-machines-0-ssh-host_key_alias").input_value() == "saved-alias"
+    page.get_by_label("忽略主机密钥检查", exact=True).check()
+    page.locator(".system-nav-item").filter(has_text="os1").click()
+    page.get_by_text("系统高级设置", exact=True).click()
+    page.get_by_label("主机密钥检查", exact=True).select_option("verify")
+    assert page.locator("#input-machines-0-systems-0-ssh-known_hosts").input_value() == original
+    assert page.get_by_text("已忽略主机密钥检查", exact=True).count() == 0
+    page.locator("#mode-yaml").click()
+    page.locator("#yaml-panel").wait_for()
+    data = yaml.safe_load(page.locator("#yaml-editor").input_value())
+    assert data["machines"][0]["ssh"]["verify_host_key"] is False
+    assert data["machines"][0]["systems"][0]["ssh"]["verify_host_key"] is True
+    page.locator("#mode-form").click()
+    page.locator("#config-body").wait_for()
+    page.get_by_label("主机密钥检查", exact=True).select_option("inherit")
+    assert page.locator("#input-machines-0-systems-0-ssh-known_hosts").count() == 0
+    page.locator("#mode-yaml").click()
+    page.locator("#yaml-panel").wait_for()
+    data = yaml.safe_load(page.locator("#yaml-editor").input_value())
+    assert "verify_host_key" not in data["machines"][0]["systems"][0]["ssh"]
+    assert data["machines"][0]["ssh"]["known_hosts"] == original
+    assert data["machines"][0]["ssh"]["host_key_alias"] == "saved-alias"
+
+
+def test_ignore_host_key_allows_probe_and_validation_without_hosts(browser_page, ui_server):
+    page, server = browser_page, ui_server
+    ready(page, server)
+    page.locator("#input-machines-0-ssh-host").fill("localhost")
+    page.locator("#input-machines-0-ssh-username").fill("bench")
+    page.locator("#input-machines-0-ssh-password").fill("test-secret")
+    page.get_by_text("高级连接设置", exact=True).click()
+    page.locator("#input-machines-0-ssh-known_hosts").fill(str(server.root / "absent-hosts"))
+    page.get_by_label("忽略主机密钥检查", exact=True).check()
+    page.get_by_role("button", name="连接并识别当前系统", exact=True).click()
+    page.get_by_text("连接成功，已忽略主机密钥校验", exact=True).wait_for()
+    assert not (server.root / "autobench.yaml").exists()
+    data = server.config.model_dump(mode="json")
+    data["machines"][0]["ssh"].update(verify_host_key=False, known_hosts="absent-hosts")
+    page.locator("#mode-yaml").click()
+    page.locator("#yaml-panel").wait_for()
+    page.locator("#yaml-editor").fill(yaml.safe_dump(data))
+    page.locator("#primary-action").click()
+    page.wait_for_function(
+        "() => document.querySelector('#primary-action').textContent.includes('开始测试')"
+    )
+    assert (
+        yaml.safe_load((server.root / "autobench.yaml").read_text())["machines"][0]["ssh"][
+            "verify_host_key"
+        ]
+        is False
+    )
+
+    page.locator('[data-page="inspect"]').click()
+    page.locator("#doctor").click()
+    page.locator("#inspection-result").get_by_text(
+        "连接成功，已忽略主机密钥校验", exact=True
+    ).wait_for()

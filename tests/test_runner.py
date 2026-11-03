@@ -46,6 +46,20 @@ def test_remote_runner_is_python38_compatible():
     ast.parse(Path(rr.__file__).read_text(), feature_version=(3, 8))
 
 
+def test_probe_reads_only_boot_state_from_files(monkeypatch):
+    def read_boot(path):
+        assert path == Path("/proc/sys/kernel/random/boot_id")
+        return "boot-1\n"
+
+    monkeypatch.setattr(Path, "read_text", read_boot)
+    monkeypatch.setattr(rr, "efi", lambda: {"current": "0001", "entries": {}})
+    monkeypatch.setattr(rr, "command", lambda *args, **kwargs: "systemd 250\n")
+    probe = rr.probe({})
+    assert probe["boot_id"] == "boot-1"
+    assert probe["efi"]["current"] == "0001"
+    assert probe["systemd_available"] is True
+
+
 def test_worker_actual_environment_and_artifact_hashes(config, tmp_path, monkeypatch):
     config.machines[0].systems[0].env.update({"EMPTY": "", "LITERAL": "$(echo hi) $PATH `id`\n雪"})
     directory, _, _ = manifest_for(config, tmp_path)

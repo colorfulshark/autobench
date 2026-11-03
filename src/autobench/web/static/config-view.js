@@ -310,6 +310,51 @@ function proxyEditor(path, inherited = false) {
 }
 function trustFields(path, effective, inherited = false) {
   const e = node("div");
+  if (inherited) {
+    const raw = at(state.document, path) || {};
+    e.append(
+      select(
+        "主机密钥检查",
+        [
+          ["inherit", "沿用机器设置"],
+          ["verify", "启用校验"],
+          ["ignore", "忽略校验"],
+        ],
+        own(raw, "verify_host_key")
+          ? raw.verify_host_key
+            ? "verify"
+            : "ignore"
+          : "inherit",
+        (mode) =>
+          change(
+            [...path, "verify_host_key"],
+            mode === "inherit" ? undefined : mode === "verify",
+            true,
+          ),
+        "trust-" + path.join("-"),
+      ),
+    );
+  } else {
+    e.append(
+      toggle(
+        "忽略主机密钥检查",
+        effective.verify_host_key === false,
+        (ignore) => change([...path, "verify_host_key"], !ignore, true),
+      ),
+    );
+  }
+  e.firstElementChild.dataset.fieldPath = JSON.stringify([
+    ...path,
+    "verify_host_key",
+  ]);
+  if (effective.verify_host_key === false) {
+    e.append(
+      hint(
+        "已忽略 SSH 服务器主机密钥检查；密码、私钥和 SSH Agent 认证照常进行。原有主机密钥文件和别名设置已保留。",
+      ),
+    );
+    return e;
+  }
   e.append(
     row(
       field("主机密钥文件", [...path, "known_hosts"], {
@@ -401,13 +446,14 @@ function useCurrent(machine, probe, system = null) {
   if (system) {
     const i = list.indexOf(system);
     if (i < 0) return;
-    change(["machines", index, "systems", i, "machine_id"], probe.machine_id);
     change(["machines", index, "systems", i, "boot_entry"], probe.efi.current);
     state.system = i;
     emit(true);
     return;
   }
-  const existing = list.findIndex((s) => s.machine_id === probe.machine_id);
+  const existing = list.findIndex(
+    (s) => s.boot_entry?.toUpperCase() === probe.efi.current,
+  );
   if (existing >= 0) {
     state.system = existing;
     state.machine = index;
@@ -415,12 +461,9 @@ function useCurrent(machine, probe, system = null) {
     emit(true);
     return;
   }
-  if (list.some((s) => s.boot_entry === probe.efi.current))
-    throw new Error("此启动项已被另一系统使用，请先核对现有配置。");
   const added = {
     ...newSystem(list),
     boot_entry: probe.efi.current,
-    machine_id: probe.machine_id,
   };
   change(["machines", index, "systems"], [...list, added]);
   state.machine = index;
@@ -442,9 +485,7 @@ function systemEditor(machine, mi, system, si) {
     ssh = [...path, "ssh"];
   const effective = mergedSSH(machine, system),
     raw = system.ssh || {};
-  panel.append(
-    heading("系统详情", "每个系统需要独立的 UEFI 启动项和 Machine ID。"),
-  );
+  panel.append(heading("系统详情", "每个系统需要独立的 UEFI 启动项。"));
   const record = currentRecord(machine);
   const entries = fresh(machine) ? record?.result?.probe?.efi?.entries : null;
   const fields = row(
@@ -476,13 +517,6 @@ function systemEditor(machine, mi, system, si) {
         "system-efi",
       ),
     );
-  panel.append(
-    field("Machine ID", [...path, "machine_id"], {
-      placeholder: "32 位十六进制字符串",
-      required: true,
-      help: "可在该系统已启动时识别，或手动填写。不会推测未启动系统的身份。",
-    }),
-  );
   panel.append(
     node(
       "div",
@@ -575,11 +609,10 @@ function systemsBoard(machine, index) {
         system.boot_entry ? "Boot" + system.boot_entry : "待填写启动项",
       ),
       pill(
-        /^[a-f\d]{32}$/i.test(system.machine_id || "") &&
-          /^[a-f\d]{4}$/i.test(system.boot_entry || "")
+        /^[a-f\d]{4}$/i.test(system.boot_entry || "")
           ? "已配置"
           : "待完善",
-        /^[a-f\d]{32}$/i.test(system.machine_id || "") ? "success" : "warning",
+        /^[a-f\d]{4}$/i.test(system.boot_entry || "") ? "success" : "warning",
       ),
     );
     const up = button(
@@ -1186,11 +1219,6 @@ export function nextStep() {
             path: ["machines", i, "systems", j, "boot_entry"],
             message: "启动项应为四位十六进制字符串。",
           });
-        if (!/^[a-f\d]{32}$/i.test(s.machine_id || ""))
-          problems.push({
-            path: ["machines", i, "systems", j, "machine_id"],
-            message: "请识别或填写 32 位 Machine ID。",
-          });
       });
     });
   if (state.step === 2) {
@@ -1226,9 +1254,9 @@ const fieldNames = {
   password: "密码",
   client_keys: "私钥",
   known_hosts: "主机校验",
+  verify_host_key: "主机密钥检查",
   id: "标识",
   boot_entry: "启动项",
-  machine_id: "系统身份",
   source_archive: "源码包",
   repetitions: "重复次数",
 };

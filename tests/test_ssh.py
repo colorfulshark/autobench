@@ -210,7 +210,7 @@ async def test_password_authentication(ssh_server):
     client, fault = ssh_server
     client.ssh.client_keys = []
     client.ssh.password = "correct-password"
-    assert (await client.probe())["machine_id"]
+    assert (await client.probe())["boot_id"]
     assert fault["passwords"] == ["correct-password"]
 
 
@@ -333,7 +333,7 @@ async def proxied_client(ssh_server, socks_server):
 
 async def test_proxy_resolves_target_and_checks_target_key(proxied_client, socks_server):
     client, _ = proxied_client
-    assert (await client.probe())["machine_id"]
+    assert (await client.probe())["boot_id"]
     assert socks_server.requests == [(client.ssh.host, client.ssh.port)]
     replacement = asyncssh.generate_private_key("ssh-ed25519")
     client.ssh.known_hosts.write_text(
@@ -349,7 +349,7 @@ async def test_proxy_checks_host_key_alias(proxied_client):
     client.ssh.known_hosts.write_text(
         client.ssh.known_hosts.read_text().replace(client.ssh.host, "bench-alias")
     )
-    assert (await client.probe())["machine_id"]
+    assert (await client.probe())["boot_id"]
 
 
 async def test_proxy_address_is_not_target_identity(proxied_client):
@@ -404,7 +404,7 @@ async def test_proxy_password_can_be_updated(proxied_client, socks_server):
     with pytest.raises(ConnectionLost):
         await client.probe()
     client.ssh.proxy.password = "proxy-secret"
-    assert (await client.probe())["machine_id"]
+    assert (await client.probe())["boot_id"]
     assert socks_server.passwords[-1] == (b"proxy-user", b"proxy-secret")
 
 
@@ -487,3 +487,47 @@ async def test_proxy_negotiation_failure_closes_socket(proxied_client, socks_ser
         await client.probe()
     await asyncio.wait_for(socks_server.closed.wait(), 2)
     assert not socks_server.writers
+
+
+@pytest.mark.parametrize("known_state", ["missing", "wrong", "invalid"])
+async def test_ignored_host_key_allows_rpc_and_sftp(ssh_server, tmp_path, monkeypatch, known_state):
+    client, fault = ssh_server
+    client.ssh.verify_host_key = False
+    client.ssh.host_key_alias = "unused-host-alias"
+    if known_state == "missing":
+        client.ssh.known_hosts.unlink()
+    elif known_state == "wrong":
+        key = asyncssh.generate_private_key("ssh-ed25519")
+        client.ssh.known_hosts.write_text(
+            f"[127.0.0.1]:{client.ssh.port} " + key.export_public_key().decode()
+        )
+    else:
+        client.ssh.known_hosts.write_text("not a valid known_hosts file")
+
+    def forbidden_read(*args, **kwargs):
+        raise AssertionError("known_hosts must not be read when verification is disabled")
+
+    monkeypatch.setattr(asyncssh, "read_known_hosts", forbidden_read)
+    assert (await client.probe())["boot_id"]
+    source = tmp_path / "payload.txt"
+    source.write_text("verified transport without host-key verification")
+    destination = tmp_path / "uploaded" / "payload.txt"
+    await client.upload(source, str(destination))
+    assert destination.read_text() == source.read_text()
+    assert fault["public_keys"] > 0
+
+
+async def test_ignored_host_key_still_rejects_bad_password_and_key(ssh_server, tmp_path):
+    client, _ = ssh_server
+    client.ssh.verify_host_key = False
+    client.ssh.known_hosts = tmp_path / "no-hosts"
+    client.ssh.client_keys = []
+    client.ssh.password = "wrong-password"
+    with pytest.raises(AuthenticationFailed):
+        await client.probe()
+    unauthorized = tmp_path / "unauthorized-key"
+    unauthorized.write_bytes(asyncssh.generate_private_key("ssh-ed25519").export_private_key())
+    client.ssh.password = None
+    client.ssh.client_keys = [unauthorized]
+    with pytest.raises(AuthenticationFailed):
+        await client.probe()

@@ -111,10 +111,7 @@ class Scheduler:
 
     @staticmethod
     def is_target(probe: dict, system: System) -> bool:
-        return (
-            probe.get("machine_id") == system.machine_id
-            and probe.get("efi", {}).get("current") == system.boot_entry
-        )
+        return probe.get("efi", {}).get("current") == system.boot_entry
 
     async def ensure_system(self, machine: Machine, system: System, job: dict):
         current, probe = await self.retry(lambda: self.find_current(machine, system))
@@ -154,7 +151,7 @@ class Scheduler:
         requirements = requirements_for(self.config)
         target_probe = await self.retry(lambda: target.probe(requirements))
         if not self.is_target(target_probe, system) or target_probe["boot_id"] != probe["boot_id"]:
-            raise RemoteError("system identity changed during preparation")
+            raise RemoteError("system boot changed during preparation")
         check_probe(target_probe, requirements=requirements)
         details = self.store.job(job["id"])["details"]
         ready_at = details.get("ready_at")
@@ -181,9 +178,7 @@ class Scheduler:
                 _, probe = await self.find_current(machine, system)
                 if probe["boot_id"] != switch["previous_boot_id"]:
                     if not self.is_target(probe, system):
-                        raise RemoteError(
-                            "boot ID changed but target system identity did not match"
-                        )
+                        raise RemoteError("boot ID changed but target UEFI entry did not match")
                     return probe
             except (ConnectionLost, AuthenticationFailed):
                 pass
@@ -247,7 +242,6 @@ class Scheduler:
                 "system": system.id,
                 "repetition": job["repetition"],
                 "boot_id": probe["boot_id"],
-                "machine_id": probe["machine_id"],
                 "efi": probe["efi"],
                 "source_path": str(
                     PurePosixPath(root) / "sources" / (benchmark.source_sha256 + ".tar")
@@ -404,7 +398,7 @@ async def inspect_machine(config: Config, machine: Machine) -> dict:
                 "id": system.id,
                 "current": current,
                 "dependencies_checked": current,
-                "identity_checked": current,
+                "boot_entry_checked": current,
                 "configured_environment": {
                     b.id: merged_env({}, system.env, b.env) for b in config.benchmarks
                 },
@@ -412,6 +406,7 @@ async def inspect_machine(config: Config, machine: Machine) -> dict:
         )
     return {
         "machine": machine.id,
+        "verify_host_key": machine.ssh.verify_host_key,
         "probe": probe,
         "systems": systems,
         "errors": errors,

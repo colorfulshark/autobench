@@ -5,7 +5,7 @@ const records = new WeakMap();
 const panelTargets = new WeakMap();
 const labels = {
   connection: "SSH 连接",
-  identity: "系统身份",
+  system: "系统匹配",
   uefi: "UEFI 启动项",
   runtime: "运行环境",
   dependencies: "基础命令",
@@ -125,6 +125,8 @@ export function probePanel(machine, system = null) {
   const ssh = mergedSSH(machine, system);
   b.disabled = (!!r?.running && valid) || !ssh.host || !ssh.username;
   panel.append(b, hint("只读取当前系统，不提交测试，也不切换操作系统。"));
+  if (ssh.verify_host_key === false)
+    panel.append(pill("已忽略主机密钥检查", "warning"));
   if (!r) return panel;
   if (!valid) {
     panel.append(
@@ -153,15 +155,15 @@ export function probePanel(machine, system = null) {
       summary.append(
         node("strong", "", p.hostname || "当前系统"),
         hint(
-          `当前启动项 ${p.efi?.current ? "Boot" + p.efi.current : "未识别"} · ${p.machine_id || "未读到 Machine ID"}`,
+          `当前启动项 ${p.efi?.current ? "Boot" + p.efi.current : "未识别"}`,
         ),
       );
       const usable =
         r.result.checks.some(
-          (item) => item.id === "identity" && item.status === "passed",
+          (item) => item.id === "uefi" && item.status === "passed",
         ) && !!p.efi?.current;
       const use = button(
-        system ? "更新此系统身份" : "添加当前系统",
+        system ? "更新此系统启动项" : "添加当前系统",
         () => {
           if (!fresh(machine, system))
             throw new Error("连接已改变，请重新识别。");
@@ -227,15 +229,17 @@ export function renderInspection(results) {
         id: "connection",
         status: connection ? "passed" : "failed",
         message: connection
-          ? "连接成功"
+          ? item.verify_host_key === false
+            ? "连接成功，已忽略主机密钥校验"
+            : "连接成功"
           : (item.errors || []).join("；") || "无法连接",
       },
       {
-        id: "identity",
+        id: "system",
         status: !p ? "unchecked" : current ? "passed" : "failed",
         message: current
           ? `当前系统：${current.id}`
-          : "当前身份与配置不匹配或尚未读取",
+          : "当前启动项与配置不匹配或尚未读取",
       },
       {
         id: "uefi",
@@ -258,7 +262,7 @@ export function renderInspection(results) {
         node(
           "p",
           "system-check-summary",
-          `${system.id} · ${system.current ? "当前系统，已核对身份与依赖" : "未启动，身份与依赖尚未检查"}`,
+          `${system.id} · ${system.current ? "当前系统，已核对启动项与依赖" : "未启动，启动项与依赖尚未检查"}`,
         ),
       );
     card.append(jsonDetails("技术详情与环境覆盖", item));

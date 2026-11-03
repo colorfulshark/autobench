@@ -104,7 +104,6 @@ def probe(payload):
         "uid": os.getuid(),
         "gid": os.getgid(),
         "home": str(Path.home()),
-        "machine_id": Path("/etc/machine-id").read_text().strip(),
         "boot_id": boot_id(),
         "hostname": platform.node(),
         "commands": {name: shutil.which(name) for name in payload.get("requirements", [])},
@@ -408,7 +407,6 @@ def collect_system():
         "/proc/cmdline",
         "/proc/loadavg",
         "/proc/mounts",
-        "/etc/machine-id",
         "/proc/self/cgroup",
     ):
         try:

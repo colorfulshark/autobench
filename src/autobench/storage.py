@@ -192,8 +192,8 @@ class Store:
             )
         return status
 
-    def machine_lock(self, machine_id: str) -> FileLock:
-        key = hashlib.sha256(machine_id.encode()).hexdigest()
+    def machine_lock(self, machine_name: str) -> FileLock:
+        key = hashlib.sha256(machine_name.encode()).hexdigest()
         return FileLock(self.directory / "locks" / f"machine-{key}.lock")
 
     def run_lock(self, run_id: str) -> FileLock:

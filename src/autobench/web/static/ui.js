@@ -395,7 +395,5 @@ export function friendlyError(error) {
     return "UB_RESULTDIR 由工具管理，请移除此环境变量";
   if (error.message?.includes("boot_entry"))
     return "启动项需要是四位十六进制字符串";
-  if (error.message?.includes("machine_id"))
-    return "Machine ID 需要是 32 位十六进制字符串";
   return error.message;
 }

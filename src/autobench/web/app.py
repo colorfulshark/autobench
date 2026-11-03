@@ -55,7 +55,6 @@ machines:
     systems:
       - id: linux
         boot_entry: "0001"
-        machine_id: "11111111111111111111111111111111"
 benchmarks:
   - id: unixbench
     type: unixbench

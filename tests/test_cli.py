@@ -117,3 +117,17 @@ def test_web_rejects_invalid_bind_address_before_launch(host, monkeypatch):
     result = runner.invoke(app, ["web", "--host", host])
     assert result.exit_code == 1 and "Error:" in result.output
     assert not calls
+
+
+@pytest.mark.parametrize("verify_host_key", [True, False])
+def test_validate_requires_hosts_only_when_verification_enabled(config, tmp_path, verify_host_key):
+    data = config.model_dump(mode="json")
+    data["machines"][0]["ssh"].update(
+        known_hosts=str(tmp_path / "absent-hosts"), verify_host_key=verify_host_key
+    )
+    path = tmp_path / "verify.yaml"
+    path.write_text(json.dumps(data))
+    result = runner.invoke(app, ["validate", str(path)])
+    assert result.exit_code == (1 if verify_host_key else 0), result.output
+    if not verify_host_key:
+        assert "SHA256" in result.output

@@ -35,6 +35,7 @@ export const sshDefaults = {
   password: null,
   client_keys: [],
   agent: true,
+  verify_host_key: true,
   known_hosts: "~/.ssh/known_hosts",
   host_key_alias: null,
   proxy: null,
@@ -62,7 +63,7 @@ export const benchmarkDefaults = {
 };
 export const authKeys = ["password", "client_keys", "agent"];
 export const connectionKeys = ["host", "port", "username"];
-export const trustKeys = ["known_hosts", "host_key_alias"];
+export const trustKeys = ["verify_host_key", "known_hosts", "host_key_alias"];
 export function mergedSSH(machine, system = null) {
   return { ...sshDefaults, ...(machine?.ssh || {}), ...(system?.ssh || {}) };
 }
@@ -114,7 +115,6 @@ export function newMachine(items = []) {
 export const newSystem = (items = []) => ({
   id: nextID(items, "linux"),
   boot_entry: "",
-  machine_id: "",
 });
 export const newBenchmark = (items = []) => ({
   id: nextID(items, "unixbench"),
