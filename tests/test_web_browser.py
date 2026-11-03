@@ -120,6 +120,15 @@ def load_existing(page, server):
     page.wait_for_function("() => document.querySelector('#save-state').textContent === '已保存'")
 
 
+def open_step(page, name):
+    page.locator("#wizard-steps").get_by_role("button", name=name).click()
+
+
+def open_system(page, name):
+    open_step(page, "选择系统")
+    page.locator(".systems-board").get_by_role("button", name=name, exact=True).click()
+
+
 def fill_connection(page, server):
     page.locator("#input-machines-0-ssh-host").fill("localhost")
     page.locator("#input-machines-0-ssh-username").fill("bench")
@@ -326,14 +335,13 @@ def test_wizard_password_connection_test_manual_system_files_save_run_and_cancel
     page.get_by_role("button", name="▤ source.tar.gz 文件").click()
     page.locator("#file-confirm").click()
     page.locator("#primary-action").click()
-    # Configure a private test state directory through the same professional controls.
-    page.locator("#workbench-switch").click()
-    page.get_by_role("button", name="运行设置", exact=True).click()
+    # The fourth step contains the full scheduling controls.
+    assert page.locator("#wizard-steps [aria-current=step]").text_content() == "4运行设置"
     page.get_by_text("高级调度设置", exact=True).click()
     page.locator("#input-policy-state_dir").fill(str(server.config.policy.state_dir))
     page.locator("#input-policy-poll_interval").fill("0.02")
     page.locator("#input-policy-settle_seconds").fill("0")
-    page.locator("#workbench-switch").click()
+    page.locator("#primary-action").click()
     page.locator("#primary-action").click()
     page.wait_for_function(
         "() => document.querySelector('#primary-action').textContent.includes('开始测试')"
@@ -421,6 +429,7 @@ def test_existing_advanced_values_and_comments_survive_viewing_and_editing(brows
     expected = json.loads(json.dumps(raw))
     expected["machines"][0]["ssh"]["host"] = "edited.local"
     assert yaml.safe_load(server.existing.read_text()) == expected
+    open_step(page, "检查运行")
     page.locator("#primary-action").click()
     page.locator(".error-link").filter(has_text="future_data").click()
     page.locator("#yaml-panel").wait_for()
@@ -607,7 +616,7 @@ def test_unixbench_tests_selection_save_reload_and_yaml_roundtrip(browser_page, 
     server.existing.write_text(yaml.safe_dump(raw))
     ready(page, server)
     load_existing(page, server)
-    page.get_by_role("button", name="性能测试", exact=True).click()
+    open_step(page, "设置测试")
     selected = page.get_by_role("list", name="已选测试项")
     assert selected.text_content() == "custom-test×"
     page.get_by_role("checkbox", name="execl · 程序替换吞吐量", exact=True).check()
@@ -632,7 +641,7 @@ def test_unixbench_tests_selection_save_reload_and_yaml_roundtrip(browser_page, 
     ]
     page.reload()
     page.locator("#input-machines-0-ssh-host").wait_for()
-    page.get_by_role("button", name="性能测试", exact=True).click()
+    open_step(page, "设置测试")
     assert page.get_by_role("checkbox", name="shell · shell1、shell8、shell16").is_checked()
     assert page.get_by_role("list", name="已选测试项").text_content() == "execl×shell×hanoi×"
     page.set_viewport_size({"width": 390, "height": 844})
@@ -655,7 +664,7 @@ def test_unixbench_tests_legacy_defaults_and_invalid_custom_name(browser_page, u
     server.existing.write_text(yaml.safe_dump(raw))
     ready(page, server)
     load_existing(page, server)
-    page.get_by_role("button", name="性能测试", exact=True).click()
+    open_step(page, "设置测试")
     assert page.locator(".unixbench-tests input:checked").count() == 0
     custom = page.get_by_label("其他测试名", exact=True)
     for invalid in ("", "-c", "execl shell"):
@@ -704,6 +713,7 @@ def test_mobile_and_validation_field_navigation(browser_page, ui_server):
     ready(page, server)
     load_existing(page, server)
     page.locator("#input-machines-0-ssh-port").fill("0")
+    open_step(page, "检查运行")
     page.locator("#primary-action").click()
     page.locator("#config-errors").wait_for()
     page.locator(".error-link").first.click()
@@ -746,8 +756,8 @@ def test_plan_preview_tracks_systems_rounds_and_yaml_changes(browser_page, ui_se
     assert "plan" not in result
     page.locator("#mode-form").click()
     plan.wait_for(state="visible")
-    page.locator("#workbench-switch").click()
-    assert plan.is_hidden()
+    open_step(page, "运行设置")
+    assert plan.is_visible()
     page.set_viewport_size({"width": 390, "height": 844})
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
@@ -790,7 +800,7 @@ def test_system_groups_reset_independently(browser_page, ui_server):
     server.existing.write_text(yaml.safe_dump(raw))
     ready(page, server)
     load_existing(page, server)
-    page.locator(".system-nav-item").filter(has_text="os1").click()
+    open_system(page, "os1")
     page.get_by_label("单独设置此系统的连接地址或用户名", exact=True).uncheck()
     page.get_by_text("系统高级设置", exact=True).click()
     page.get_by_label("连接代理", exact=True).select_option("inherit")
@@ -887,7 +897,7 @@ def test_host_key_switch_preserves_values_and_system_override(browser_page, ui_s
     assert page.locator("#input-machines-0-ssh-known_hosts").input_value() == original
     assert page.locator("#input-machines-0-ssh-host_key_alias").input_value() == "saved-alias"
     page.get_by_label("忽略主机密钥检查", exact=True).check()
-    page.locator(".system-nav-item").filter(has_text="os1").click()
+    open_system(page, "os1")
     page.get_by_text("系统高级设置", exact=True).click()
     page.get_by_label("主机密钥检查", exact=True).select_option("verify")
     assert page.locator("#input-machines-0-systems-0-ssh-known_hosts").input_value() == original
@@ -955,7 +965,7 @@ def test_boot_entry_identification_spinner_choices_and_selection(
     page.set_viewport_size({"width": width, "height": 1000})
     ready(page, server)
     load_existing(page, server)
-    page.locator(".system-nav").get_by_role("button", name="os1", exact=True).click()
+    open_system(page, "os1")
     assert page.get_by_role("button", name="连接测试", exact=True).count() == 0
     entry = page.locator("#input-machines-0-systems-0-boot_entry")
     pending = []
@@ -993,9 +1003,9 @@ def test_boot_entry_identification_spinner_choices_and_selection(
     ]
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     entry.select_option("0002")
-    page.locator(".system-nav").get_by_role("button", name="os2", exact=True).click()
+    open_system(page, "os2")
     assert page.locator(".boot-entry-controls input").count() == 1
-    page.locator(".system-nav").get_by_role("button", name="os1", exact=True).click()
+    open_system(page, "os1")
     assert entry.evaluate("e => e.tagName") == "SELECT" and entry.input_value() == "0002"
     page.locator("#mode-yaml").click()
     page.locator("#yaml-panel").wait_for()
@@ -1015,7 +1025,7 @@ def test_boot_entry_identification_failure_preserves_input_and_allows_retry(
     page.set_viewport_size({"width": 390, "height": 1000})
     ready(page, server)
     load_existing(page, server)
-    page.locator(".system-nav").get_by_role("button", name="os1", exact=True).click()
+    open_system(page, "os1")
     entry = page.locator("#input-machines-0-systems-0-boot_entry")
     entry.fill("00AB")
     message = "启动项读取失败：" + "x" * 180
@@ -1060,7 +1070,7 @@ def test_boot_entry_identification_uses_overrides_and_ignores_outdated_results(
     page, server = browser_page, ui_server
     ready(page, server)
     load_existing(page, server)
-    page.locator(".system-nav").get_by_role("button", name="os1", exact=True).click()
+    open_system(page, "os1")
     page.get_by_label("单独设置此系统的连接地址或用户名", exact=True).check()
     host = page.locator("#input-machines-0-systems-0-ssh-host")
     host.fill("old-host")
@@ -1102,3 +1112,183 @@ def test_boot_entry_identification_uses_overrides_and_ignores_outdated_results(
     host.fill("third-host")
     page.locator('.boot-entry-status[data-phase="stale"]').wait_for()
     assert entry.evaluate("e => e.tagName") == "INPUT" and entry.input_value() == "00AB"
+
+
+@pytest.mark.parametrize("width", [1440, 768, 390])
+def test_five_steps_preserve_existing_config_and_fit_viewport(browser_page, ui_server, width):
+    page, server = browser_page, ui_server
+    page.set_viewport_size({"width": width, "height": 1000})
+    original = server.existing.read_text()
+    ready(page, server)
+    load_existing(page, server)
+    steps = ["连接机器", "选择系统", "设置测试", "运行设置", "检查运行"]
+    assert page.locator("#workbench-switch").count() == 0
+    assert page.locator("#mode-form").text_content() == "引导配置"
+    assert page.locator(".wizard-step").count() == 5
+    for index, name in enumerate(steps):
+        open_step(page, name)
+        assert (
+            page.locator(".wizard-step[aria-current=step]").text_content() == str(index + 1) + name
+        )
+        assert page.locator("#config-plan").is_visible()
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+        assert page.locator("#prev-step").is_visible() == (index > 0)
+        assert page.locator("#primary-action").text_content().strip() == (
+            "下一步 →" if index < 4 else "保存并检查"
+        )
+        if name == "设置测试":
+            assert page.locator("#input-policy-output_dir").count() == 0
+        if name == "运行设置":
+            page.get_by_text("高级调度设置", exact=True).click()
+            assert page.locator("#input-policy-output_dir").is_visible()
+            assert page.locator("#input-version").is_visible()
+    page.locator("#secondary-action").click()
+    page.wait_for_function(
+        "() => !document.querySelector('#secondary-action').classList.contains('busy')"
+    )
+    assert server.existing.read_text() == original
+    page.reload()
+    page.locator("#input-machines-0-ssh-host").wait_for()
+    assert page.locator(".wizard-step[aria-current=step]").text_content() == "1连接机器"
+    assert page.locator(".wizard-step").count() == 5
+
+
+@pytest.mark.parametrize("step", ["连接机器", "选择系统"])
+def test_machine_management_in_guided_steps(browser_page, ui_server, step):
+    page, server = browser_page, ui_server
+    ready(page, server)
+    load_existing(page, server)
+    open_step(page, step)
+    assert page.get_by_role("button", name="上移机器", exact=True).is_disabled()
+    assert page.get_by_role("button", name="下移机器", exact=True).is_disabled()
+    page.get_by_role("button", name="＋ 添加机器", exact=True).click()
+    assert page.locator(".machine-tabs .chip-button.active").text_content() == "server02"
+    page.get_by_role("button", name="上移机器", exact=True).click()
+    assert page.locator(".machine-tabs .chip-button").all_text_contents() == [
+        "server02",
+        "server01",
+    ]
+    assert page.locator(".machine-tabs .chip-button.active").text_content() == "server02"
+    page.get_by_role("button", name="下移机器", exact=True).click()
+    assert page.locator(".machine-tabs .chip-button").all_text_contents() == [
+        "server01",
+        "server02",
+    ]
+    page.get_by_role("button", name="移除此机器", exact=True).click()
+    assert page.locator(".machine-tabs .chip-button.active").text_content() == "server01"
+    page.get_by_role("button", name="移除此机器", exact=True).click()
+    assert page.locator(".machine-tabs .chip-button").count() == 0
+    assert page.get_by_role("button", name="移除此机器", exact=True).count() == 0
+    page.get_by_role("button", name="＋ 添加机器", exact=True).click()
+    assert page.locator(".machine-tabs .chip-button.active").text_content() == "server01"
+    page.get_by_role("button", name="＋ 添加机器", exact=True).click()
+    page.locator("#mode-yaml").click()
+    page.locator("#yaml-panel").wait_for()
+    result = yaml.safe_load(page.locator("#yaml-editor").input_value())
+    assert [m["id"] for m in result["machines"]] == ["server01", "server02"]
+    assert all(m["systems"] == [] for m in result["machines"])
+
+
+def test_benchmark_management_preserves_selection_and_handles_empty_list(browser_page, ui_server):
+    page, server = browser_page, ui_server
+    ready(page, server)
+    open_step(page, "设置测试")
+    page.locator("#input-benchmarks-0-source_archive").fill("original.tar.gz")
+    assert page.get_by_role("button", name="上移测试", exact=True).is_disabled()
+    page.get_by_role("button", name="＋ 添加测试", exact=True).click()
+    page.locator("#input-benchmarks-1-source_archive").fill("second.tar.gz")
+    page.get_by_role("button", name="上移测试", exact=True).click()
+    assert page.locator("#input-benchmarks-0-source_archive").input_value() == "second.tar.gz"
+    page.get_by_role("button", name="下移测试", exact=True).click()
+    assert page.locator("#input-benchmarks-1-source_archive").input_value() == "second.tar.gz"
+    page.get_by_role("button", name="移除此测试", exact=True).click()
+    assert page.locator("#input-benchmarks-0-source_archive").input_value() == "original.tar.gz"
+    page.get_by_role("button", name="移除此测试", exact=True).click()
+    assert page.get_by_text("尚未添加测试", exact=True).is_visible()
+    page.locator("#primary-action").click()
+    assert page.get_by_text("请添加至少一项测试。", exact=True).is_visible()
+    page.get_by_role("button", name="＋ 添加测试", exact=True).click()
+    assert page.locator("#input-benchmarks-0-source_archive").input_value() == ""
+    assert page.locator(".machine-tabs .chip-button.active").text_content() == "unixbench01"
+
+
+@pytest.mark.parametrize("field,invalid", [("policy-poll_interval", "-1"), ("version", "2")])
+def test_run_settings_error_navigation_and_validation_invalidation(
+    browser_page, ui_server, field, invalid
+):
+    page, server = browser_page, ui_server
+    ready(page, server)
+    load_existing(page, server)
+    open_step(page, "检查运行")
+    page.locator("#primary-action").click()
+    page.wait_for_function(
+        "() => document.querySelector('#primary-action').textContent.includes('开始测试')"
+    )
+    open_step(page, "运行设置")
+    assert page.locator("#primary-action").text_content() == "下一步 →"
+    page.get_by_text("高级调度设置", exact=True).click()
+    control = page.locator("#input-" + field)
+    original = control.input_value()
+    control.fill(invalid)
+    assert page.locator("#validation-result").is_hidden()
+    page.locator("#primary-action").click()
+    assert page.locator("#primary-action").text_content() == "保存并检查"
+    page.locator("#primary-action").click()
+    page.locator("#config-errors").wait_for()
+    page.locator(".error-link").first.click()
+    assert page.locator(".wizard-step[aria-current=step]").text_content() == "4运行设置"
+    assert control.is_visible()
+    assert control.get_attribute("aria-invalid") == "true"
+    assert control.evaluate("e => e === document.activeElement")
+    control.fill(original)
+    page.locator("#primary-action").click()
+    page.locator("#primary-action").click()
+    page.wait_for_function(
+        "() => document.querySelector('#primary-action').textContent.includes('开始测试')"
+    )
+    assert not server.world.starts
+
+
+def test_imported_yaml_enters_guided_steps_without_changing_content(browser_page, ui_server):
+    page, server = browser_page, ui_server
+    ready(page, server)
+    raw = server.config.model_dump(mode="json")
+    raw["machines"][0]["systems"][0]["ssh"] = {"password": None, "client_keys": [], "proxy": None}
+    text = "# imported config\n" + yaml.safe_dump(raw)
+    page.locator("#file-menu summary").click()
+    page.locator("#import").set_input_files(
+        {"name": "import.yaml", "mimeType": "text/yaml", "buffer": text.encode()}
+    )
+    page.get_by_text("已导入 YAML 内容，请确认服务器上的保存位置。", exact=True).wait_for()
+    assert page.locator(".wizard-step[aria-current=step]").text_content() == "1连接机器"
+    open_step(page, "运行设置")
+    page.locator("#mode-yaml").click()
+    page.locator("#yaml-panel").wait_for()
+    assert page.locator("#yaml-editor").input_value() == text
+    page.locator("#mode-form").click()
+    assert page.locator(".wizard-step[aria-current=step]").text_content() == "4运行设置"
+    page.locator("#secondary-action").click()
+    page.wait_for_function("() => document.querySelector('#save-state').textContent === '已保存'")
+    assert (server.root / "autobench.yaml").read_text() == text
+
+
+def test_guided_system_order_delete_and_readd(browser_page, ui_server):
+    page, server = browser_page, ui_server
+    ready(page, server)
+    load_existing(page, server)
+    open_step(page, "选择系统")
+    page.get_by_role("button", name="下移系统 os1", exact=True).click()
+    assert page.locator(".system-item .object-title").all_text_contents() == ["os2", "os1"]
+    page.get_by_role("button", name="上移系统 os1", exact=True).click()
+    assert page.locator(".system-item .object-title").all_text_contents() == ["os1", "os2"]
+    for _ in range(2):
+        page.locator(".system-item").first.get_by_role("button", name="移除", exact=True).click()
+    assert page.get_by_role("heading", name="尚未添加系统", exact=True).is_visible()
+    page.get_by_role("button", name="＋ 手动添加系统", exact=True).click()
+    page.locator("#input-machines-0-systems-0-boot_entry").fill("00AB")
+    page.get_by_role("button", name="← 返回系统列表", exact=True).click()
+    assert page.locator(".system-item .object-title").all_text_contents() == ["linux01"]
+    page.locator("#mode-yaml").click()
+    page.locator("#yaml-panel").wait_for()
+    data = yaml.safe_load(page.locator("#yaml-editor").input_value())
+    assert data["machines"][0]["systems"] == [{"id": "linux01", "boot_entry": "00AB"}]

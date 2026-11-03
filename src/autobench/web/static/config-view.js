@@ -1,4 +1,13 @@
-import { state, change, dirty, emit, show, switchMode } from "./state.js";
+import {
+  state,
+  configSteps,
+  reviewStep,
+  change,
+  dirty,
+  emit,
+  show,
+  switchMode,
+} from "./state.js";
 import {
   at,
   own,
@@ -42,17 +51,15 @@ import { connectionTestPanel, updateConnectionTestPanels } from "./checks.js";
 import { unixbenchTestsEditor } from "./unixbench-tests.js";
 const modes = new WeakMap(),
   credentials = new WeakMap();
-const steps = ["连接机器", "选择系统", "设置测试", "检查运行"];
 const asList = (value) => (Array.isArray(value) ? value : []);
 const machines = () => asList(state.document.machines);
 const benchmarks = () => asList(state.document.benchmarks);
 function navigate({
-  section = state.section,
   machine = state.machine,
   system = state.system,
   benchmark = state.benchmark,
 } = {}) {
-  Object.assign(state, { section, machine, system, benchmark });
+  Object.assign(state, { machine, system, benchmark });
   emit(true);
 }
 function mutateGroup(path, keys) {
@@ -78,12 +85,6 @@ function field(label, path, options = {}) {
       ? (p, v) => browse(p, v, options.file === true ? "file" : options.file)
       : null,
   });
-}
-function groupTitle(title, action) {
-  const e = node("div", "group-title");
-  e.append(node("h3", "", title));
-  if (action) e.append(action);
-  return e;
 }
 function authEditor(path, effective) {
   const raw = at(state.document, path) || {};
@@ -371,7 +372,7 @@ function trustFields(path, effective, inherited = false) {
   );
   return e;
 }
-function machineEditor(machine, index, { connectionOnly = false } = {}) {
+function machineEditor(machine, index) {
   const panel = node("section", "panel");
   const path = ["machines", index],
     ssh = [...path, "ssh"],
@@ -406,7 +407,6 @@ function machineEditor(machine, index, { connectionOnly = false } = {}) {
       "machine-advanced-" + index,
     ),
   );
-  if (!connectionOnly) panel.append(systemsBoard(machine, index));
   return panel;
 }
 function addMachine() {
@@ -415,7 +415,6 @@ function addMachine() {
   change(["machines"], [...items, machine]);
   state.machine = items.length;
   state.system = null;
-  state.section = "machines";
   emit(true);
 }
 function removeMachine(index) {
@@ -563,6 +562,7 @@ function systemsBoard(machine, index) {
       "icon-button",
     );
     down.disabled = si === systems.length - 1;
+    down.setAttribute("aria-label", `下移系统 ${system.id}`);
     r.append(
       up,
       down,
@@ -605,14 +605,7 @@ function benchmarkEditor(b, index) {
       }),
     ),
   );
-  panel.append(
-    unixbenchTestsEditor([...path, "tests"]),
-    field("结果输出目录", ["policy", "output_dir"], {
-      fallback: "results",
-      file: "directory",
-      help: "此目录供整个测试配置使用。",
-    }),
-  );
+  panel.append(unixbenchTestsEditor([...path, "tests"]));
   panel.append(
     advanced(
       "高级测试设置",
@@ -819,123 +812,13 @@ function orderControls(items, index, select, label) {
   }
   return controls;
 }
-function objectNav() {
-  const e = node("aside", "object-nav");
-  const tabs = node("div", "workbench-tabs");
-  for (const [key, label] of [
-    ["machines", "机器与系统"],
-    ["benchmarks", "性能测试"],
-    ["policy", "运行设置"],
-  ]) {
-    const b = button(
-      label,
-      () => navigate({ section: key, system: null }),
-      "workspace-tab",
-    );
-    b.classList.toggle("active", state.section === key);
-    tabs.append(b);
-  }
-  e.append(tabs);
-  if (state.section === "machines") {
-    e.append(groupTitle("测试机器", button("＋", addMachine, "icon-button")));
-    machines().forEach((m, mi) => {
-      const entry = button(
-        "",
-        () => navigate({ machine: mi, system: null }),
-        "object-entry",
-      );
-      entry.classList.toggle(
-        "selected",
-        mi === state.machine && state.system === null,
-      );
-      entry.append(
-        node("strong", "", m?.id || `机器 ${mi + 1}`),
-        hint(m?.ssh?.host || "尚未填写地址"),
-      );
-      e.append(entry);
-      if (mi === state.machine) {
-        const group = node("div", "system-nav");
-        asList(m.systems).forEach((s, si) => {
-          const b = button(
-            s?.id || `系统 ${si + 1}`,
-            () => navigate({ machine: mi, system: si }),
-            "system-nav-item",
-          );
-          b.classList.toggle("selected", si === state.system);
-          group.append(b);
-        });
-        group.append(
-          button("＋ 添加系统", () => addSystem(m, mi), "text-button"),
-        );
-        e.append(group);
-      }
-    });
-    if (machines()[state.machine])
-      e.append(
-        orderControls(
-          machines(),
-          state.machine,
-          (index) => (state.machine = index),
-          "机器",
-        ),
-      );
-    if (machines()[state.machine])
-      e.append(
-        button(
-          "移除此机器",
-          () => removeMachine(state.machine),
-          "text-button danger",
-        ),
-      );
-  } else if (state.section === "benchmarks") {
-    e.append(
-      groupTitle(
-        "测试项目",
-        button(
-          "＋",
-          () => {
-            const list = benchmarks();
-            change(["benchmarks"], [...list, newBenchmark(list)]);
-            state.benchmark = list.length;
-            emit(true);
-          },
-          "icon-button",
-        ),
-      ),
-    );
-    benchmarks().forEach((b, bi) => {
-      const entry = button(
-        b?.id || `测试 ${bi + 1}`,
-        () => navigate({ benchmark: bi }),
-        "object-entry",
-      );
-      entry.classList.toggle("selected", bi === state.benchmark);
-      e.append(entry);
-    });
-    if (benchmarks()[state.benchmark])
-      e.append(
-        orderControls(
-          benchmarks(),
-          state.benchmark,
-          (index) => (state.benchmark = index),
-          "测试",
-        ),
-      );
-    if (benchmarks()[state.benchmark])
-      e.append(
-        button(
-          "移除此测试",
-          () => {
-            const items = benchmarks();
-            items.splice(state.benchmark, 1);
-            state.benchmark = Math.max(0, state.benchmark - 1);
-            dirty(true);
-          },
-          "text-button danger",
-        ),
-      );
-  } else e.append(hint("并发、结果位置和高级等待策略集中在这里设置。"));
-  return e;
+function objectControls(items, index, select, label, remove) {
+  const controls = node("div", "actions object-controls");
+  controls.append(
+    orderControls(items, index, select, label),
+    button("移除此" + label, remove, "text-button danger"),
+  );
+  return controls;
 }
 function machineTabs() {
   const e = node("div", "machine-tabs");
@@ -953,17 +836,29 @@ function machineTabs() {
     e.append(b);
   });
   e.append(button("＋ 添加机器", addMachine, "text-button"));
-  return e;
+  const picker = node("div");
+  picker.append(e);
+  if (machines()[state.machine])
+    picker.append(
+      objectControls(
+        machines(),
+        state.machine,
+        (index) => {
+          state.machine = index;
+          state.system = null;
+        },
+        "机器",
+        () => removeMachine(state.machine),
+      ),
+    );
+  return picker;
 }
 export function renderConfig() {
   const container = $("config-body");
   container.replaceChildren();
-  $("wizard-steps").hidden = !state.wizard || state.mode === "yaml";
-  $("workbench-switch").textContent = state.wizard
-    ? "进入完整工作台"
-    : "使用引导配置";
+  $("wizard-steps").hidden = state.mode === "yaml";
   $("wizard-steps").replaceChildren(
-    ...steps.map((text, index) => {
+    ...configSteps.map((text, index) => {
       const b = button(
         "",
         () => {
@@ -1014,107 +909,102 @@ export function renderConfig() {
     );
     return;
   }
+  state.machine = Math.max(0, Math.min(state.machine, machines().length - 1));
+  state.benchmark = Math.max(
+    0,
+    Math.min(state.benchmark, benchmarks().length - 1),
+  );
   const m = machines()[state.machine];
-  if (state.wizard) {
-    if (state.step === 0 || state.step === 1) container.append(machineTabs());
-    if (state.step === 0)
-      container.append(
-        m
-          ? machineEditor(m, state.machine, { connectionOnly: true })
-          : empty(
-              "添加第一台机器",
-              "填写连接信息后可测试连接及运行环境。",
-              button("添加机器", addMachine, "button primary"),
-            ),
-      );
-    if (state.step === 1) {
-      if (m) {
-        if (state.system !== null && asList(m.systems)[state.system]) {
-          container.append(
-            button(
-              "← 返回系统列表",
-              () => {
-                state.system = null;
-                emit(true);
-              },
-              "text-button",
-            ),
-            systemEditor(
-              m,
-              state.machine,
-              m.systems[state.system],
-              state.system,
-            ),
-          );
-        } else {
-          const p = node("section", "panel");
-          p.append(
-            heading(
-              "选择参与测试的系统",
-              "手动添加系统并填写对应的 UEFI 启动项。",
-            ),
-            connectionTestPanel(m),
-            systemsBoard(m, state.machine),
-          );
-          container.append(p);
-        }
-      } else
-        container.append(empty("请先添加机器", "返回上一步填写连接信息。"));
-    }
-    if (state.step === 2) {
-      const tab = node("div", "machine-tabs");
-      benchmarks().forEach((b, index) => {
-        const btn = button(
-          b.id || `测试 ${index + 1}`,
-          () => {
-            state.benchmark = index;
-            emit(true);
-          },
-          "chip-button",
-        );
-        btn.classList.toggle("active", index === state.benchmark);
-        tab.append(btn);
-      });
-      tab.append(
-        button(
-          "＋ 添加测试",
-          () => {
-            const list = benchmarks();
-            change(["benchmarks"], [...list, newBenchmark(list)]);
-            state.benchmark = list.length;
-            emit(true);
-          },
-          "text-button",
-        ),
-      );
-      container.append(tab);
-      const b = benchmarks()[state.benchmark];
-      if (b) container.append(benchmarkEditor(b, state.benchmark));
-    }
-    if (state.step === 3) container.append(review());
-  } else {
-    const work = node("div", "workbench");
-    work.append(objectNav());
-    const content = node("div", "object-detail");
-    if (state.section === "policy") content.append(policyEditor());
-    else if (state.section === "benchmarks") {
-      const b = benchmarks()[state.benchmark];
-      if (b) content.append(benchmarkEditor(b, state.benchmark));
-      else
-        content.append(
-          empty("尚未添加测试", "点击左侧加号添加 UnixBench 测试。"),
-        );
-    } else if (m) {
-      if (state.system !== null && asList(m.systems)[state.system])
-        content.append(
+  if (state.step === 0 || state.step === 1) container.append(machineTabs());
+  if (state.step === 0)
+    container.append(
+      m
+        ? machineEditor(m, state.machine)
+        : empty(
+            "添加第一台机器",
+            "填写连接信息后可测试连接及运行环境。",
+            button("添加机器", addMachine, "button primary"),
+          ),
+    );
+  if (state.step === 1) {
+    if (m) {
+      if (state.system !== null && asList(m.systems)[state.system]) {
+        container.append(
+          button(
+            "← 返回系统列表",
+            () => {
+              state.system = null;
+              emit(true);
+            },
+            "text-button",
+          ),
           systemEditor(m, state.machine, m.systems[state.system], state.system),
         );
-      else content.append(machineEditor(m, state.machine));
-    } else content.append(empty("尚未添加机器", "点击左侧加号添加机器。"));
-    work.append(content);
-    container.append(work);
+      } else {
+        const p = node("section", "panel");
+        p.append(
+          heading(
+            "选择参与测试的系统",
+            "手动添加系统并填写对应的 UEFI 启动项。",
+          ),
+          connectionTestPanel(m),
+          systemsBoard(m, state.machine),
+        );
+        container.append(p);
+      }
+    } else container.append(empty("请先添加机器", "返回上一步填写连接信息。"));
   }
+  if (state.step === 2) {
+    const tab = node("div", "machine-tabs");
+    benchmarks().forEach((b, index) => {
+      const btn = button(
+        b.id || `测试 ${index + 1}`,
+        () => {
+          state.benchmark = index;
+          emit(true);
+        },
+        "chip-button",
+      );
+      btn.classList.toggle("active", index === state.benchmark);
+      tab.append(btn);
+    });
+    tab.append(
+      button(
+        "＋ 添加测试",
+        () => {
+          const list = benchmarks();
+          change(["benchmarks"], [...list, newBenchmark(list)]);
+          state.benchmark = list.length;
+          emit(true);
+        },
+        "text-button",
+      ),
+    );
+    container.append(tab);
+    const b = benchmarks()[state.benchmark];
+    if (b)
+      container.append(
+        objectControls(
+          benchmarks(),
+          state.benchmark,
+          (index) => (state.benchmark = index),
+          "测试",
+          () => {
+            const items = benchmarks();
+            items.splice(state.benchmark, 1);
+            state.benchmark = Math.max(0, state.benchmark - 1);
+            dirty(true);
+          },
+        ),
+        benchmarkEditor(b, state.benchmark),
+      );
+    else
+      container.append(empty("尚未添加测试", "点击添加测试来配置 UnixBench。"));
+  }
+  if (state.step === 3) container.append(policyEditor());
+  if (state.step === reviewStep) container.append(review());
 }
+
 export function nextStep() {
   const problems = [];
   if (state.step === 0) {
@@ -1165,7 +1055,7 @@ export function nextStep() {
     show(problems[0].message, "error");
     return;
   }
-  state.step = Math.min(3, state.step + 1);
+  state.step = Math.min(reviewStep, state.step + 1);
   state.system = null;
   state.errors = [];
   emit(true);
@@ -1224,20 +1114,17 @@ export async function focusError(error) {
   }
   const path = error.path || [];
   if (path[0] === "machines") {
-    if (state.wizard) state.step = path[2] === "systems" ? 1 : 0;
-    state.section = "machines";
+    state.step = path[2] === "systems" ? 1 : 0;
     state.machine = Number(path[1]) || 0;
     state.system =
       path[2] === "systems" && path[3] !== undefined
         ? Number(path[3]) || 0
         : null;
   } else if (path[0] === "benchmarks") {
-    if (state.wizard) state.step = 2;
-    state.section = "benchmarks";
+    state.step = 2;
     state.benchmark = Number(path[1]) || 0;
   } else if (path[0] === "policy" || path[0] === "version") {
-    state.wizard = false;
-    state.section = "policy";
+    state.step = 3;
   }
   emit(true);
   requestAnimationFrame(() => {

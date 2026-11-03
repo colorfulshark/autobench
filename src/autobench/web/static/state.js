@@ -1,4 +1,12 @@
 import { at, patch, newProject, copy } from "./model.js";
+export const configSteps = [
+  "连接机器",
+  "选择系统",
+  "设置测试",
+  "运行设置",
+  "检查运行",
+];
+export const reviewStep = configSteps.length - 1;
 export const state = {
   info: null,
   document: {},
@@ -13,9 +21,7 @@ export const state = {
   epoch: 0,
   mode: "form",
   page: "config",
-  wizard: true,
   step: 0,
-  section: "machines",
   machine: 0,
   system: null,
   benchmark: 0,
@@ -89,7 +95,7 @@ export async function currentText() {
   if (!state.formDirty) return state.text;
   return (await api("/api/config/render", { document: state.document })).text;
 }
-export function accept(saved, { draft = false, wizard = false } = {}) {
+export function accept(saved, { draft = false } = {}) {
   state.document = saved.document || {};
   state.text = saved.text || "";
   state.path = saved.path || null;
@@ -104,7 +110,6 @@ export function accept(saved, { draft = false, wizard = false } = {}) {
   state.epoch++;
   state.errors = [];
   state.validation = null;
-  state.wizard = wizard;
   state.step = 0;
   state.machine = 0;
   state.system = null;
@@ -120,10 +125,9 @@ export function accept(saved, { draft = false, wizard = false } = {}) {
 }
 export async function createProject() {
   state.mode = "form";
-  state.section = "machines";
   const document = newProject();
   const rendered = await api("/api/config/render", { document });
-  accept(rendered, { draft: true, wizard: true });
+  accept(rendered, { draft: true });
   state.touched = false;
 }
 export async function load(path) {
@@ -132,7 +136,7 @@ export async function load(path) {
   if (version !== state.version)
     throw new Error("加载期间配置有新修改，请保存后重新加载。");
   accept(result);
-  show("配置已加载，可直接在工作台修改。");
+  show("配置已加载，可通过引导步骤直接修改。");
 }
 export async function save(target = state.target) {
   if (!target?.trim()) throw new Error("请选择配置在服务器上的保存位置。");

@@ -1,5 +1,7 @@
 import {
   state,
+  configSteps,
+  reviewStep,
   api,
   subscribe,
   emit,
@@ -65,21 +67,19 @@ function chrome() {
   $("mode-form").setAttribute("aria-pressed", String(state.mode === "form"));
   $("mode-yaml").setAttribute("aria-pressed", String(state.mode === "yaml"));
   $("config-layout").hidden = state.mode !== "form";
-  $("config-layout").dataset.wizard = String(state.wizard);
   renderPlan();
-  $("prev-step").hidden =
-    !state.wizard || state.step === 0 || state.mode === "yaml";
+  $("prev-step").hidden = state.step === 0 || state.mode === "yaml";
   const checked = state.validation?.version === state.version && saved;
   $("primary-action").textContent =
-    state.wizard && state.step < 3 && state.mode === "form"
+    state.step < reviewStep && state.mode === "form"
       ? "下一步 →"
       : checked
         ? "开始测试 →"
         : "保存并检查";
   $("action-hint").textContent = checked
     ? "配置检查已通过；开始后可能按计划切换远端系统。"
-    : state.wizard && state.step < 3 && state.mode === "form"
-      ? `第 ${state.step + 1} 步，共 4 步 · 可以随时保存草稿`
+    : state.step < reviewStep && state.mode === "form"
+      ? `第 ${state.step + 1} 步，共 ${configSteps.length} 步 · 可以随时保存草稿`
       : "检查会校验配置、源码包和本地 SSH 文件，不启动测试。";
   $("yaml-meta").textContent =
     `${$("yaml-editor").value.split("\n").length} 行 · UTF-8`;
@@ -150,7 +150,7 @@ async function saveAndCheck() {
   if (await save()) await validate();
 }
 async function primary() {
-  if (state.wizard && state.step < 3 && state.mode === "form") {
+  if (state.step < reviewStep && state.mode === "form") {
     nextStep();
     return;
   }
@@ -250,11 +250,6 @@ async function boot() {
   });
   bind("mode-yaml", () => switchMode("yaml"));
   bind("mode-form", () => switchMode("form"));
-  bind("workbench-switch", () => {
-    state.wizard = !state.wizard;
-    state.system = null;
-    emit(true);
-  });
   $("yaml-editor").addEventListener("input", () =>
     sourceChanged($("yaml-editor").value),
   );
@@ -307,8 +302,8 @@ async function boot() {
   bind("doctor", inspectSaved);
   bind("inspect-config", () => {
     setPage("config");
-    state.wizard = false;
-    state.section = "machines";
+    state.step = 0;
+    state.system = null;
     emit(true);
   });
   window.addEventListener("beforeunload", (event) => {
