@@ -136,7 +136,6 @@ export async function load(path) {
   if (version !== state.version)
     throw new Error("加载期间配置有新修改，请保存后重新加载。");
   accept(result);
-  show("配置已加载，可通过引导步骤直接修改。");
 }
 export async function save(target = state.target) {
   if (!target?.trim()) throw new Error("请选择配置在服务器上的保存位置。");

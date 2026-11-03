@@ -82,9 +82,6 @@
           </button>
         </nav>
         <div class="service-info">
-          <span class="service-tag"
-            ><span class="live-dot"></span>本地工作空间</span
-          >
           <span class="service-meta"
             ><span id="version">AutoBench</span><span id="server-address"></span
           ></span>
@@ -100,15 +97,6 @@
           tabindex="0"
           hidden
         >
-          <div class="page-heading">
-            <div>
-              <h1>测试配置</h1>
-              <p>配置机器与系统，编排可恢复的 UnixBench 测试。</p>
-            </div>
-            <button id="new-config" class="button secondary">
-              ＋ 新建配置
-            </button>
-          </div>
           <div class="project-bar">
             <div class="project-file">
               <svg
@@ -138,7 +126,8 @@
               <details id="file-menu" class="menu">
                 <summary>文件操作 ⌄</summary>
                 <div class="menu-items">
-                  <button id="open-config">打开服务器配置…</button
+                  <button id="new-config">新建配置</button
+                  ><button id="open-config">打开服务器配置…</button
                   ><label
                     >导入 YAML<input
                       id="import"
@@ -211,13 +200,6 @@
           tabindex="0"
           hidden
         >
-          <div class="page-heading">
-            <div>
-              <h1>运行记录</h1>
-              <p>跟踪测试进度、恢复中断任务，回收原始结果。</p>
-            </div>
-            <span class="pill"><span class="live-dot"></span> 每 2 秒更新</span>
-          </div>
           <div class="history-location">
             <div>
               <span class="secondary">历史记录位置</span

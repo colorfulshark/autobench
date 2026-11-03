@@ -337,14 +337,7 @@ pre {
 .service-info {
   display: grid;
   justify-items: end;
-  gap: 3px;
   min-width: 0;
-}
-.service-tag {
-  font-size: 13px;
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
 }
 .service-meta {
   display: flex;
@@ -372,18 +365,6 @@ main {
 .page {
   margin: 0;
   padding: 28px 32px 0;
-}
-.page-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 24px;
-  margin-bottom: 24px;
-}
-.page-heading p {
-  font-size: 14px;
-  color: var(--muted);
-  margin-bottom: 0;
 }
 .pill {
   font-size: 12px;
@@ -1777,28 +1758,6 @@ textarea:focus-visible {
   }
   .page {
     padding: 20px 16px 0;
-  }
-  .page-heading {
-    gap: 12px;
-    margin-bottom: 20px;
-    align-items: flex-start;
-  }
-  .page-heading h1 {
-    font-size: 22px;
-  }
-  .page-heading p {
-    font-size: 13px;
-    line-height: 1.7;
-  }
-  .page-heading > .button {
-    font-size: 12px;
-    padding: 6px 10px;
-  }
-  .page-heading > .pill {
-    font-size: 12px;
-  }
-  .page-heading > div {
-    min-width: 0;
   }
   .project-bar {
     padding: 14px 12px;
