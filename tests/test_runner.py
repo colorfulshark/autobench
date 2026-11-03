@@ -99,8 +99,25 @@ def test_probe_reads_only_boot_state_from_files(monkeypatch):
 
 
 def test_worker_actual_environment_and_artifact_hashes(config, tmp_path, monkeypatch):
+    # Record the environment at each executable's entry before make modifies it.
+    tool_dir = tmp_path / "toolchain"
+    tool_dir.mkdir()
+    for name in ("make", "gcc"):
+        executable = shutil.which(name)
+        assert executable is not None
+        wrapper = tool_dir / name
+        wrapper.write_text(
+            f"#!{sys.executable}\n"
+            "import json, os, pathlib, sys\n"
+            'phase = "version" if sys.argv[1:] == ["--version"] else "build"\n'
+            f"output = pathlib.Path({str(tool_dir)!r}) / ({name!r} + '-' + phase + '.json')\n"
+            "output.write_text(json.dumps(dict(os.environ)))\n"
+            f"os.execv({executable!r}, [sys.argv[0], *sys.argv[1:]])\n"
+        )
+        wrapper.chmod(0o755)
     config.machines[0].systems[0].env.update(
         {
+            "PATH": str(tool_dir) + os.pathsep + os.environ["PATH"],
             "EMPTY": "",
             "LITERAL": "$(echo hi) $PATH `id`\n雪",
             "UB_TMPDIR": str(tmp_path / "custom tmp"),
@@ -108,6 +125,10 @@ def test_worker_actual_environment_and_artifact_hashes(config, tmp_path, monkeyp
     )
     directory, _, _ = manifest_for(config, tmp_path)
     monkeypatch.setenv("BASE_ONLY", "base-value")
+    monkeypatch.setenv("SHARED", "base")
+    monkeypatch.setenv("SYSTEM_ONLY", "base")
+    for name in ("UB_BINDIR", "UB_RESULTDIR", "MAKE"):
+        monkeypatch.delenv(name, raising=False)
     process = launch(directory)
     stdout, stderr = process.communicate(timeout=30)
     assert process.returncode == 0, (stdout, stderr)
@@ -121,13 +142,25 @@ def test_worker_actual_environment_and_artifact_hashes(config, tmp_path, monkeyp
     assert observed["EMPTY"] == "" and observed["LITERAL"] == "$(echo hi) $PATH `id`\n雪"
     assert observed["UB_TMPDIR"] == str(tmp_path / "custom tmp")
     build = json.loads((common / "build-environment.json").read_text())
-    assert "RUNTIME_ONLY" not in build
-    assert "yes" not in (common / "build.stdout").read_text()
+    assert build == rr.read_json(tool_dir / "make-build.json")
+    assert build == rr.read_json(tool_dir / "make-version.json")
+    assert build == rr.read_json(tool_dir / "gcc-version.json")
+    assert build["BASE_ONLY"] == "base-value"
+    for overrides in (config.machines[0].systems[0].env, config.benchmarks[0].env):
+        for name in overrides:
+            assert build[name] == observed[name]
+    assert build["BENCHMARK_ONLY"] == "yes"
+    assert "yes" in (common / "build.stdout").read_text()
+    for name in ("UB_BINDIR", "UB_RESULTDIR", "MAKE"):
+        assert name not in build and name in observed
+    toolchain = rr.read_json(common / "toolchain.json")
+    assert all("output" in toolchain[name] for name in ("compiler", "make"))
     inventory = json.loads((directory / "artifacts.json").read_text())
     for item in inventory["files"]:
         assert rr.digest(artifacts / item["path"]) == item["sha256"]
     assert (artifacts.stat().st_mode & 0o777) == 0o700
     assert (artifacts / "run-environment.json").stat().st_mode & 0o777 == 0o600
+    assert (common / "build-environment.json").stat().st_mode & 0o777 == 0o600
 
 
 @pytest.mark.parametrize("mode", ["build", "run", "timeout", "checksum"])
@@ -314,6 +347,11 @@ pathlib.Path("testdir/input").write_text("changed in this round")
         inventory = rr.read_json(build / "artifacts.json")
         if common_inventory is None:
             common_inventory = inventory
+            assert rr.read_json(common / "build-environment.json") == {
+                **env,
+                **config.machines[0].systems[0].env,
+                **benchmark.env,
+            }
         assert inventory == common_inventory
         ready = rr.read_json(build / "ready.json")
         assert ready["binaries"] == rr.file_inventory(build / "source/UnixBench/pgms")

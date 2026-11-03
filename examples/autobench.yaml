@@ -30,6 +30,7 @@ machines:
     systems:
       - id: ubuntu
         boot_entry: "0001"
+        # Applied to both build and test processes; benchmark env overrides these values.
         env:
           PATH: /usr/local/bin:/usr/bin:/bin
           MALLOC_ARENA_MAX: "2"
@@ -54,12 +55,14 @@ benchmarks:
     # Optional: autodetected if exactly one directory contains Run and Makefile.
     # source_subdir: byte-unixbench/UnixBench
     # source_sha256: <64-character SHA-256>
+    # Make command-line assignments can override environment and ordinary Makefile assignments.
     make_args: ["CC=gcc"]
     args: []  # E.g. ["-c", "1", "-c", "8", "-i", "10"]
     tests: []  # E.g. ["execl", "shell"]; empty preserves args/default index behavior.
     repetitions: 1
     build_timeout: 1800
     timeout: 21600
+    # Applied to both build and test processes, including toolchain version collection.
     env:
       OMP_NUM_THREADS: "8"
       MALLOC_ARENA_MAX: "4"

@@ -31,7 +31,7 @@ def assert_no_removed_outputs(root: Path):
 
 
 def source_archive(path: Path, run=RUN, make=None):
-    make = make or "all:\n\t@echo build-ok\n\t@printenv RUNTIME_ONLY || true\n"
+    make = make or "all:\n\t@echo build-ok\n\t@printenv BENCHMARK_ONLY || true\n"
     with tarfile.open(path, "w:gz") as archive:
         for name, value, mode in (
             ("UnixBench/Run", f"#!{sys.executable}\n" + run, 0o755),
@@ -85,7 +85,7 @@ def config(tmp_path, archive):
                 {
                     "id": "ub",
                     "source_archive": archive,
-                    "env": {"SHARED": "benchmark", "RUNTIME_ONLY": "yes"},
+                    "env": {"SHARED": "benchmark", "BENCHMARK_ONLY": "yes"},
                 }
             ],
             "policy": {

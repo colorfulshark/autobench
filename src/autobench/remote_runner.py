@@ -68,13 +68,14 @@ def managed(argv):
     return argv if os.geteuid() == 0 else ["sudo", "-n"] + argv
 
 
-def command(argv, privileged=False, timeout=15):
+def command(argv, privileged=False, timeout=15, env=None):
     result = subprocess.run(
         managed(argv) if privileged else argv,
         capture_output=True,
         text=True,
         errors="replace",
         timeout=timeout,
+        env=env,
     )
     if result.returncode:
         raise RuntimeError("command failed: %s: %s" % (argv[0], result.stderr.strip()))
@@ -513,10 +514,15 @@ def verify_build(build):
     return cwd
 
 
-def runtime_environment(manifest, build, directory):
+def configured_environment(manifest):
     env = dict(os.environ)
     env.update(manifest["system_env"])
     env.update(manifest["benchmark_env"])
+    return env
+
+
+def runtime_environment(manifest, build, directory):
+    env = configured_environment(manifest)
     env["UB_BINDIR"] = str(build / "source" / manifest["execution"]["source_subdir"] / "pgms")
     # Upstream Run passes MAKE through a shell, so quote the complete command.
     env["MAKE"] = shlex.join([sys.executable, str(build / "runner.py"), "check-build", str(build)])
@@ -558,6 +564,7 @@ def prepare_build(directory, manifest, state):
         if subdir.is_absolute() or ".." in subdir.parts:
             raise ValueError("invalid source directory")
         cwd = (build / "source").joinpath(*subdir.parts)
+        build_env = configured_environment(manifest)
         toolchain = {}
         execution = manifest["execution"]
         for name, argv in {
@@ -565,11 +572,10 @@ def prepare_build(directory, manifest, state):
             "make": ["make", "--version"],
         }.items():
             try:
-                toolchain[name] = {"argv": argv, "output": command(argv, timeout=5)}
+                toolchain[name] = {"argv": argv, "output": command(argv, timeout=5, env=build_env)}
             except Exception as exc:
                 toolchain[name] = {"argv": argv, "error": str(exc)}
         atomic_json(artifacts / "toolchain.json", toolchain)
-        build_env = dict(os.environ)
         atomic_json(artifacts / "build-environment.json", build_env)
         record["command"] = {
             "argv": execution["build_argv"],
