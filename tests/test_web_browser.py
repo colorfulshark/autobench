@@ -137,6 +137,187 @@ def fill_connection(page, server):
     page.locator("#input-machines-0-ssh-known_hosts").fill(str(server.root / "known_hosts"))
 
 
+@pytest.mark.parametrize("width", [1440, 390])
+@pytest.mark.parametrize("tone,duration", [("success", 3000), ("warning", 5000), ("error", 5000)])
+@pytest.mark.parametrize("reduced_motion", ["no-preference", "reduce"])
+def test_notices_auto_dismiss(browser_page, ui_server, width, tone, duration, reduced_motion):
+    page = browser_page
+    page.set_viewport_size({"width": width, "height": 900})
+    page.emulate_media(reduced_motion=reduced_motion)
+    ready(page, ui_server)
+    page.clock.install(time=0)
+    page.clock.pause_at(1000)
+    notice = page.locator("#notice")
+    assert notice.is_hidden()
+    original_height = page.locator("main").evaluate("el => el.getBoundingClientRect().height")
+    original_position = page.locator(".project-bar").bounding_box()
+    page.evaluate(
+        """async tone => {
+            const { show } = await import('/static/state.js');
+            show('操作提示', tone);
+        }""",
+        tone,
+    )
+    assert notice.is_visible()
+    assert notice.text_content() == "操作提示"
+    assert notice.get_attribute("data-tone") == tone
+    assert notice.get_attribute("role") == "status"
+    assert notice.get_attribute("aria-live") == "polite"
+    assert notice.evaluate("el => getComputedStyle(el).position") == "fixed"
+    assert page.locator(".project-bar").bounding_box() == original_position
+    assert page.locator("main").evaluate("el => el.getBoundingClientRect().height") == original_height
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.clock.run_for(duration - 1)
+    assert notice.is_visible()
+    page.clock.run_for(1)
+    if reduced_motion == "no-preference":
+        assert notice.get_attribute("data-phase") == "closing"
+        assert notice.text_content() == "操作提示"
+        page.clock.run_for(140)
+    assert notice.is_hidden()
+    assert notice.text_content() == ""
+    assert notice.bounding_box() is None
+    assert page.locator(".project-bar").bounding_box() == original_position
+    assert page.locator("main").evaluate("el => el.getBoundingClientRect().height") == original_height
+
+
+@pytest.mark.parametrize(
+    "first_tone,second_tone,second_message,duration",
+    [
+        ("success", "success", "第一条提示", 3000),
+        ("success", "success", "第二条提示", 3000),
+        ("success", "error", "第二条提示", 5000),
+        ("error", "success", "第二条提示", 3000),
+    ],
+)
+@pytest.mark.parametrize("during_exit", [False, True])
+def test_new_notice_restarts_dismiss_timer(
+    browser_page, ui_server, first_tone, second_tone, second_message, duration, during_exit
+):
+    page = browser_page
+    ready(page, ui_server)
+    page.clock.install(time=0)
+    page.clock.pause_at(1000)
+    show = """async ({message, tone}) => {
+        const { show } = await import('/static/state.js');
+        show(message, tone);
+    }"""
+    page.evaluate(show, {"message": "第一条提示", "tone": first_tone})
+    first_duration = 5000 if first_tone == "error" else 3000
+    page.clock.run_for(first_duration if during_exit else 2500)
+    if during_exit:
+        assert page.locator("#notice").get_attribute("data-phase") == "closing"
+    page.evaluate(show, {"message": second_message, "tone": second_tone})
+    page.clock.run_for(duration - 1)
+    notice = page.locator("#notice")
+    assert notice.is_visible()
+    assert notice.text_content() == second_message
+    assert notice.get_attribute("data-tone") == second_tone
+    page.clock.run_for(1)
+    assert notice.get_attribute("data-phase") == "closing"
+    page.clock.run_for(140)
+    assert notice.is_hidden()
+    assert notice.text_content() == ""
+
+
+@pytest.mark.parametrize("width", [1440, 390])
+def test_notice_enter_and_exit_animations(browser_page, ui_server, width):
+    page = browser_page
+    page.set_viewport_size({"width": width, "height": 900})
+    page.emulate_media(reduced_motion="no-preference")
+    ready(page, ui_server)
+    page.clock.install(time=0)
+    page.clock.pause_at(1000)
+    entrance = page.evaluate(
+        """async () => {
+            const { show } = await import('/static/state.js');
+            show('动画提示');
+            const notice = document.querySelector('#notice');
+            const animation = notice.getAnimations()[0];
+            animation.pause();
+            animation.currentTime = 100;
+            const result = {
+                name: animation.animationName,
+                duration: animation.effect.getTiming().duration,
+                opacity: Number(getComputedStyle(notice).opacity),
+                transform: getComputedStyle(notice).transform,
+            };
+            animation.finish();
+            return result;
+        }"""
+    )
+    assert entrance["name"] == "notice-enter"
+    assert entrance["duration"] == 200
+    assert 0 < entrance["opacity"] < 1
+    assert entrance["transform"] != "matrix(1, 0, 0, 1, 0, 0)"
+    page.clock.run_for(3000)
+    exit_state = page.locator("#notice").evaluate(
+        """notice => {
+            const animation = notice.getAnimations()[0];
+            animation.pause();
+            animation.currentTime = 70;
+            return {
+                name: animation.animationName,
+                duration: animation.effect.getTiming().duration,
+                opacity: Number(getComputedStyle(notice).opacity),
+            };
+        }"""
+    )
+    assert exit_state["name"] == "notice-exit"
+    assert exit_state["duration"] == 140
+    assert 0 < exit_state["opacity"] < 1
+    page.clock.run_for(140)
+    assert page.locator("#notice").is_hidden()
+
+
+@pytest.mark.parametrize("width", [1440, 390])
+def test_long_notice_stays_in_viewport_when_scrolling(browser_page, ui_server, width):
+    page = browser_page
+    page.set_viewport_size({"width": width, "height": 600})
+    page.emulate_media(reduced_motion="reduce")
+    ready(page, ui_server)
+    page.clock.install(time=0)
+    page.clock.pause_at(1000)
+    page.evaluate(
+        """async () => {
+            const { show } = await import('/static/state.js');
+            show('LongErrorDetail'.repeat(200), 'error');
+        }"""
+    )
+    notice = page.locator("#notice")
+    before = notice.bounding_box()
+    assert before["x"] >= 16
+    assert before["x"] + before["width"] <= width - 16
+    assert before["y"] >= page.locator(".topbar").bounding_box()["height"]
+    assert before["y"] + before["height"] < 600
+    assert notice.evaluate("el => el.scrollHeight > el.clientHeight")
+    page.evaluate("window.scrollTo(0, 400)")
+    assert page.evaluate("window.scrollY") > 0
+    assert notice.bounding_box() == before
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+
+@pytest.mark.parametrize("width", [1440, 390])
+def test_save_draft_notice_dismisses_and_keeps_saved_state(browser_page, ui_server, width):
+    page, server = browser_page, ui_server
+    page.set_viewport_size({"width": width, "height": 900})
+    ready(page, server)
+    load_existing(page, server)
+    page.clock.install(time=0)
+    page.clock.pause_at(1000)
+    page.locator("#secondary-action").click()
+    page.get_by_text("草稿已保存，可稍后继续完善。", exact=True).wait_for()
+    assert page.locator("#notice").is_visible()
+    page.clock.run_for(2999)
+    assert page.locator("#notice").is_visible()
+    page.clock.run_for(1)
+    assert page.locator("#notice").get_attribute("data-phase") == "closing"
+    page.clock.run_for(140)
+    assert page.locator("#notice").is_hidden()
+    assert page.locator("#save-state").text_content() == "已保存"
+    assert server.existing.is_file()
+
+
 def assert_current_page(page, key):
     page.wait_for_function(
         "key => sessionStorage.getItem('autobench-page') === key",
@@ -772,10 +953,16 @@ def test_mobile_and_validation_field_navigation(browser_page, ui_server):
     load_existing(page, server)
     page.locator("#input-machines-0-ssh-port").fill("0")
     open_step(page, "检查运行")
+    page.clock.install(time=0)
+    page.clock.pause_at(1000)
     page.locator("#primary-action").click()
     page.locator("#config-errors").wait_for()
     page.locator(".error-link").first.click()
     assert page.locator("#input-machines-0-ssh-port").get_attribute("aria-invalid") == "true"
+    page.clock.run_for(5140)
+    assert page.locator("#notice").is_hidden()
+    assert page.locator("#config-errors").is_visible()
+    assert page.locator(".field-error").is_visible()
     page.set_viewport_size({"width": 390, "height": 844})
     assert page.evaluate("() => document.documentElement.scrollWidth <= innerWidth")
     page.locator("#mode-yaml").click()

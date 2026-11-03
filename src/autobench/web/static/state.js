@@ -56,11 +56,31 @@ export function dirty(layout = false) {
 export function value(path, fallback = "") {
   return at(state.document, path) ?? fallback;
 }
+let noticeTimer, noticeHideTimer;
 export function show(message, tone = "success") {
+  clearTimeout(noticeTimer);
+  clearTimeout(noticeHideTimer);
   const notice = document.getElementById("notice");
   notice.textContent = message;
   notice.dataset.tone = tone;
+  notice.dataset.phase = "visible";
   notice.hidden = false;
+  noticeTimer = setTimeout(() => {
+    noticeTimer = undefined;
+    notice.dataset.phase = "closing";
+    const hide = () => {
+      notice.hidden = true;
+      notice.textContent = "";
+      delete notice.dataset.phase;
+      noticeHideTimer = undefined;
+    };
+    const duration =
+      parseFloat(
+        getComputedStyle(notice).getPropertyValue("--notice-exit-duration"),
+      ) || 0;
+    if (duration) noticeHideTimer = setTimeout(hide, duration);
+    else hide();
+  }, ["warning", "error"].includes(tone) ? 5000 : 3000);
 }
 export async function api(url, body) {
   let response;
