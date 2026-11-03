@@ -1,6 +1,16 @@
-import { state, api, waitOperation, show, savedBody, emit } from "./state.js";
-import { mergedSSH, probeSignature } from "./model.js";
-import { $, node, button, hint, pill, heading, jsonDetails } from "./ui.js";
+import { state, api, waitOperation, savedBody, emit } from "./state.js";
+import { mergedSSH, connectionTestSignature } from "./model.js";
+import {
+  $,
+  node,
+  button,
+  hint,
+  pill,
+  heading,
+  jsonDetails,
+  statusIndicator,
+  updateStatusIndicator,
+} from "./ui.js";
 const records = new WeakMap();
 const panelTargets = new WeakMap();
 const labels = {
@@ -11,40 +21,40 @@ const labels = {
   dependencies: "基础命令",
   disk: "可用空间",
 };
-let onUse = () => {},
-  onProblem = () => {};
-export function configureChecks({ use, problem }) {
-  onUse = use;
-  onProblem = problem;
-}
-export function currentRecord(machine, system = null) {
+function currentRecord(machine, system = null) {
   return records.get(system || machine);
 }
-export function fresh(machine, system = null) {
+function fresh(machine, system = null) {
   const r = currentRecord(machine, system);
-  return (
-    !!r &&
-    r.epoch === state.epoch &&
-    r.signature ===
-      probeSignature(
+  if (!r || r.invalidated) return false;
+  if (
+    r.epoch !== state.epoch ||
+    r.signature !==
+      connectionTestSignature(
         machine,
         system,
         state.target,
         state.document.policy?.connect_timeout ?? 15,
       )
-  );
+  )
+    r.invalidated = true;
+  return !r.invalidated;
 }
-export async function probe(machine, system = null) {
+async function testConnection(machine, system = null) {
   const key = system || machine;
   if (currentRecord(machine, system)?.running && fresh(machine, system)) return;
-  const signature = probeSignature(
+  const record = {
+    running: true,
+    signature: connectionTestSignature(
       machine,
       system,
       state.target,
       state.document.policy?.connect_timeout ?? 15,
     ),
-    epoch = state.epoch;
-  const record = { running: true, signature, epoch, result: null, error: null };
+    epoch: state.epoch,
+    result: null,
+    error: null,
+  };
   records.set(key, record);
   emit(true);
   try {
@@ -54,20 +64,17 @@ export async function probe(machine, system = null) {
       connect_timeout: state.document.policy?.connect_timeout ?? 15,
     });
     const result = await waitOperation(operation);
-    if (records.get(key) !== record) return;
-    record.result = result;
-    if (epoch !== state.epoch || !fresh(machine, system)) record.stale = true;
-    else if (result.probe) show("当前系统信息已读取，请确认后添加。");
-    else show(result.checks[0]?.message || "连接未通过。", "error");
+    if (records.get(key) === record && fresh(machine, system))
+      record.result = result;
   } catch (error) {
-    record.error = error.message;
-    record.errorFields = error.fields || [];
+    if (records.get(key) === record && fresh(machine, system))
+      record.error = error.message;
   } finally {
     record.running = false;
-    emit(true);
+    if (records.get(key) === record) emit(true);
   }
 }
-export function checkRows(checks) {
+function checkRows(checks) {
   const e = node("div", "check-list");
   for (const item of checks) {
     const r = node("div", "check-row");
@@ -104,105 +111,72 @@ export function checkRows(checks) {
         r.dataset.tone,
       ),
     );
-    if (item.path)
-      r.append(button("前往设置", () => onProblem(item.path), "link-button"));
     e.append(r);
   }
   return e;
 }
-export function probePanel(machine, system = null) {
-  const panel = node("div", "probe-panel");
-  panel.dataset.probePanel = "true";
+export function connectionTestPanel(machine, system = null) {
+  const panel = node("div", "connection-test-panel");
   panelTargets.set(panel, { machine, system });
-  const r = currentRecord(machine, system),
-    valid = fresh(machine, system);
-  const b = button(
-    r?.running && valid ? "正在连接…" : "连接并识别当前系统",
-    () => probe(machine, system),
+  const actions = node("div", "connection-test-actions");
+  const connect = button(
+    "连接测试",
+    () => testConnection(machine, system),
     "button secondary",
   );
-  b.classList.add("probe-connect");
+  connect.classList.add("connection-test-button");
+  const status = statusIndicator("connection-test-status");
+  actions.append(connect, status);
+  panel.append(
+    actions,
+    hint("检查连接及运行环境，不提交测试，也不切换操作系统。"),
+  );
   const ssh = mergedSSH(machine, system);
-  b.disabled = (!!r?.running && valid) || !ssh.host || !ssh.username;
-  panel.append(b, hint("只读取当前系统，不提交测试，也不切换操作系统。"));
   if (ssh.verify_host_key === false)
     panel.append(pill("已忽略主机密钥检查", "warning"));
-  if (!r) return panel;
-  if (!valid) {
-    panel.append(
-      node(
-        "p",
-        "callout warning stale-probe",
-        "连接信息或配置位置已改变，请重新识别。",
-      ),
-    );
-    return panel;
-  }
-  if (r.error) {
-    panel.append(node("p", "callout error", r.error));
-    for (const issue of r.errorFields || [])
-      if (issue.path?.length)
-        panel.append(
-          button("前往设置", () => onProblem(issue.path), "link-button"),
-        );
-    return panel;
-  }
-  if (r.result) {
-    const p = r.result.probe;
-    panel.append(checkRows(r.result.checks));
-    if (p) {
-      const summary = node("div", "discovered-system");
-      summary.append(
-        node("strong", "", p.hostname || "当前系统"),
-        hint(
-          `当前启动项 ${p.efi?.current ? "Boot" + p.efi.current : "未识别"}`,
-        ),
-      );
-      const usable =
-        r.result.checks.some(
-          (item) => item.id === "uefi" && item.status === "passed",
-        ) && !!p.efi?.current;
-      const use = button(
-        system ? "更新此系统启动项" : "添加当前系统",
-        () => {
-          if (!fresh(machine, system))
-            throw new Error("连接已改变，请重新识别。");
-          onUse(machine, p, system);
-        },
-        "button primary",
-      );
-      use.disabled = !usable;
-      summary.append(use);
-      panel.append(summary, jsonDetails("查看原始识别结果", p));
-    }
-  }
+  updateConnectionTestPanel(panel);
   return panel;
 }
-export function updateProbePanels() {
-  document.querySelectorAll("[data-probe-panel]").forEach((panel) => {
-    const { machine, system } = panelTargets.get(panel) || {};
-    if (!machine) return;
-    const r0 = currentRecord(machine, system),
-      ssh = mergedSSH(machine, system);
-    const connect = panel.querySelector(".probe-connect");
-    if (connect) {
-      connect.disabled =
-        (!!r0?.running && fresh(machine, system)) || !ssh.host || !ssh.username;
-    }
-    const r = currentRecord(machine, system);
-    if (r && !fresh(machine, system) && !panel.querySelector(".stale-probe")) {
-      panel.append(
-        node(
-          "p",
-          "callout warning stale-probe",
-          "连接信息或配置位置已改变，请重新识别。",
-        ),
-      );
-      panel
-        .querySelectorAll(".discovered-system button")
-        .forEach((b) => (b.disabled = true));
-    }
-  });
+function updateConnectionTestPanel(panel) {
+  const { machine, system } = panelTargets.get(panel);
+  const r = currentRecord(machine, system),
+    valid = fresh(machine, system);
+  const ssh = mergedSSH(machine, system);
+  const running = !!r?.running && valid;
+  panel.querySelector(".connection-test-button").disabled =
+    running || !ssh.host || !ssh.username;
+  const status = panel.querySelector(".connection-test-status");
+  let phase = "idle",
+    message = "";
+  if (r && !valid) {
+    phase = "stale";
+    message = "连接信息或配置位置已改变，请重新测试。";
+  } else if (running) {
+    phase = "running";
+    message = "正在测试连接";
+  } else if (r?.error) {
+    phase = "error";
+    message = r.error;
+  } else if (r?.result) {
+    const checks = r.result.checks || [];
+    const failed = checks.filter((item) => item.status !== "passed");
+    phase = checks.length && !failed.length ? "success" : "error";
+    message =
+      phase === "success"
+        ? "连接测试通过"
+        : failed
+            .map(
+              (item) =>
+                `${labels[item.id] || item.label || item.id}：${item.message}`,
+            )
+            .join("；") || "未获取到检查结果，请重试。";
+  }
+  updateStatusIndicator(status, phase, message);
+}
+export function updateConnectionTestPanels() {
+  document
+    .querySelectorAll(".connection-test-panel")
+    .forEach(updateConnectionTestPanel);
 }
 export async function inspectSaved() {
   const operation = await api("/api/inspections", {

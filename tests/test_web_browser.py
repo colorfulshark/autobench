@@ -254,7 +254,9 @@ def test_inspection_link_persists_return_to_config(browser_page, ui_server):
     assert_current_page(page, "config")
 
 
-def test_wizard_password_probe_files_save_run_and_cancel(browser_page, ui_server):
+def test_wizard_password_connection_test_manual_system_files_save_run_and_cancel(
+    browser_page, ui_server
+):
     page, server = browser_page, ui_server
     ready(page, server)
     assert page.locator("input:visible").count() == 4
@@ -267,10 +269,11 @@ def test_wizard_password_probe_files_save_run_and_cancel(browser_page, ui_server
     assert page.locator("#wizard-steps").is_visible()
     assert page.locator("details.advanced").first.evaluate("(e) => e.open") is False
     fill_connection(page, server)
-    page.get_by_role("button", name="连接并识别当前系统", exact=True).click()
-    page.get_by_role("button", name="添加当前系统", exact=True).wait_for()
-    page.get_by_role("button", name="添加当前系统", exact=True).click()
+    page.get_by_role("button", name="连接测试", exact=True).click()
+    page.locator('.connection-test-status[data-phase="success"]').wait_for()
     page.locator("#primary-action").click()
+    page.get_by_role("button", name="＋ 手动添加系统", exact=True).click()
+    page.locator("#input-machines-0-systems-0-boot_entry").fill("0001")
     page.locator("#primary-action").click()
     page.locator('[data-field-path=\'["benchmarks",0,"source_archive"]\']').get_by_role(
         "button", name="选择…"
@@ -340,24 +343,6 @@ def test_auth_switches_are_exclusive_and_show_only_selected_controls(browser_pag
     )
 
 
-def test_probe_selects_existing_system_by_boot_entry(browser_page, ui_server):
-    page, server = browser_page, ui_server
-    ready(page, server)
-    load_existing(page, server)
-    page.get_by_role("button", name="连接并识别当前系统", exact=True).click()
-    page.get_by_role("button", name="添加当前系统", exact=True).click()
-    page.locator("#input-machines-0-systems-0-boot_entry").wait_for()
-    page.locator("#input-machines-0-systems-0-id").fill("renamed")
-    page.get_by_role("button", name="连接并识别当前系统", exact=True).click()
-    page.get_by_role("button", name="更新此系统启动项", exact=True).click()
-    page.locator("#mode-yaml").click()
-    page.locator("#yaml-panel").wait_for()
-    systems = yaml.safe_load(page.locator("#yaml-editor").input_value())["machines"][0]["systems"]
-    assert len(systems) == 2
-    assert systems[0]["id"] == "renamed"
-    assert systems[0]["boot_entry"] == "0001"
-
-
 def test_existing_advanced_values_and_comments_survive_viewing_and_editing(browser_page, ui_server):
     page, server = browser_page, ui_server
     raw = server.config.model_dump(mode="json")
@@ -394,27 +379,176 @@ def test_existing_advanced_values_and_comments_survive_viewing_and_editing(brows
     assert yaml.safe_load(page.locator("#yaml-editor").input_value()) == expected
 
 
-def test_probe_result_becomes_stale_without_mutating_systems(browser_page, ui_server):
+def test_connection_test_spinner_success_and_configuration_invalidation(browser_page, ui_server):
     page, server = browser_page, ui_server
     ready(page, server)
     fill_connection(page, server)
     pending = []
     page.route("**/api/operations/*", lambda route: pending.append(route))
-    page.get_by_role("button", name="连接并识别当前系统", exact=True).click()
+    connect = page.get_by_role("button", name="连接测试", exact=True)
+    connect.click()
+    status = page.locator('.connection-test-status[data-phase="running"]')
+    status.wait_for()
+    assert connect.is_disabled()
+    icon = status.locator(".status-icon")
+    assert icon.evaluate("e => getComputedStyle(e).animationName") == "status-spin"
+    button_box, icon_box = connect.bounding_box(), icon.bounding_box()
+    assert icon_box["x"] >= button_box["x"] + button_box["width"]
+    assert button_box["y"] <= icon_box["y"] < button_box["y"] + button_box["height"]
     deadline = time.monotonic() + 5
     while not pending and time.monotonic() < deadline:
         page.wait_for_timeout(20)
-    assert pending
+    assert len(pending) == 1
     response = page.request.get(pending[0].request.url)
-    page.locator("#input-machines-0-ssh-host").fill("different-host")
+    assert set(response.json()["result"]) == {"checks"}
     pending[0].fulfill(response=response)
-    page.get_by_text("连接信息或配置位置已改变，请重新识别。", exact=True).first.wait_for()
-    assert page.get_by_role("button", name="添加当前系统", exact=True).count() == 0
+    status = page.locator('.connection-test-status[data-phase="success"]')
+    status.wait_for()
+    assert status.locator(".status-icon").text_content() == "✓"
+    assert status.evaluate("e => getComputedStyle(e).color") == "rgb(32, 101, 76)"
+    assert not connect.is_disabled()
+    assert page.locator(".connection-test-panel button").count() == 1
+    assert page.locator(".connection-test-panel > *").count() == 2
+    page.locator("#input-machines-0-ssh-host").fill("different-host")
+    page.locator('.connection-test-status[data-phase="stale"]').wait_for()
+    assert page.locator(".status-icon").count() == 0
+    page.locator("#input-machines-0-ssh-host").fill("localhost")
+    assert page.locator('.connection-test-status[data-phase="stale"]').count() == 1
     page.locator("#mode-yaml").click()
     page.locator("#yaml-panel").wait_for()
     assert (
         yaml.safe_load(page.locator("#yaml-editor").input_value())["machines"][0]["systems"] == []
     )
+    assert not (server.root / "autobench.yaml").exists()
+
+
+@pytest.mark.parametrize("width", [1440, 390])
+@pytest.mark.parametrize(
+    "failure_ids", [["connection"], ["uefi", "runtime", "dependencies", "disk"]]
+)
+def test_connection_test_failure_summary_and_retry(browser_page, ui_server, width, failure_ids):
+    page, server = browser_page, ui_server
+    page.set_viewport_size({"width": width, "height": 1000})
+    ready(page, server)
+    fill_connection(page, server)
+    checks = [
+        {"id": name, "status": "failed", "message": "具体失败原因：" + "x" * 180}
+        for name in failure_ids
+    ]
+    responses = [
+        {"status": "completed", "result": {"checks": checks}},
+        {"status": "running", "id": "retry"},
+    ]
+    page.route("**/api/connections/probe", lambda route: route.fulfill(json=responses.pop(0)))
+    pending = []
+    page.route("**/api/operations/retry", lambda route: pending.append(route))
+    connect = page.get_by_role("button", name="连接测试", exact=True)
+    connect.click()
+    status = page.locator('.connection-test-status[data-phase="error"]')
+    status.wait_for()
+    assert status.locator(".status-icon").text_content() == "✗"
+    assert status.evaluate("e => getComputedStyle(e).color") == "rgb(165, 62, 53)"
+    labels = {
+        "connection": "SSH 连接",
+        "uefi": "UEFI 启动项",
+        "runtime": "运行环境",
+        "dependencies": "基础命令",
+        "disk": "可用空间",
+    }
+    assert status.locator(".status-message").text_content() == "；".join(
+        f"{labels[item['id']]}：{item['message']}" for item in checks
+    )
+    button_box, status_box = connect.bounding_box(), status.bounding_box()
+    assert status_box["x"] > button_box["x"]
+    assert abs(status_box["y"] - button_box["y"]) < 1
+    assert status_box["y"] < button_box["y"] + button_box["height"]
+    assert button_box["y"] < status_box["y"] + status_box["height"]
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    connect.click()
+    page.locator('.connection-test-status[data-phase="running"]').wait_for()
+    assert page.locator(".status-message").count() == 0
+    deadline = time.monotonic() + 5
+    while not pending and time.monotonic() < deadline:
+        page.wait_for_timeout(20)
+    assert pending
+    pending[0].fulfill(
+        json={
+            "status": "completed",
+            "result": {"checks": [{"id": "connection", "status": "passed", "message": "通过"}]},
+        }
+    )
+    page.locator('.connection-test-status[data-phase="success"]').wait_for()
+    assert not connect.is_disabled()
+
+
+@pytest.mark.parametrize("failure", ["request", "network", "operation", "empty"])
+def test_connection_test_errors_are_inline(browser_page, ui_server, failure):
+    page, server = browser_page, ui_server
+    ready(page, server)
+    fill_connection(page, server)
+
+    def respond(route):
+        if failure == "request":
+            route.fulfill(status=422, json={"detail": "连接参数不合法"})
+        elif failure == "network":
+            route.abort()
+        elif failure == "operation":
+            route.fulfill(json={"status": "failed", "error": "连接操作执行失败"})
+        else:
+            route.fulfill(json={"status": "completed", "result": {"checks": []}})
+
+    page.route("**/api/connections/probe", respond)
+    page.get_by_role("button", name="连接测试", exact=True).click()
+    status = page.locator('.connection-test-status[data-phase="error"]')
+    status.wait_for()
+    expected = {
+        "request": "连接参数不合法",
+        "network": "无法连接 Web 服务，请检查服务是否仍在运行。",
+        "operation": "连接操作执行失败",
+        "empty": "未获取到检查结果，请重试。",
+    }
+    assert status.locator(".status-message").text_content() == expected[failure]
+    assert not page.get_by_role("button", name="连接测试", exact=True).is_disabled()
+
+
+@pytest.mark.parametrize("old_failure", [False, True])
+def test_connection_test_ignores_outdated_completion(browser_page, ui_server, old_failure):
+    page, server = browser_page, ui_server
+    ready(page, server)
+    fill_connection(page, server)
+    pending = []
+    page.route("**/api/connections/probe", lambda route: pending.append(route))
+    connect = page.get_by_role("button", name="连接测试", exact=True)
+    connect.click()
+    page.locator('.connection-test-status[data-phase="running"]').wait_for()
+    assert len(pending) == 1
+    page.locator("#input-machines-0-ssh-host").fill("different-host")
+    page.locator('.connection-test-status[data-phase="stale"]').wait_for()
+    connect.click()
+    page.locator('.connection-test-status[data-phase="running"]').wait_for()
+    assert len(pending) == 2
+    pending[1].fulfill(
+        json={
+            "status": "completed",
+            "result": {
+                "checks": [{"id": "connection", "status": "failed", "message": "新连接失败"}]
+            },
+        }
+    )
+    page.locator('.connection-test-status[data-phase="error"]').wait_for()
+    older = (
+        {"status": "failed", "error": "旧连接失败"}
+        if old_failure
+        else {
+            "status": "completed",
+            "result": {"checks": [{"id": "connection", "status": "passed", "message": "通过"}]},
+        }
+    )
+    with page.expect_response("**/api/connections/probe"):
+        pending[0].fulfill(json=older)
+    page.wait_for_timeout(50)
+    assert page.locator(".status-message").text_content() == "SSH 连接：新连接失败"
+    assert not connect.is_disabled()
 
 
 def test_saved_response_does_not_clear_newer_edits(browser_page, ui_server):
@@ -597,7 +731,9 @@ def test_host_key_switch_preserves_values_and_system_override(browser_page, ui_s
     assert data["machines"][0]["ssh"]["host_key_alias"] == "saved-alias"
 
 
-def test_ignore_host_key_allows_probe_and_validation_without_hosts(browser_page, ui_server):
+def test_ignore_host_key_allows_connection_test_and_validation_without_hosts(
+    browser_page, ui_server
+):
     page, server = browser_page, ui_server
     ready(page, server)
     page.locator("#input-machines-0-ssh-host").fill("localhost")
@@ -606,8 +742,8 @@ def test_ignore_host_key_allows_probe_and_validation_without_hosts(browser_page,
     page.get_by_text("高级连接设置", exact=True).click()
     page.locator("#input-machines-0-ssh-known_hosts").fill(str(server.root / "absent-hosts"))
     page.get_by_label("忽略主机密钥检查", exact=True).check()
-    page.get_by_role("button", name="连接并识别当前系统", exact=True).click()
-    page.get_by_text("连接成功，已忽略主机密钥校验", exact=True).wait_for()
+    page.get_by_role("button", name="连接测试", exact=True).click()
+    page.locator('.connection-test-status[data-phase="success"]').wait_for()
     assert not (server.root / "autobench.yaml").exists()
     data = server.config.model_dump(mode="json")
     data["machines"][0]["ssh"].update(verify_host_key=False, known_hosts="absent-hosts")
@@ -630,3 +766,161 @@ def test_ignore_host_key_allows_probe_and_validation_without_hosts(browser_page,
     page.locator("#inspection-result").get_by_text(
         "连接成功，已忽略主机密钥校验", exact=True
     ).wait_for()
+
+
+@pytest.mark.parametrize("width", [1440, 390])
+@pytest.mark.parametrize("value", ["0001", "", "00AB"])
+def test_boot_entry_identification_spinner_choices_and_selection(
+    browser_page, ui_server, width, value
+):
+    page, server = browser_page, ui_server
+    page.set_viewport_size({"width": width, "height": 1000})
+    ready(page, server)
+    load_existing(page, server)
+    page.locator(".system-nav").get_by_role("button", name="os1", exact=True).click()
+    assert page.get_by_role("button", name="连接测试", exact=True).count() == 0
+    entry = page.locator("#input-machines-0-systems-0-boot_entry")
+    pending = []
+    page.route("**/api/systems/boot-entries", lambda route: pending.append(route))
+    identify = page.get_by_role("button", name="自动识别", exact=True)
+    identify.click()
+    status = page.locator('.boot-entry-status[data-phase="running"]')
+    status.wait_for()
+    assert identify.is_disabled()
+    identify.evaluate("e => e.click()")
+    assert len(pending) == 1
+    assert (
+        status.locator(".status-icon").evaluate("e => getComputedStyle(e).animationName")
+        == "status-spin"
+    )
+    input_box, button_box, icon_box = (
+        entry.bounding_box(),
+        identify.bounding_box(),
+        status.locator(".status-icon").bounding_box(),
+    )
+    assert input_box["x"] < button_box["x"] < icon_box["x"]
+    assert button_box["y"] <= icon_box["y"] < button_box["y"] + button_box["height"]
+    entry.fill(value)
+    response = pending[0].fetch()
+    pending[0].fulfill(response=response)
+    status = page.locator('.boot-entry-status[data-phase="success"]')
+    status.wait_for()
+    assert status.locator(".status-icon").text_content() == "✓"
+    assert status.evaluate("e => getComputedStyle(e).color") == "rgb(32, 101, 76)"
+    assert entry.evaluate("e => e.tagName") == "SELECT"
+    assert entry.input_value() == value
+    assert entry.locator("option:enabled").evaluate_all("items => items.map(e => e.value)") == [
+        "0001",
+        "0002",
+    ]
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    entry.select_option("0002")
+    page.locator(".system-nav").get_by_role("button", name="os2", exact=True).click()
+    assert page.locator(".boot-entry-controls input").count() == 1
+    page.locator(".system-nav").get_by_role("button", name="os1", exact=True).click()
+    assert entry.evaluate("e => e.tagName") == "SELECT" and entry.input_value() == "0002"
+    page.locator("#mode-yaml").click()
+    page.locator("#yaml-panel").wait_for()
+    systems = yaml.safe_load(page.locator("#yaml-editor").input_value())["machines"][0]["systems"]
+    assert len(systems) == 2 and systems[0]["boot_entry"] == "0002"
+    assert (
+        yaml.safe_load(server.existing.read_text())["machines"][0]["systems"][0]["boot_entry"]
+        == "0001"
+    )
+
+
+@pytest.mark.parametrize("failure", ["network", "request", "operation", "empty"])
+def test_boot_entry_identification_failure_preserves_input_and_allows_retry(
+    browser_page, ui_server, failure
+):
+    page, server = browser_page, ui_server
+    page.set_viewport_size({"width": 390, "height": 1000})
+    ready(page, server)
+    load_existing(page, server)
+    page.locator(".system-nav").get_by_role("button", name="os1", exact=True).click()
+    entry = page.locator("#input-machines-0-systems-0-boot_entry")
+    entry.fill("00AB")
+    message = "启动项读取失败：" + "x" * 180
+
+    def fail(route):
+        if failure == "network":
+            route.abort()
+        elif failure == "request":
+            route.fulfill(status=422, json={"detail": message})
+        elif failure == "operation":
+            route.fulfill(json={"status": "failed", "error": message})
+        else:
+            route.fulfill(json={"status": "completed", "result": {"entries": []}})
+
+    page.route("**/api/systems/boot-entries", fail)
+    identify = page.get_by_role("button", name="自动识别", exact=True)
+    identify.click()
+    status = page.locator('.boot-entry-status[data-phase="error"]')
+    status.wait_for()
+    assert status.locator(".status-icon").text_content() == "✗"
+    assert status.evaluate("e => getComputedStyle(e).color") == "rgb(165, 62, 53)"
+    assert status.locator(".status-message").text_content()
+    assert entry.evaluate("e => e.tagName") == "INPUT" and entry.input_value() == "00AB"
+    assert not identify.is_disabled()
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.unroute("**/api/systems/boot-entries", fail)
+    identify.click()
+    page.locator('.boot-entry-status[data-phase="running"]').wait_for()
+    assert page.locator(".boot-entry-status .status-message").count() == 0
+    page.locator('.boot-entry-status[data-phase="success"]').wait_for()
+    assert entry.evaluate("e => e.tagName") == "SELECT" and entry.input_value() == "00AB"
+    page.route("**/api/systems/boot-entries", fail)
+    identify.click()
+    page.locator('.boot-entry-status[data-phase="error"]').wait_for()
+    assert entry.evaluate("e => e.tagName") == "SELECT" and entry.input_value() == "00AB"
+
+
+@pytest.mark.parametrize("old_failure", [False, True])
+def test_boot_entry_identification_uses_overrides_and_ignores_outdated_results(
+    browser_page, ui_server, old_failure
+):
+    page, server = browser_page, ui_server
+    ready(page, server)
+    load_existing(page, server)
+    page.locator(".system-nav").get_by_role("button", name="os1", exact=True).click()
+    page.get_by_label("单独设置此系统的连接地址或用户名", exact=True).check()
+    host = page.locator("#input-machines-0-systems-0-ssh-host")
+    host.fill("old-host")
+    entry = page.locator("#input-machines-0-systems-0-boot_entry")
+    entry.fill("00AB")
+    pending = []
+    page.route("**/api/systems/boot-entries", lambda route: pending.append(route))
+    identify = page.get_by_role("button", name="自动识别", exact=True)
+    identify.click()
+    page.locator('.boot-entry-status[data-phase="running"]').wait_for()
+    assert pending[0].request.post_data_json["ssh"]["host"] == "old-host"
+    host.fill("new-host")
+    page.locator('.boot-entry-status[data-phase="stale"]').wait_for()
+    assert not identify.is_disabled()
+    identify.click()
+    page.locator('.boot-entry-status[data-phase="running"]').wait_for()
+    assert pending[1].request.post_data_json["ssh"]["host"] == "new-host"
+    pending[1].fulfill(
+        json={
+            "status": "completed",
+            "result": {"entries": [{"id": "0002", "label": "New Linux", "active": True}]},
+        }
+    )
+    page.locator('.boot-entry-status[data-phase="success"]').wait_for()
+    older = (
+        {"status": "failed", "error": "旧连接失败"}
+        if old_failure
+        else {
+            "status": "completed",
+            "result": {"entries": [{"id": "0001", "label": "Old Linux", "active": True}]},
+        }
+    )
+    with page.expect_response("**/api/systems/boot-entries"):
+        pending[0].fulfill(json=older)
+    page.wait_for_timeout(50)
+    assert entry.locator("option:enabled").evaluate_all("items => items.map(e => e.value)") == [
+        "0002"
+    ]
+    host.fill("third-host")
+    page.locator('.boot-entry-status[data-phase="stale"]').wait_for()
+    assert entry.evaluate("e => e.tagName") == "INPUT" and entry.input_value() == "00AB"

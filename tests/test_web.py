@@ -490,7 +490,10 @@ def test_validation_errors_expose_paths_but_not_inputs(client, saved):
     assert syntax["errors"][0]["line"] == 2 and syntax["errors"][0]["column"] == 1
 
 
-def test_draft_probe_needs_only_connection_and_resolves_paths(client, tmp_path, monkeypatch):
+@pytest.mark.parametrize("failed_ids", [[], ["uefi"], ["runtime", "dependencies", "disk"]])
+def test_connection_test_returns_checks_and_resolves_paths(
+    client, tmp_path, monkeypatch, failed_ids
+):
     received = []
 
     class Client:
@@ -501,12 +504,17 @@ def test_draft_probe_needs_only_connection_and_resolves_paths(client, tmp_path, 
             return {
                 "hostname": "test-host",
                 "boot_id": "boot-1",
-                "efi": {"current": "0001", "entries": {"0001": {"active": True, "label": "Linux"}}},
+                "efi": {
+                    "current": "" if "uefi" in failed_ids else "0001",
+                    "entries": {"0001": {"active": True, "label": "Linux"}},
+                },
                 "python": [3, 11],
                 "systemd_available": True,
-                "systemd_version": 250,
-                "commands": {name: "/bin/" + name for name in requirements},
-                "disk_free": 10**10,
+                "systemd_version": 200 if "runtime" in failed_ids else 250,
+                "commands": {}
+                if "dependencies" in failed_ids
+                else {name: "/bin/" + name for name in requirements},
+                "disk_free": 0 if "disk" in failed_ids else 10**10,
             }
 
     monkeypatch.setattr("autobench.services.SSHClient", Client)
@@ -528,8 +536,11 @@ def test_draft_probe_needs_only_connection_and_resolves_paths(client, tmp_path, 
     response = client.post("/api/connections/probe", json=body)
     assert response.status_code == 202, response.text
     result = wait_operation(client, response.json())
-    assert result["probe"]["efi"]["current"] == "0001"
-    assert all(check["status"] == "passed" for check in result["checks"])
+    assert set(result) == {"checks"}
+    assert all(set(item) == {"id", "status", "message"} for item in result["checks"])
+    assert {item["id"] for item in result["checks"] if item["status"] == "failed"} == set(
+        failed_ids
+    )
     assert received[0][0].known_hosts == folder / "known_hosts"
     assert received[0][0].client_keys == [folder / "id_key"]
     assert received[0][1].connect_timeout == 2
@@ -537,7 +548,7 @@ def test_draft_probe_needs_only_connection_and_resolves_paths(client, tmp_path, 
     assert "secret-not-returned" not in client.get("/api/operations").text
 
 
-def test_draft_probe_reports_missing_trust_file_as_actionable_check(client):
+def test_connection_test_reports_missing_trust_file(client):
     result = client.post(
         "/api/connections/probe",
         json={
@@ -549,9 +560,15 @@ def test_draft_probe_reports_missing_trust_file_as_actionable_check(client):
             }
         },
     )
-    checks = wait_operation(client, result.json())["checks"]
-    assert checks[0]["code"] == "known_hosts_missing"
-    assert checks[0]["path"] == ["ssh", "known_hosts"]
+    result = wait_operation(client, result.json())
+    assert set(result) == {"checks"}
+    assert result["checks"] == [
+        {
+            "id": "connection",
+            "status": "failed",
+            "message": "主机密钥文件不存在，请在高级设置中选择已核验的 known_hosts 文件。",
+        }
+    ]
     assert "no-echo" not in client.get("/api/operations").text
 
 
@@ -603,7 +620,9 @@ def test_validation_ignores_hosts_only_for_unverified_connections(client, saved)
     assert result.json()["errors"][0]["path"] == ["machines", 0, "ssh", "client_keys", 0]
 
 
-def test_draft_probe_ignores_absent_hosts_and_reports_actual_mode(client, tmp_path, monkeypatch):
+def test_connection_test_ignores_absent_hosts_and_reports_actual_mode(
+    client, tmp_path, monkeypatch
+):
     from autobench.errors import AuthenticationFailed
 
     class Client:
@@ -637,7 +656,8 @@ def test_draft_probe_ignores_absent_hosts_and_reports_actual_mode(client, tmp_pa
     assert "no-echo" not in client.get("/api/operations").text
     body["ssh"]["client_keys"] = ["absent-key"]
     result = wait_operation(client, client.post("/api/connections/probe", json=body).json())
-    assert result["checks"][0]["code"] == "key_missing"
+    assert result["checks"][0]["status"] == "failed"
+    assert result["checks"][0]["message"] == "私钥文件不存在，请选择服务器上的私钥文件。"
 
     class BadPassword(Client):
         async def probe(self, requirements):
@@ -646,4 +666,132 @@ def test_draft_probe_ignores_absent_hosts_and_reports_actual_mode(client, tmp_pa
     monkeypatch.setattr("autobench.services.SSHClient", BadPassword)
     body["ssh"]["client_keys"] = []
     result = wait_operation(client, client.post("/api/connections/probe", json=body).json())
-    assert result["checks"][0]["code"] == "authentication"
+    assert result["checks"][0]["status"] == "failed"
+    assert result["checks"][0]["message"] == "SSH 认证失败，请检查用户名和所选认证方式。"
+
+
+@pytest.mark.parametrize("verify_host_key", [True, False])
+@pytest.mark.parametrize("password", ["entry-secret", "0001"])
+def test_boot_entries_returns_only_choices_and_uses_connection_settings(
+    client, tmp_path, monkeypatch, verify_host_key, password
+):
+    received = []
+
+    class Client:
+        def __init__(self, ssh, policy):
+            received.append((ssh, policy))
+
+        async def probe(self, requirements):
+            assert requirements == ["efibootmgr"]
+            return {
+                "efi": {
+                    "current": "0001",
+                    "raw": "raw output",
+                    "entries": {
+                        "0001": {"label": "Ubuntu", "active": True},
+                        "abcd": {"label": f"Firmware {password}", "active": False},
+                        "invalid": {"label": "Invalid", "active": True},
+                    },
+                },
+                "hostname": "private-host",
+                "systemd_available": False,
+                "disk_free": 0,
+            }
+
+    monkeypatch.setattr("autobench.services.SSHClient", Client)
+    folder = tmp_path / "configs"
+    folder.mkdir()
+    (folder / "known_hosts").touch()
+    (folder / "id_key").touch()
+    response = client.post(
+        "/api/systems/boot-entries",
+        json={
+            "ssh": {
+                "host": "system-host",
+                "username": "system-user",
+                "password": password,
+                "known_hosts": "known_hosts",
+                "client_keys": ["id_key"],
+                "verify_host_key": verify_host_key,
+                "proxy": {"host": "proxy-host", "port": 1080},
+            },
+            "config_path": "configs/new.yaml",
+            "connect_timeout": 3,
+        },
+    )
+    assert response.status_code == 202
+    result = wait_operation(client, response.json())
+    assert result == {
+        "entries": [
+            {"id": "0001", "label": "Ubuntu", "active": True},
+            {"id": "ABCD", "label": "Firmware ********", "active": False},
+        ]
+    }
+    ssh, policy = received[0]
+    assert (ssh.host, ssh.username, ssh.password) == ("system-host", "system-user", password)
+    assert ssh.known_hosts == folder / "known_hosts"
+    assert ssh.client_keys == [folder / "id_key"]
+    assert ssh.verify_host_key is verify_host_key
+    assert ssh.proxy.host == "proxy-host" and policy.connect_timeout == 3
+    assert not (folder / "new.yaml").exists()
+    assert client.get("/api/runs").json() == []
+    assert f"Firmware {password}" not in client.get("/api/operations").text
+
+
+@pytest.mark.parametrize(
+    "failure, expected",
+    [
+        ("known_hosts", "主机密钥文件不存在"),
+        ("key", "私钥文件不存在"),
+        ("authentication", "SSH 认证失败"),
+        ("connection", "连接失败"),
+        ("remote", "无法读取远端信息"),
+        ("empty", "未识别到 UEFI 启动项"),
+        ("efi", "sudo: a password is required ********"),
+    ],
+)
+def test_boot_entries_reports_failures_without_leaking_credentials(
+    client, tmp_path, monkeypatch, failure, expected
+):
+    from autobench.errors import AuthenticationFailed, ConnectionLost, RemoteError
+
+    class Client:
+        def __init__(self, ssh, policy):
+            pass
+
+        async def probe(self, requirements):
+            errors = {
+                "authentication": AuthenticationFailed,
+                "connection": ConnectionLost,
+                "remote": RemoteError,
+            }
+            if failure in errors:
+                raise errors[failure]("entry-secret")
+            return (
+                {"efi_error": "sudo: a password is required entry-secret"}
+                if failure == "efi"
+                else {}
+            )
+
+    monkeypatch.setattr("autobench.services.SSHClient", Client)
+    body = {
+        "ssh": {
+            "host": "localhost",
+            "username": "bench",
+            "password": "entry-secret",
+            "verify_host_key": failure == "known_hosts",
+            "known_hosts": "absent-hosts",
+            "client_keys": ["absent-key"] if failure == "key" else [],
+        }
+    }
+    response = client.post("/api/systems/boot-entries", json=body)
+    assert response.status_code == 202
+    operation = response.json()
+    deadline = time.monotonic() + 5
+    while operation["status"] == "running" and time.monotonic() < deadline:
+        time.sleep(0.01)
+        operation = client.get(f"/api/operations/{operation['id']}").json()
+    assert operation["status"] == "failed"
+    assert expected in operation["error"]
+    assert operation["result"] is None
+    assert "entry-secret" not in client.get("/api/operations").text

@@ -192,6 +192,9 @@ class Operations:
                 if kind == "connection_probe":
                     for item in result["checks"]:
                         item["message"] = self.clean(item["message"])
+                if kind == "boot_entries":
+                    for entry in result["entries"]:
+                        entry["label"] = self.clean(entry["label"])
                 record["result"] = result
                 record["status"] = "completed"
             except asyncio.CancelledError:
@@ -427,6 +430,15 @@ def create_app(
         resolve_ssh_paths(body.ssh, base)
         return operations.start(
             "connection_probe", lambda: services.probe_connection(body.ssh, body.connect_timeout)
+        )
+
+    @app.post("/api/systems/boot-entries", status_code=202)
+    async def boot_entries(body: ProbeBody):
+        remember(body.ssh.model_dump(mode="json"))
+        base = files.path(body.config_path).parent if body.config_path else files.base_dir
+        resolve_ssh_paths(body.ssh, base)
+        return operations.start(
+            "boot_entries", lambda: services.identify_boot_entries(body.ssh, body.connect_timeout)
         )
 
     @app.post("/api/config/parse")

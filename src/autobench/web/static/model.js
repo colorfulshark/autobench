@@ -163,7 +163,7 @@ export function configStateDir(document, target, baseDir) {
     ? value
     : (target ? pathParent(target) : baseDir) + "/" + value;
 }
-export function probeSignature(machine, system, target, timeout) {
+export function connectionTestSignature(machine, system, target, timeout) {
   return JSON.stringify({
     ssh: mergedSSH(machine, system),
     base: pathParent(target),

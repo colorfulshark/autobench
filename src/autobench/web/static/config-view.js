@@ -36,14 +36,9 @@ import {
   envEditor,
   table,
 } from "./ui.js";
+import { bootEntryField, updateBootEntryFields } from "./boot-entries.js";
 import { chooseFile } from "./files.js";
-import {
-  probePanel,
-  currentRecord,
-  fresh,
-  configureChecks,
-  updateProbePanels,
-} from "./checks.js";
+import { connectionTestPanel, updateConnectionTestPanels } from "./checks.js";
 const modes = new WeakMap(),
   credentials = new WeakMap();
 const steps = ["连接机器", "选择系统", "设置测试", "检查运行"];
@@ -385,7 +380,7 @@ function machineEditor(machine, index, { connectionOnly = false } = {}) {
     connectionFields(ssh, effective),
     authEditor(ssh, effective),
   );
-  panel.append(probePanel(machine));
+  panel.append(connectionTestPanel(machine));
   panel.append(
     advanced(
       "高级连接设置",
@@ -430,55 +425,14 @@ function removeMachine(index) {
   state.system = null;
   dirty(true);
 }
-function addSystem(machine, index, entry = null) {
+function addSystem(machine, index) {
   const list = asList(machine.systems),
     system = newSystem(list);
-  if (entry) system.boot_entry = entry;
   change(["machines", index, "systems"], [...list, system]);
   state.system = list.length;
   state.machine = index;
   emit(true);
 }
-function useCurrent(machine, probe, system = null) {
-  const index = machines().indexOf(machine);
-  if (index < 0) return;
-  const list = asList(machine.systems);
-  if (system) {
-    const i = list.indexOf(system);
-    if (i < 0) return;
-    change(["machines", index, "systems", i, "boot_entry"], probe.efi.current);
-    state.system = i;
-    emit(true);
-    return;
-  }
-  const existing = list.findIndex(
-    (s) => s.boot_entry?.toUpperCase() === probe.efi.current,
-  );
-  if (existing >= 0) {
-    state.system = existing;
-    state.machine = index;
-    show("此系统已在配置中，可在详情中查看。");
-    emit(true);
-    return;
-  }
-  const added = {
-    ...newSystem(list),
-    boot_entry: probe.efi.current,
-  };
-  change(["machines", index, "systems"], [...list, added]);
-  state.machine = index;
-  state.system = state.wizard && state.step === 0 ? null : list.length;
-  show("当前系统已加入配置。");
-  emit(true);
-}
-configureChecks({
-  use: useCurrent,
-  problem: (path) => {
-    const target = ["machines", state.machine];
-    if (state.system !== null) target.push("systems", state.system);
-    focusError({ path: [...target, ...path], message: "请检查此设置" });
-  },
-});
 function systemEditor(machine, mi, system, si) {
   const panel = node("section", "panel");
   const path = ["machines", mi, "systems", si],
@@ -486,37 +440,14 @@ function systemEditor(machine, mi, system, si) {
   const effective = mergedSSH(machine, system),
     raw = system.ssh || {};
   panel.append(heading("系统详情", "每个系统需要独立的 UEFI 启动项。"));
-  const record = currentRecord(machine);
-  const entries = fresh(machine) ? record?.result?.probe?.efi?.entries : null;
   const fields = row(
     field("系统标识", [...path, "id"], {
       required: true,
       help: "使用字母、数字、下划线或连字符，例如 ubuntu。",
     }),
-    field("启动项", [...path, "boot_entry"], {
-      placeholder: "例如 0001",
-      required: true,
-    }),
+    bootEntryField(machine, system, [...path, "boot_entry"]),
   );
   panel.append(fields);
-  if (entries)
-    panel.append(
-      select(
-        "从已识别的 UEFI 项选择",
-        [
-          ["", "选择启动项"],
-          ...Object.entries(entries).map(([id, item]) => [
-            id,
-            `Boot${id} · ${item.label}${item.active ? "" : "（未激活）"}`,
-          ]),
-        ],
-        system.boot_entry || "",
-        (selected) => {
-          if (selected) change([...path, "boot_entry"], selected, true);
-        },
-        "system-efi",
-      ),
-    );
   panel.append(
     node(
       "div",
@@ -580,7 +511,6 @@ function systemEditor(machine, mi, system, si) {
       "system-advanced-" + mi + "-" + si,
     ),
   );
-  panel.append(probePanel(machine, system));
   return panel;
 }
 function systemsBoard(machine, index) {
@@ -592,9 +522,7 @@ function systemsBoard(machine, index) {
   e.append(heading("参与测试的系统", "系统将按列表顺序依次测试。", actions));
   const systems = asList(machine.systems);
   if (!systems.length)
-    e.append(
-      empty("尚未添加系统", "可识别当前系统后添加，也可以手动填写其他系统。"),
-    );
+    e.append(empty("尚未添加系统", "请手动添加系统并填写对应的 UEFI 启动项。"));
   systems.forEach((system, si) => {
     const r = node("div", "system-item");
     r.append(
@@ -609,9 +537,7 @@ function systemsBoard(machine, index) {
         system.boot_entry ? "Boot" + system.boot_entry : "待填写启动项",
       ),
       pill(
-        /^[a-f\d]{4}$/i.test(system.boot_entry || "")
-          ? "已配置"
-          : "待完善",
+        /^[a-f\d]{4}$/i.test(system.boot_entry || "") ? "已配置" : "待完善",
         /^[a-f\d]{4}$/i.test(system.boot_entry || "") ? "success" : "warning",
       ),
     );
@@ -1096,7 +1022,7 @@ export function renderConfig() {
           ? machineEditor(m, state.machine, { connectionOnly: true })
           : empty(
               "添加第一台机器",
-              "填写连接信息后可以直接识别当前系统。",
+              "填写连接信息后可测试连接及运行环境。",
               button("添加机器", addMachine, "button primary"),
             ),
       );
@@ -1124,9 +1050,9 @@ export function renderConfig() {
           p.append(
             heading(
               "选择参与测试的系统",
-              "先添加当前系统，其他系统可手动添加。",
+              "手动添加系统并填写对应的 UEFI 启动项。",
             ),
-            probePanel(m),
+            connectionTestPanel(m),
             systemsBoard(m, state.machine),
           );
           container.append(p);
@@ -1325,5 +1251,6 @@ export async function focusError(error) {
   });
 }
 export function updateConfig() {
-  updateProbePanels();
+  updateConnectionTestPanels();
+  updateBootEntryFields();
 }

@@ -25,6 +25,34 @@ export async function perform(element, fn) {
     element.classList.remove("busy");
   }
 }
+export function statusIndicator(className) {
+  const status = node("span", "inline-status " + className);
+  status.setAttribute("role", "status");
+  status.setAttribute("aria-live", "polite");
+  status.setAttribute("aria-atomic", "true");
+  return status;
+}
+export function updateStatusIndicator(status, phase, message) {
+  if (
+    status.dataset.phase === phase &&
+    status.getAttribute("aria-label") === message
+  )
+    return;
+  status.dataset.phase = phase;
+  status.setAttribute("aria-label", message);
+  status.replaceChildren();
+  if (["running", "success", "error"].includes(phase)) {
+    const icon = node(
+      "span",
+      "status-icon",
+      phase === "success" ? "✓" : phase === "error" ? "✗" : "",
+    );
+    icon.setAttribute("aria-hidden", "true");
+    status.append(icon);
+  }
+  if (phase === "error" || phase === "stale")
+    status.append(node("span", "status-message", message));
+}
 export function pill(text, tone = "neutral") {
   const e = node("span", "pill", text);
   e.dataset.tone = tone;
