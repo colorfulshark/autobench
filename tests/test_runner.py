@@ -46,6 +46,40 @@ def test_remote_runner_is_python38_compatible():
     ast.parse(Path(rr.__file__).read_text(), feature_version=(3, 8))
 
 
+@pytest.mark.parametrize(
+    "args,tests",
+    [
+        ([], []),
+        (["-c", "1", "-i", "3"], ["execl"]),
+        (["-c", "1", "-i", "3"], ["execl", "shell"]),
+        (["-c", "1", "pipe"], []),
+        (["-c", "1", "pipe"], ["execl", "shell"]),
+    ],
+)
+def test_worker_receives_selected_tests(config, tmp_path, args, tests):
+    benchmark = config.benchmarks[0]
+    source_archive(
+        benchmark.source_archive,
+        run="""import json, os, pathlib, sys
+out = pathlib.Path(os.environ["UB_RESULTDIR"])
+(out / "argv.json").write_text(json.dumps(sys.argv[1:]))
+""",
+    )
+    benchmark.source_sha256 = None
+    benchmark.args = args
+    benchmark.tests = tests
+    inspect_archive(benchmark)
+    adapter = get_adapter("unixbench")
+    assert adapter.execution(benchmark)["run_argv"] == ["./Run", *args, *tests]
+    assert adapter.metadata(benchmark)["tests"] == tests
+    directory, _, _ = manifest_for(config, tmp_path)
+    process = launch(directory)
+    stdout, stderr = process.communicate(timeout=30)
+    assert process.returncode == 0, (stdout, stderr)
+    observed = json.loads((directory / "artifacts/results/argv.json").read_text())
+    assert observed == [*args, *tests]
+
+
 def test_probe_reads_only_boot_state_from_files(monkeypatch):
     def read_boot(path):
         assert path == Path("/proc/sys/kernel/random/boot_id")

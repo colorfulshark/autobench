@@ -56,6 +56,7 @@ benchmarks:
     # source_sha256: <64-character SHA-256>
     make_args: ["CC=gcc"]
     args: []  # E.g. ["-c", "1", "-c", "8", "-i", "10"]
+    tests: []  # E.g. ["execl", "shell"]; empty preserves args/default index behavior.
     repetitions: 1
     build_timeout: 1800
     timeout: 21600

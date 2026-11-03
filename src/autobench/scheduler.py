@@ -189,7 +189,12 @@ class Scheduler:
 
     def destination(self, job: dict) -> Path:
         return (
-            self.config.policy.output_dir / self.run_id / job["machine"] / job["system"] / job["id"]
+            self.config.policy.output_dir
+            / self.run_id
+            / job["machine"]
+            / job["system"]
+            / job["benchmark"]
+            / f"round-{job['repetition']:03d}"
         )
 
     async def collect(self, client, job: dict, remote: dict):

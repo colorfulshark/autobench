@@ -158,12 +158,25 @@ class Benchmark(Model):
     source_sha256: str | None = None
     make_args: list[StrictStr] = Field(default_factory=list)
     args: list[StrictStr] = Field(default_factory=list)
+    tests: list[StrictStr] = Field(default_factory=list)
     env: Environment = Field(default_factory=dict)
     repetitions: Annotated[int, Field(ge=1)] = 1
     build_timeout: PositiveSeconds = 1800
     timeout: PositiveSeconds = 21600
 
     _env = field_validator("env")(validate_env)
+
+    @field_validator("tests")
+    @classmethod
+    def test_names(cls, value):
+        if any(
+            not name or name.startswith("-") or "\x00" in name or any(c.isspace() for c in name)
+            for name in value
+        ):
+            raise ValueError(
+                "test names cannot be empty, contain whitespace or NUL, or start with '-'"
+            )
+        return value
 
     @field_validator("args", "make_args")
     @classmethod

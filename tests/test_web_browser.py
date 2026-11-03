@@ -6,6 +6,7 @@ import os
 import socket
 import threading
 import time
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -243,6 +244,44 @@ def test_missing_or_invalid_page_defaults_to_config_with_saved_run(
     assert_current_page(page, "config")
     page.locator('[data-page="runs"]').click()
     page.locator("#run-detail").get_by_text(run_id, exact=True).wait_for()
+
+
+def test_readable_run_names_and_nested_downloads(browser_page, ui_server, monkeypatch):
+    from autobench.storage import Store
+
+    page, server = browser_page, ui_server
+    name = "2026-11-03_14-30-25"
+    with monkeypatch.context() as patch:
+        patch.setattr("autobench.storage.time.strftime", lambda *args: name)
+        store = Store(server.config.policy.state_dir)
+        store.create(server.config)
+        run_id = store.create(server.config)
+        store.close()
+    relative = "server01/os1/ub/round-001/run.stdout"
+    result = server.config.policy.output_dir / run_id / relative
+    result.parent.mkdir(parents=True)
+    result.write_text("readable archive result\n")
+    ready(page, server)
+    page.locator('[data-page="runs"]').click()
+    page.locator("#runs-list").get_by_text(name, exact=True).wait_for()
+    row = page.locator("#runs-list tr").filter(has_text=run_id)
+    row.get_by_text(run_id, exact=True).wait_for()
+    row.get_by_role("button", name="查看详情", exact=True).click()
+    page.locator("#run-detail").get_by_text(run_id, exact=True).wait_for()
+    artifact = page.locator(".artifact-row").filter(has_text="run.stdout")
+    artifact.get_by_role("button", name="预览", exact=True).click()
+    page.locator("#preview-path").get_by_text(relative, exact=True).wait_for()
+    assert page.locator("#artifact-preview").text_content() == result.read_text()
+    page.locator("#close-preview").click()
+    with page.expect_download() as downloaded_file:
+        artifact.get_by_role("link", name="下载", exact=True).click()
+    assert downloaded_file.value.suggested_filename == "run.stdout"
+    assert Path(downloaded_file.value.path()).read_text() == result.read_text()
+    with page.expect_download() as downloaded_archive:
+        page.get_by_role("link", name="下载完整归档", exact=True).click()
+    assert downloaded_archive.value.suggested_filename == f"autobench-{run_id}.zip"
+    with zipfile.ZipFile(downloaded_archive.value.path()) as zipped:
+        assert zipped.read(f"{run_id}/{relative}") == result.read_bytes()
 
 
 def test_inspection_link_persists_return_to_config(browser_page, ui_server):
@@ -549,6 +588,77 @@ def test_connection_test_ignores_outdated_completion(browser_page, ui_server, ol
     page.wait_for_timeout(50)
     assert page.locator(".status-message").text_content() == "SSH 连接：新连接失败"
     assert not connect.is_disabled()
+
+
+def test_unixbench_tests_selection_save_reload_and_yaml_roundtrip(browser_page, ui_server):
+    page, server = browser_page, ui_server
+    raw = server.config.model_dump(mode="json")
+    raw["benchmarks"][0]["tests"] = ["custom-test"]
+    raw["benchmarks"][0]["args"] = ["-c", "1", "pipe"]
+    server.existing.write_text(yaml.safe_dump(raw))
+    ready(page, server)
+    load_existing(page, server)
+    page.get_by_role("button", name="性能测试", exact=True).click()
+    selected = page.get_by_role("list", name="已选测试项")
+    assert selected.text_content() == "custom-test×"
+    page.get_by_role("checkbox", name="execl · 程序替换吞吐量", exact=True).check()
+    page.get_by_role("checkbox", name="shell · shell1、shell8、shell16", exact=True).check()
+    page.get_by_label("其他测试名", exact=True).fill("hanoi")
+    page.get_by_role("button", name="添加测试项", exact=True).click()
+    page.get_by_role("button", name="移除测试项 custom-test", exact=True).click()
+    page.locator("#mode-yaml").click()
+    page.locator("#yaml-panel").wait_for()
+    result = yaml.safe_load(page.locator("#yaml-editor").input_value())
+    assert result["benchmarks"][0]["tests"] == ["execl", "shell", "hanoi"]
+    assert result["benchmarks"][0]["args"] == ["-c", "1", "pipe"]
+    page.locator("#mode-form").click()
+    page.get_by_role("checkbox", name="execl · 程序替换吞吐量", exact=True).wait_for()
+    assert page.get_by_role("checkbox", name="execl · 程序替换吞吐量").is_checked()
+    page.locator("#secondary-action").click()
+    page.wait_for_function("() => document.querySelector('#save-state').textContent === '已保存'")
+    assert yaml.safe_load(server.existing.read_text())["benchmarks"][0]["tests"] == [
+        "execl",
+        "shell",
+        "hanoi",
+    ]
+    page.reload()
+    page.locator("#input-machines-0-ssh-host").wait_for()
+    page.get_by_role("button", name="性能测试", exact=True).click()
+    assert page.get_by_role("checkbox", name="shell · shell1、shell8、shell16").is_checked()
+    assert page.get_by_role("list", name="已选测试项").text_content() == "execl×shell×hanoi×"
+    page.set_viewport_size({"width": 390, "height": 844})
+    assert page.evaluate("() => document.documentElement.scrollWidth <= innerWidth")
+    page.get_by_role("checkbox", name="execl · 程序替换吞吐量", exact=True).uncheck()
+    page.get_by_role("button", name="移除测试项 hanoi", exact=True).click()
+    page.get_by_role("button", name="清空选择", exact=True).click()
+    assert page.get_by_role("list", name="已选测试项").count() == 0
+    page.locator("#mode-yaml").click()
+    page.locator("#yaml-panel").wait_for()
+    result = yaml.safe_load(page.locator("#yaml-editor").input_value())
+    assert result["benchmarks"][0]["tests"] == []
+    assert result["benchmarks"][0]["args"] == ["-c", "1", "pipe"]
+
+
+def test_unixbench_tests_legacy_defaults_and_invalid_custom_name(browser_page, ui_server):
+    page, server = browser_page, ui_server
+    raw = server.config.model_dump(mode="json")
+    raw["benchmarks"][0].pop("tests")
+    server.existing.write_text(yaml.safe_dump(raw))
+    ready(page, server)
+    load_existing(page, server)
+    page.get_by_role("button", name="性能测试", exact=True).click()
+    assert page.locator(".unixbench-tests input:checked").count() == 0
+    custom = page.get_by_label("其他测试名", exact=True)
+    for invalid in ("", "-c", "execl shell"):
+        custom.fill(invalid)
+        page.get_by_role("button", name="添加测试项", exact=True).click()
+        assert not custom.evaluate("input => input.validity.valid")
+        assert page.get_by_role("list", name="已选测试项").count() == 0
+    page.locator("#mode-yaml").click()
+    page.locator("#yaml-panel").wait_for()
+    assert (
+        "tests" not in yaml.safe_load(page.locator("#yaml-editor").input_value())["benchmarks"][0]
+    )
 
 
 def test_saved_response_does_not_clear_newer_edits(browser_page, ui_server):

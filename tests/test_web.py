@@ -177,6 +177,7 @@ def test_cli_history_status_events_and_downloads_are_safe(client, config, tmp_pa
     config.machines[0].ssh.password = "private-login-secret"
     store = Store(config.policy.state_dir)
     run_id = store.create(config)
+    assert len(run_id) == 19
     root = config.policy.output_dir / run_id
     store.snapshot(run_id, root)
     store.event(run_id, None, "first event private-login-secret")
@@ -213,11 +214,65 @@ def test_cli_history_status_events_and_downloads_are_safe(client, config, tmp_pa
         assert client.get(url, params={"path": path}).status_code == 403
     archive = client.get(f"/api/runs/{run_id}/archive")
     assert archive.status_code == 200
+    assert f"autobench-{run_id}.zip" in archive.headers["content-disposition"]
     with zipfile.ZipFile(io.BytesIO(archive.content)) as zipped:
         assert zipped.read(f"{run_id}/run.stdout") == b"benchmark finished\n"
         assert "private-login-secret" not in zipped.read(f"{run_id}/config.json").decode()
         assert not any(
             "linked-dir" in name or name.endswith("/outside") for name in zipped.namelist()
+        )
+
+
+def test_suffixed_run_names_support_nested_artifacts(client, config, monkeypatch):
+    name = "2026-11-03_14-30-25"
+    with monkeypatch.context() as patch:
+        patch.setattr("autobench.storage.time.strftime", lambda *args: name)
+        store = Store(config.policy.state_dir)
+        store.create(config)
+        run_id = store.create(config)
+        store.close()
+    assert run_id == f"{name}-02"
+    relative = "host1/os1/ub/round-001/run.stdout"
+    path = config.policy.output_dir / run_id / relative
+    path.parent.mkdir(parents=True)
+    path.write_text("nested benchmark result\n")
+    url = f"/api/runs/{run_id}"
+    assert client.get(url).json()["run_id"] == run_id
+    assert client.get(f"{url}/events").json() == []
+    assert client.get(f"{url}/artifacts").json() == [
+        {"path": relative, "size": path.stat().st_size}
+    ]
+    assert client.get(f"{url}/artifact", params={"path": relative}).text == path.read_text()
+    assert (
+        client.get(f"{url}/artifact", params={"path": relative, "preview": True}).json()["text"]
+        == path.read_text()
+    )
+    archive = client.get(f"{url}/archive")
+    assert f"autobench-{run_id}.zip" in archive.headers["content-disposition"]
+    with zipfile.ZipFile(io.BytesIO(archive.content)) as zipped:
+        assert zipped.read(f"{run_id}/{relative}") == path.read_bytes()
+
+
+@pytest.mark.parametrize(
+    "run_id",
+    [
+        "a" * 32,
+        "2026-11-03_14-30-25-01",
+        "2026-11-03_14-30-25-002",
+        "2026-11-03_14-30-25..",
+        "2026-11-03_14-30-25%5C..%5Csecret",
+        "2026-11-03_14-30-25%0A",
+    ],
+)
+def test_run_name_validation_rejects_unsafe_or_unsupported_names(client, config, run_id):
+    for suffix in ("", "/events", "/artifacts", "/artifact", "/archive"):
+        assert client.get(f"/api/runs/{run_id}{suffix}").status_code == 422
+    for action in ("resume", "fetch", "cancel"):
+        assert (
+            client.post(
+                f"/api/runs/{run_id}/{action}", json={"state_dir": str(config.policy.state_dir)}
+            ).status_code
+            == 422
         )
 
 
@@ -450,6 +505,7 @@ def test_replaced_output_directory_cannot_redirect_artifact_access(client, confi
     root = outside / run_id
     root.mkdir(parents=True)
     (root / "private.txt").write_text("outside the frozen output directory")
+    config.policy.output_dir.rename(tmp_path / "original-results")
     config.policy.output_dir.symlink_to(outside, target_is_directory=True)
     assert client.get(f"/api/runs/{run_id}/artifacts").status_code == 403
     assert client.get(f"/api/runs/{run_id}/archive").status_code == 403

@@ -172,6 +172,9 @@ async def test_controller_crash_then_frozen_resume(config):
     world.crash_controller = True
     assert await execute(store, run_id, world) == "paused"
     original = world.starts[0]
+    destinations = {
+        job["id"]: Scheduler(store, run_id).destination(job) for job in store.jobs(run_id)
+    }
     # Neither modifying the caller's config nor reconstructing the scheduler changes the manifest.
     config.benchmarks[0].env["SHARED"] = "new-value"
     store.close()
@@ -179,6 +182,63 @@ async def test_controller_crash_then_frozen_resume(config):
     assert await execute(store, run_id, world) == "succeeded"
     assert world.starts.count(original) == 1
     assert world.jobs[original]["manifest"]["benchmark_env"]["SHARED"] == "benchmark"
+    assert {job["id"] for job in store.jobs(run_id)} == set(destinations)
+    for job in store.jobs(run_id):
+        assert job["details"]["output"] == str(destinations[job["id"]])
+        assert destinations[job["id"]].is_dir()
+    store.close()
+
+
+async def test_readable_archives_separate_machines_systems_benchmarks_and_rounds(config):
+    other_machine = config.machines[0].model_copy(deep=True, update={"id": "host2"})
+    config.machines.append(other_machine)
+    config.benchmarks[0].repetitions = 2
+    config.benchmarks.append(config.benchmarks[0].model_copy(deep=True, update={"id": "ub2"}))
+    store, run_id, world = setup(config)
+    assert await execute(store, run_id, world) == "succeeded"
+    root = config.policy.output_dir / run_id
+    expected = {
+        root / machine / system / benchmark / f"round-{repetition:03d}"
+        for machine in ("host1", "host2")
+        for system in ("os1", "os2")
+        for benchmark in ("ub", "ub2")
+        for repetition in (1, 2)
+    }
+    assert {path.parent for path in root.rglob("archive-manifest.json")} == expected
+    assert {job["details"]["output"] for job in store.jobs(run_id)} == {
+        str(path) for path in expected
+    }
+    store.close()
+
+
+def test_round_names_expand_past_three_digits(config):
+    config.benchmarks[0].repetitions = 1000
+    store, run_id, _ = setup(config)
+    scheduler = Scheduler(store, run_id)
+    jobs = store.jobs(run_id)
+    assert scheduler.destination(jobs[998]).name == "round-999"
+    assert scheduler.destination(jobs[999]).name == "round-1000"
+    assert len({scheduler.destination(job) for job in jobs}) == 2000
+    store.close()
+
+
+async def test_fetch_after_reopening_collects_to_original_readable_path(config):
+    store, run_id, world = setup(config)
+    world.crash_controller = True
+    assert await execute(store, run_id, world) == "paused"
+    job = store.jobs(run_id)[0]
+    job_id = job["id"]
+    destination = Scheduler(store, run_id).destination(job)
+    world.jobs[job_id].update(phase="terminal", outcome="succeeded")
+    original_starts = world.starts.copy()
+    store.close()
+    store = Store(config.policy.state_dir)
+    assert await execute(store, run_id, world, fetch_only=True) == "paused"
+    assert store.job(job_id)["details"]["output"] == str(destination)
+    assert destination == config.policy.output_dir / run_id / "host1/os1/ub/round-001"
+    assert destination.is_dir()
+    assert world.starts == original_starts
+    assert ("host1", "switch") not in world.events
     store.close()
 
 

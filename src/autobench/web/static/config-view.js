@@ -39,6 +39,7 @@ import {
 import { bootEntryField, updateBootEntryFields } from "./boot-entries.js";
 import { chooseFile } from "./files.js";
 import { connectionTestPanel, updateConnectionTestPanels } from "./checks.js";
+import { unixbenchTestsEditor } from "./unixbench-tests.js";
 const modes = new WeakMap(),
   credentials = new WeakMap();
 const steps = ["连接机器", "选择系统", "设置测试", "检查运行"];
@@ -585,7 +586,7 @@ function benchmarkEditor(b, index) {
   panel.append(
     heading(
       "UnixBench 测试",
-      "默认执行标准完整测试，使用每个系统各自编译的程序。",
+      "可选择测试项；默认执行标准 index 测试，使用每个系统各自编译的程序。",
     ),
   );
   panel.append(
@@ -605,6 +606,7 @@ function benchmarkEditor(b, index) {
     ),
   );
   panel.append(
+    unixbenchTestsEditor([...path, "tests"]),
     field("结果输出目录", ["policy", "output_dir"], {
       fallback: "results",
       file: "directory",
@@ -1184,6 +1186,7 @@ const fieldNames = {
   id: "标识",
   boot_entry: "启动项",
   source_archive: "源码包",
+  tests: "测试项",
   repetitions: "重复次数",
 };
 export function errorLabel(error) {

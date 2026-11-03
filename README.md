@@ -124,6 +124,7 @@ benchmarks:
     source_archive: ./sources/unixbench.tar.gz
     make_args: ["CC=gcc", "CFLAGS=-O2"]
     args: ["-c", "1", "-c", "8"]
+    tests: []  # 可选，例如 ["execl", "shell"]
     env:
       MALLOC_ARENA_MAX: "4"
       OMP_NUM_THREADS: "8"
@@ -131,6 +132,17 @@ benchmarks:
 ```
 
 优先级为 **systemd 服务基础环境 → 系统 `env` → 测试 `env`**。上述测试收到的 `MALLOC_ARENA_MAX` 为 `4`。基础环境来自 systemd 托管服务，不是交互式 SSH 登录 Shell；不会自动读取 `.bashrc`、激活 virtualenv 或继承本地控制端环境。
+
+通过 `tests` 指定要运行的 UnixBench 测试项，支持单项、多个测试项和原生组合名。例如：
+
+```yaml
+tests: ["execl", "shell"]
+args: ["-c", "1", "-i", "3"]
+```
+
+执行命令为 `./Run -c 1 -i 3 execl shell`，其中 `shell` 包含 `shell1`、`shell8`、`shell16`。也可分别指定这些子项，或使用 `fs`、`system`、`index` 等组合。多个测试项在同一个任务中执行，不拆分调度任务。测试名必须是非空字符串，不能包含空白、NUL 或以 `-` 开头；具体名称是否受支持由源码包内的 UnixBench 判断。
+
+`tests` 缺省或为空时保持原有行为。`args` 中已有的测试名继续生效，`tests` 追加在 `args` 后面；两处均未指定测试名时运行默认的标准 `index` 测试。清空网页选择仅清空 `tests`，不会移除 `args` 中的测试名。
 
 变量名须匹配 `[A-Za-z_][A-Za-z0-9_]*`，值须是字符串；数字和布尔值需要加引号。允许空字符串，不允许 NUL。值不执行 Shell 展开：`$PATH`、`${VAR}`、`$(command)`、反引号均为原样字符。需要扩展 PATH 时请填写完整路径。
 
@@ -140,15 +152,15 @@ benchmarks:
 
 ## 状态、恢复和取消
 
-`run` 在开始时打印 run ID 和状态目录；本地默认状态目录为 `~/.local/state/autobench`。如果配置了其他 `state_dir`，后续命令需提供同一个 `--state-dir`。
+`run` 在开始时打印运行名称（Run ID）和状态目录；运行名称如 `2026-11-03_14-30-25`。本地默认状态目录为 `~/.local/state/autobench`。如果配置了其他 `state_dir`，后续命令需提供同一个 `--state-dir`。
 
 ```bash
-autobench status RUN_ID
-autobench resume RUN_ID
-autobench fetch RUN_ID
-autobench cancel RUN_ID
+autobench status 2026-11-03_14-30-25
+autobench resume 2026-11-03_14-30-25
+autobench fetch 2026-11-03_14-30-25
+autobench cancel 2026-11-03_14-30-25
 # 自定义状态目录：
-autobench resume RUN_ID --state-dir /path/to/state
+autobench resume 2026-11-03_14-30-25 --state-dir /path/to/state
 ```
 
 - SSH 断线不会停止 systemd 托管的编译或测试。收到启动响应前断线，控制端查询原 job 的状态，不创建新任务。
@@ -167,10 +179,10 @@ autobench resume RUN_ID --state-dir /path/to/state
 ## 结果目录
 
 ```text
-results/RUN_ID/
+results/2026-11-03_14-30-25/
   config.json
   events.json
-  MACHINE/SYSTEM/JOB_ID/
+  server01/kylin/unixbench/round-001/
     results/                    # UnixBench 原始报告
     build.stdout / build.stderr
     run.stdout / run.stderr
@@ -182,6 +194,10 @@ results/RUN_ID/
     task.json                   # 执行清单、时间、退出码和状态
     archive-manifest.json       # 文件大小与 SHA-256
 ```
+
+运行名称采用控制端本地时间，格式为 `YYYY-MM-DD_HH-mm-ss`；同秒重名时依次追加 `-02`、`-03` 等序号。创建时检查状态库，并原子创建结果根目录预留名称，避免覆盖已有结果。运行名称创建后固定，恢复时不重新生成。
+
+归档路径为 `<运行名称>/<机器 ID>/<系统 ID>/<测试 ID>/round-NNN/`，三个 ID 分别取自配置的 `machine.id`、`system.id`、`benchmark.id`。轮次从 `round-001` 开始，至少补齐三位，超过 999 时自然扩展。同一个任务选择的多个 UnixBench 子测试归入同一轮次目录；下载未完成时使用相邻的 `round-NNN.partial/`。内部 Job ID 仍使用 UUID，用于远端执行和恢复，不作为结果目录名。本版本不迁移旧数据，使用前请自行清理旧状态库和旧结果目录。
 
 可选系统信息采集失败会记录到 `errors`，不丢弃性能结果。第一版不解析 UnixBench 分数。`BenchmarkAdapter` 提供依赖、执行命令和工具元信息接口；SSH、环境合并、生命周期和归档由公共执行层管理。
 
@@ -230,7 +246,7 @@ autobench web --host ::
 - **机器连接**：地址、端口和用户名紧凑排列。默认选择密码认证；密钥认证可选择服务器私钥文件或 SSH Agent。切换单一认证方式会清理冲突项，现有混合认证保留为“自定义认证（高级）”。主机密钥文件、代理、远端目录等位于折叠的高级设置。
 - **连接测试**：填写连接信息后，可在保存前测试 SSH、UEFI、运行环境、基础命令和可用空间。按钮右侧在检测中显示旋转图标，全部通过后显示绿色对号；失败时显示红叉及所有失败项目和原因。修改连接或路径基准后需重新测试。系统手动添加。
 - **系统设置**：启动项可手动填写，也可点击输入框右侧的“自动识别”。识别中显示旋转图标，成功后显示绿色对号并将输入框切换为启动项下拉框，选择后更新配置；失败时显示红叉及原因，保留原控件和原值。识别使用此系统生效的连接设置，只读取启动项。默认沿用机器连接和认证，只在有差异时启用对应的“单独设置”。恢复继承只移除该组覆盖字段，不影响其他覆盖；代理可分别选择继承、直连或指定代理。系统顺序可调整。
-- **性能测试**：常用项为源码包、重复次数、结果目录；默认执行标准完整 UnixBench。编译和运行参数按独立 argv 项编辑，不进行 Shell 拆分；环境变量、源码校验和超时位于高级设置。
+- **性能测试**：常用项为源码包、测试项、重复次数、结果目录；可多选系统测试项及组合，也可手动添加其他测试名。未指定测试名时执行标准完整 `index` 测试；`shell` 组合包含 `shell1`、`shell8`、`shell16`。编译和运行参数按独立 argv 项编辑，不进行 Shell 拆分；环境变量、源码校验和超时位于高级设置。
 - **文件选择**：YAML、源码包、密钥及目录均可通过服务器文件选择器选择，也可手动输入路径。这里的路径属于运行 Web 服务的服务器；不提供源码包上传。浏览器可导入 YAML 内容，再指定服务器上的保存位置。
 
 文件操作菜单提供打开、导入、保存草稿、另存为和下载 YAML。向导可随时进入完整工作台或 YAML 源码。仅展开设置不会补写默认值；未修改的高级值、部分继承、显式 `null`、空列表和空字符串保留原语义。直接编辑并保存 YAML 保留注释；修改可视化配置后重新生成 YAML。错误摘要可定位到对应字段，必要时自动展开高级设置。

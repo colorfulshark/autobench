@@ -1,6 +1,7 @@
 import io
 import json
 import tarfile
+from contextlib import closing
 
 import pytest
 import yaml
@@ -17,6 +18,55 @@ from autobench.config import (
     merged_env,
 )
 from autobench.storage import Store
+
+
+@pytest.mark.parametrize("tests", [[], ["execl"], ["execl", "shell"], ["C", "custom-test"]])
+def test_unixbench_test_selection(archive, tests):
+    benchmark = Benchmark(id="test", source_archive=archive, tests=tests)
+    assert benchmark.tests == tests
+    assert Benchmark(id="legacy", source_archive=archive).tests == []
+
+
+@pytest.mark.parametrize(
+    "tests",
+    [
+        "execl",
+        None,
+        [1],
+        [True],
+        [None],
+        [""],
+        ["execl shell"],
+        ["execl\tshell"],
+        ["execl\nshell"],
+        ["execl\u3000shell"],
+        ["execl\x00"],
+        ["-c"],
+    ],
+)
+def test_reject_invalid_test_selection(archive, tests):
+    with pytest.raises(ValidationError):
+        Benchmark(id="test", source_archive=archive, tests=tests)
+
+
+def test_test_selection_snapshot_and_legacy_restore(config):
+    config.benchmarks[0].tests = ["execl", "shell"]
+    with closing(Store(config.policy.state_dir)) as store:
+        run_id = store.create(config)
+        original_jobs = store.jobs(run_id)
+    config.benchmarks[0].tests.append("hanoi")
+    with closing(Store(config.policy.state_dir)) as store:
+        assert store.config(run_id).benchmarks[0].tests == ["execl", "shell"]
+        assert len(store.jobs(run_id)) == len(config.machines[0].systems)
+        assert store.jobs(run_id) == original_jobs
+        store.snapshot(run_id, config.policy.output_dir)
+        snapshot = json.loads((config.policy.output_dir / "config.json").read_text())
+        assert snapshot["benchmarks"][0]["tests"] == ["execl", "shell"]
+        legacy = json.loads(store.run(run_id)["config"])
+        del legacy["benchmarks"][0]["tests"]
+        with store.db:
+            store.db.execute("UPDATE runs SET config=? WHERE id=?", (json.dumps(legacy), run_id))
+        assert store.config(run_id).benchmarks[0].tests == []
 
 
 @pytest.mark.parametrize(

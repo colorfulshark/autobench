@@ -15,7 +15,7 @@ class UnixBench:
     def execution(self, benchmark: Benchmark) -> dict:
         return {
             "build_argv": ["make", *benchmark.make_args],
-            "run_argv": ["./Run", *benchmark.args],
+            "run_argv": ["./Run", *benchmark.args, *benchmark.tests],
             "source_subdir": benchmark.source_subdir,
             "build_timeout": benchmark.build_timeout,
             "timeout": benchmark.timeout,
@@ -32,6 +32,7 @@ class UnixBench:
             "source_sha256": benchmark.source_sha256,
             "make_args": benchmark.make_args,
             "args": benchmark.args,
+            "tests": benchmark.tests,
             "warnings": [
                 "UnixBench may overwrite LANG internally; environment.json records "
                 "the launch environment. Source code is not modified."

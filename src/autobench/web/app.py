@@ -34,11 +34,11 @@ from autobench.config import (
     resolve_ssh_paths,
 )
 from autobench.errors import AutoBenchError, ConfigurationFieldError
-from autobench.storage import Store
+from autobench.storage import RUN_ID_PATTERN, Store
 from autobench.web.files import ConfigFiles, ConflictError, parse_document
 
 STATIC = Path(__file__).with_name("static")
-RunID = Annotated[str, Field(pattern=r"^[0-9a-f]{32}$")]
+RunID = Annotated[str, Field(pattern=RUN_ID_PATTERN)]
 
 TEMPLATE = """version: 1
 policy:

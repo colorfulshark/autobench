@@ -265,9 +265,9 @@ async def test_real_sftp_disconnect_resume_and_atomic_commit(ssh_server, tmp_pat
     data = b"0123456789abcdef" * 150000
     source = remote / "artifacts/data.bin"
     source.write_bytes(data)
-    destination = tmp_path / "downloaded"
-    partial = tmp_path / "downloaded.partial"
-    partial.mkdir()
+    destination = tmp_path / "2026-11-03_14-30-25/host1/os1/ub/round-001"
+    partial = destination.with_name("round-001.partial")
+    partial.mkdir(parents=True)
     (partial / "data.bin").write_bytes(data[:65536])
     fault["drop"] = True
     inventory = inventory_for(source)

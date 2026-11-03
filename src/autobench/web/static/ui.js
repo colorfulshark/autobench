@@ -423,5 +423,7 @@ export function friendlyError(error) {
     return "UB_RESULTDIR 由工具管理，请移除此环境变量";
   if (error.message?.includes("boot_entry"))
     return "启动项需要是四位十六进制字符串";
+  if (error.message?.includes("test names cannot"))
+    return "测试名不能为空、包含空白或 NUL，也不能以 - 开头";
   return error.message;
 }

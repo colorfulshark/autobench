@@ -189,7 +189,7 @@ function renderList() {
         const title = node("div");
         title.append(
           node("strong", "", date(run.created)),
-          node("div", "secondary mono", run.id.slice(0, 12) + "…"),
+          node("div", "secondary mono", run.id),
         );
         return [
           title,

@@ -43,6 +43,24 @@ def test_unknown_run_has_clean_error(tmp_path):
     assert result.exit_code == 1 and "unknown run" in result.output
 
 
+@pytest.mark.parametrize("command", ["resume", "fetch", "cancel"])
+def test_control_commands_pass_readable_run_names(config, monkeypatch, command):
+    store = Store(config.policy.state_dir)
+    run_id = store.create(config)
+    store.close()
+    calls = []
+
+    async def execute(name, state_dir, **options):
+        calls.append((name, state_dir, options["fetch_only"], options["cancel"]))
+        return "cancelled" if command == "cancel" else "succeeded"
+
+    monkeypatch.setattr("autobench.services.execute_run", execute)
+    result = runner.invoke(app, [command, run_id, "--state-dir", str(config.policy.state_dir)])
+    assert result.exit_code == 0, result.output
+    assert run_id in result.output
+    assert calls == [(run_id, config.policy.state_dir, command == "fetch", command == "cancel")]
+
+
 def test_web_command_launches_loopback_with_startup_options(tmp_path, monkeypatch):
     import uvicorn
 

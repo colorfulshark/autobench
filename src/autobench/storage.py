@@ -7,12 +7,17 @@ import os
 import sqlite3
 import time
 import uuid
+from contextlib import suppress
 from pathlib import Path
 
 from autobench.config import Config
 from autobench.errors import AutoBenchError
 
 TERMINAL = {"succeeded", "failed", "interrupted", "cancelled"}
+RUN_ID_PATTERN = (
+    r"^[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{2}-[0-9]{2}-[0-9]{2}"
+    r"(?:-(?:0[2-9]|[1-9][0-9]+))?$"
+)
 
 
 def private_dir(path: Path) -> Path:
@@ -71,39 +76,65 @@ class Store:
         self.db.close()
 
     def create(self, config: Config) -> str:
-        run_id = uuid.uuid4().hex
         now = time.time()
-        with self.db:
-            self.db.execute(
-                "INSERT INTO runs VALUES (?, ?, 'pending', 0, ?, ?)",
-                (run_id, config.model_dump_json(), now, now),
-            )
-            ordinal = 0
-            for machine in config.machines:
-                for system in machine.systems:
-                    for benchmark in config.benchmarks:
-                        for repetition in range(1, benchmark.repetitions + 1):
-                            job_id = uuid.uuid5(
-                                uuid.UUID(run_id),
-                                f"{machine.id}/{system.id}/{benchmark.id}/{repetition}",
-                            ).hex
-                            self.db.execute(
-                                "INSERT INTO jobs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                                (
-                                    job_id,
-                                    run_id,
-                                    machine.id,
-                                    system.id,
-                                    benchmark.id,
-                                    repetition,
-                                    ordinal,
-                                    "pending",
-                                    "{}",
-                                    now,
-                                ),
-                            )
-                            ordinal += 1
+        name = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime(now))
+        frozen = config.model_dump_json()
+        output = private_dir(config.policy.output_dir)
+        root = None
+        try:
+            with self.db:
+                # Serialize name allocation within this state database. mkdir also
+                # reserves names across controllers sharing only the output directory.
+                self.db.execute("BEGIN IMMEDIATE")
+                sequence = 1
+                while True:
+                    run_id = name if sequence == 1 else f"{name}-{sequence:02d}"
+                    if self.db.execute("SELECT 1 FROM runs WHERE id=?", (run_id,)).fetchone():
+                        sequence += 1
+                        continue
+                    candidate = output / run_id
+                    try:
+                        candidate.mkdir(mode=0o700)
+                    except FileExistsError:
+                        sequence += 1
+                        continue
+                    root = candidate
+                    break
+                self._insert_run(config, run_id, frozen, now)
+        except BaseException:
+            if root is not None:
+                with suppress(OSError):
+                    root.rmdir()
+            raise
         return run_id
+
+    def _insert_run(self, config: Config, run_id: str, frozen: str, now: float):
+        self.db.execute(
+            "INSERT INTO runs VALUES (?, ?, 'pending', 0, ?, ?)",
+            (run_id, frozen, now, now),
+        )
+        ordinal = 0
+        for machine in config.machines:
+            for system in machine.systems:
+                for benchmark in config.benchmarks:
+                    for repetition in range(1, benchmark.repetitions + 1):
+                        job_id = uuid.uuid4().hex
+                        self.db.execute(
+                            "INSERT INTO jobs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            (
+                                job_id,
+                                run_id,
+                                machine.id,
+                                system.id,
+                                benchmark.id,
+                                repetition,
+                                ordinal,
+                                "pending",
+                                "{}",
+                                now,
+                            ),
+                        )
+                        ordinal += 1
 
     def run(self, run_id: str) -> dict:
         row = self.db.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()

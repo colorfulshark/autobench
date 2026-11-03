@@ -55,6 +55,7 @@ export const benchmarkDefaults = {
   repetitions: 1,
   make_args: [],
   args: [],
+  tests: [],
   env: {},
   source_subdir: null,
   source_sha256: null,
