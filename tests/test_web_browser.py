@@ -1568,40 +1568,185 @@ def test_five_steps_preserve_existing_config_and_fit_viewport(browser_page, ui_s
     assert page.locator(".wizard-step").count() == 5
 
 
-@pytest.mark.parametrize("step", ["连接机器", "选择系统"])
-def test_machine_management_in_guided_steps(browser_page, ui_server, step):
+@pytest.mark.parametrize("width", [1440, 768, 390])
+def test_machine_drag_and_keyboard_sort_preserve_config(browser_page, ui_server, width):
+    page, server = browser_page, ui_server
+    page.set_viewport_size({"width": width, "height": 1000})
+    ready(page, server)
+    load_existing(page, server)
+    original_machine = yaml.safe_load(server.existing.read_text())["machines"][0]
+    for number in [2, 3]:
+        page.get_by_role("button", name="＋ 添加机器", exact=True).click()
+        page.locator(f"#input-machines-{number - 1}-ssh-host").fill(f"host-{number}")
+    tabs = page.locator(".machine-picker .chip-button")
+    assert page.locator(".object-controls").count() == 0
+    tabs.nth(0).drag_to(tabs.nth(2))
+    assert tabs.all_text_contents() == ["server02", "server03", "server01"]
+    assert page.locator(".machine-picker .active").text_content() == "server03"
+    assert page.locator("#input-machines-1-ssh-host").input_value() == "host-3"
+    tabs.nth(2).drag_to(tabs.nth(0))
+    assert tabs.all_text_contents() == ["server01", "server02", "server03"]
+    tabs.nth(2).drag_to(tabs.nth(0))
+    assert tabs.all_text_contents() == ["server03", "server01", "server02"]
+    tabs.nth(0).press("Alt+ArrowRight")
+    assert tabs.all_text_contents() == ["server01", "server03", "server02"]
+    assert tabs.nth(1).evaluate("e => e === document.activeElement")
+    assert page.locator(".machine-picker .active").text_content() == "server03"
+    assert page.locator("#input-machines-1-ssh-host").input_value() == "host-3"
+    tabs.nth(1).press("Alt+ArrowLeft")
+    tabs.nth(0).press("Alt+ArrowLeft")  # Moving beyond the first position is a no-op.
+    assert tabs.all_text_contents() == ["server03", "server01", "server02"]
+    assert page.locator(".dragging, .drop-target").count() == 0
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.locator("#secondary-action").click()
+    page.wait_for_function("() => document.querySelector('#save-state').textContent === '已保存'")
+    saved = yaml.safe_load(server.existing.read_text())
+    assert [m["id"] for m in saved["machines"]] == ["server03", "server01", "server02"]
+    assert saved["machines"][1] == original_machine
+    assert saved["machines"][0]["ssh"]["host"] == "host-3"
+    assert saved["machines"][2]["ssh"]["host"] == "host-2"
+    page.reload()
+    page.wait_for_function(
+        "() => document.querySelectorAll('.machine-picker .chip-button').length === 3"
+    )
+    assert tabs.all_text_contents() == ["server03", "server01", "server02"]
+    set_editor_mode(page, "yaml")
+    assert yaml.safe_load(page.locator("#yaml-editor").input_value()) == saved
+
+
+@pytest.mark.parametrize("width", [1440, 768, 390])
+def test_machine_drag_across_rows_and_cancel(browser_page, ui_server, width):
+    page, server = browser_page, ui_server
+    page.set_viewport_size({"width": width, "height": 1000})
+    ready(page, server)
+    load_existing(page, server)
+    for _ in range(13):
+        page.get_by_role("button", name="＋ 添加机器", exact=True).click()
+    tabs = page.locator(".machine-picker .chip-button")
+    before = tabs.all_text_contents()
+    assert tabs.nth(0).bounding_box()["y"] < tabs.nth(13).bounding_box()["y"]
+    tabs.nth(13).drag_to(tabs.nth(0))
+    assert tabs.all_text_contents() == [before[-1], *before[:-1]]
+    assert page.locator(".machine-picker .active").text_content() == "server14"
+    page.locator("#secondary-action").click()
+    page.wait_for_function("() => document.querySelector('#save-state').textContent === '已保存'")
+    before = tabs.all_text_contents()
+    source = tabs.nth(0).bounding_box()
+    page.mouse.move(source["x"] + source["width"] / 2, source["y"] + source["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(source["x"] + 30, source["y"] + 80, steps=8)
+    page.locator(".machine-tab.dragging").wait_for()
+    page.mouse.move(5, 5, steps=8)
+    page.mouse.up()
+    assert tabs.all_text_contents() == before
+    assert page.locator(".dragging, .drop-target").count() == 0
+    assert page.locator("#save-state").text_content() == "已保存"
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+
+@pytest.mark.parametrize("selected,removed", [(2, 0), (0, 2), (1, 1), (0, 0), (2, 2)])
+def test_machine_corner_delete_preserves_selection(browser_page, ui_server, selected, removed):
     page, server = browser_page, ui_server
     ready(page, server)
     load_existing(page, server)
-    open_step(page, step)
-    assert page.get_by_role("button", name="上移机器", exact=True).is_disabled()
-    assert page.get_by_role("button", name="下移机器", exact=True).is_disabled()
+    for _ in range(2):
+        page.get_by_role("button", name="＋ 添加机器", exact=True).click()
+    tabs = page.locator(".machine-picker .chip-button")
+    names = tabs.all_text_contents()
+    tabs.nth(selected).click()
+    page.locator(f"#input-machines-{selected}-ssh-host").fill("selected-host")
+    dialogs = []
+    page.on("dialog", lambda dialog: dialogs.append(dialog.type))
+    corner = page.get_by_role("button", name=f"删除机器 {names[removed]}", exact=True)
+    page.locator(".machine-tab").nth(removed).hover()
+    assert corner.evaluate("e => getComputedStyle(e).opacity") == "1"
+    corner.click()
+    remaining = names[:removed] + names[removed + 1 :]
+    expected = names[selected] if selected != removed else remaining[max(0, removed - 1)]
+    assert tabs.all_text_contents() == remaining
+    assert page.locator(".machine-picker .active").text_content() == expected
+    if selected != removed:
+        index = remaining.index(expected)
+        assert page.locator(f"#input-machines-{index}-ssh-host").input_value() == "selected-host"
+    assert dialogs == []
+    page.locator("#secondary-action").click()
+    page.wait_for_function("() => document.querySelector('#save-state').textContent === '已保存'")
+    saved = yaml.safe_load(server.existing.read_text())
+    assert [m["id"] for m in saved["machines"]] == remaining
+    page.reload()
+    page.wait_for_function(
+        "() => document.querySelectorAll('.machine-picker .chip-button').length === 2"
+    )
+    assert tabs.all_text_contents() == remaining
+
+
+def test_machine_corner_visibility_keyboard_delete_and_empty_state(browser_page, ui_server):
+    page, server = browser_page, ui_server
+    ready(page, server)
     page.get_by_role("button", name="＋ 添加机器", exact=True).click()
-    assert page.locator(".machine-tabs .chip-button.active").text_content() == "server02"
-    page.get_by_role("button", name="上移机器", exact=True).click()
-    assert page.locator(".machine-tabs .chip-button").all_text_contents() == [
-        "server02",
-        "server01",
-    ]
-    assert page.locator(".machine-tabs .chip-button.active").text_content() == "server02"
-    page.get_by_role("button", name="下移机器", exact=True).click()
-    assert page.locator(".machine-tabs .chip-button").all_text_contents() == [
-        "server01",
-        "server02",
-    ]
-    page.get_by_role("button", name="移除此机器", exact=True).click()
-    assert page.locator(".machine-tabs .chip-button.active").text_content() == "server01"
-    page.get_by_role("button", name="移除此机器", exact=True).click()
-    assert page.locator(".machine-tabs .chip-button").count() == 0
-    assert page.get_by_role("button", name="移除此机器", exact=True).count() == 0
+    corner = page.get_by_role("button", name="删除机器 server01", exact=True)
+    page.mouse.move(0, 0)
+    assert corner.evaluate("e => getComputedStyle(e).opacity") == "0"
+    first = page.locator(".machine-picker .chip-button").nth(0)
+    first.focus()
+    assert corner.evaluate("e => getComputedStyle(e).opacity") == "1"
+    first.press("Tab")
+    assert corner.evaluate("e => e === document.activeElement")
+    corner.press("Enter")
+    assert page.locator(".machine-picker .active").text_content() == "server02"
+    page.get_by_role("button", name="删除机器 server02", exact=True).press("Space")
+    assert page.locator(".machine-picker .chip-button").count() == 0
+    assert page.get_by_text("添加第一台机器", exact=True).is_visible()
+    assert page.get_by_role("button", name="＋ 添加机器", exact=True).evaluate(
+        "e => e === document.activeElement"
+    )
+    open_step(page, "选择系统")
+    assert page.get_by_text("返回上一步填写连接信息。", exact=True).is_visible()
+    assert page.get_by_role("button", name="＋ 添加机器", exact=True).count() == 0
+    open_step(page, "连接机器")
     page.get_by_role("button", name="＋ 添加机器", exact=True).click()
-    assert page.locator(".machine-tabs .chip-button.active").text_content() == "server01"
+    assert page.locator(".machine-picker .active").text_content() == "server01"
     page.get_by_role("button", name="＋ 添加机器", exact=True).click()
     set_editor_mode(page, "yaml")
-    page.locator("#yaml-panel").wait_for()
     result = yaml.safe_load(page.locator("#yaml-editor").input_value())
     assert [m["id"] for m in result["machines"]] == ["server01", "server02"]
     assert all(m["systems"] == [] for m in result["machines"])
+
+
+def test_system_step_only_selects_existing_machines(browser_page, ui_server):
+    page, server = browser_page, ui_server
+    ready(page, server)
+    load_existing(page, server)
+    for _ in range(2):
+        page.get_by_role("button", name="＋ 添加机器", exact=True).click()
+    tabs = page.locator(".machine-picker .chip-button")
+    tabs.nth(2).press("Alt+ArrowLeft")
+    page.locator("#secondary-action").click()
+    page.wait_for_function("() => document.querySelector('#save-state').textContent === '已保存'")
+    original = server.existing.read_text()
+    open_step(page, "选择系统")
+    assert tabs.all_text_contents() == ["server01", "server03", "server02"]
+    assert page.get_by_role("button", name="＋ 添加机器", exact=True).count() == 0
+    assert page.get_by_role("button", name="上移机器", exact=True).count() == 0
+    assert page.get_by_role("button", name="下移机器", exact=True).count() == 0
+    assert page.get_by_role("button", name="移除此机器", exact=True).count() == 0
+    assert page.locator(".machine-remove, .machine-picker [draggable=true]").count() == 0
+    tabs.nth(0).hover()
+    tabs.nth(0).click()
+    assert page.locator(".machine-picker .active").text_content() == "server01"
+    assert page.locator(".system-item").count() == 2
+    tabs.nth(0).press("Alt+ArrowRight")
+    tabs.nth(2).press("Alt+ArrowLeft")
+    tabs.nth(0).drag_to(tabs.nth(2))
+    assert tabs.all_text_contents() == ["server01", "server03", "server02"]
+    assert page.locator("#save-state").text_content() == "已保存"
+    tabs.nth(2).click()
+    assert page.locator(".machine-picker .active").text_content() == "server02"
+    assert page.locator(".system-item").count() == 0
+    assert server.existing.read_text() == original
+    open_step(page, "连接机器")
+    assert page.get_by_role("button", name="＋ 添加机器", exact=True).is_visible()
+    assert page.locator(".machine-remove").count() == 3
 
 
 def test_benchmark_management_preserves_selection_and_handles_empty_list(browser_page, ui_server):

@@ -837,6 +837,60 @@ main {
   border-color: var(--control);
   color: var(--ink);
 }
+.machine-tab {
+  position: relative;
+  flex: none;
+}
+.machine-tab .chip-button[draggable="true"] {
+  cursor: grab;
+}
+.machine-tab.dragging {
+  opacity: 0.5;
+}
+.machine-tab.dragging .chip-button {
+  cursor: grabbing;
+}
+.machine-tab.drop-target .chip-button {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+.machine-remove {
+  position: absolute;
+  top: -8px;
+  left: -8px;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--control);
+  border-radius: 50%;
+  background: var(--panel);
+  color: var(--muted);
+  opacity: 0;
+  pointer-events: none;
+}
+.machine-remove .icon {
+  width: 12px;
+  height: 12px;
+}
+.machine-tab:hover .machine-remove,
+.machine-tab:focus-within .machine-remove {
+  opacity: 1;
+  pointer-events: auto;
+}
+.machine-remove:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+@media (hover: none), (pointer: coarse) {
+  .machine-remove {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
 .systems-board {
   border-top: 1px solid var(--line);
   padding-top: 20px;

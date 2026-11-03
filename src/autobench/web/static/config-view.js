@@ -31,6 +31,7 @@ import {
 import {
   $,
   node,
+  icon,
   button,
   row,
   hint,
@@ -410,6 +411,7 @@ function machineEditor(machine, index) {
   return panel;
 }
 function addMachine() {
+  if (state.step !== 0) return;
   const items = machines();
   const machine = newMachine(items);
   change(["machines"], [...items, machine]);
@@ -417,13 +419,39 @@ function addMachine() {
   state.system = null;
   emit(true);
 }
-function removeMachine(index) {
-  if (!window.confirm("移除此机器及其系统配置？")) return;
+function focusMachine(index) {
+  const picker = $("config-body").querySelector(".machine-picker");
+  (
+    picker?.querySelectorAll(".chip-button")[index] ||
+    picker?.querySelector(".text-button")
+  )?.focus();
+}
+function moveMachine(machine, target) {
+  if (state.step !== 0) return;
   const list = machines();
+  const index = list.indexOf(machine),
+    selected = list[state.machine];
+  if (index < 0 || target < 0 || target >= list.length || index === target)
+    return;
   list.splice(index, 1);
-  state.machine = Math.max(0, index - 1);
-  state.system = null;
+  list.splice(target, 0, machine);
+  state.machine = list.indexOf(selected);
   dirty(true);
+  focusMachine(target);
+}
+function removeMachine(machine) {
+  if (state.step !== 0) return;
+  const list = machines();
+  const index = list.indexOf(machine),
+    selected = list[state.machine];
+  if (index < 0) return;
+  list.splice(index, 1);
+  if (selected === machine) {
+    state.machine = Math.max(0, index - 1);
+    state.system = null;
+  } else state.machine = list.indexOf(selected);
+  dirty(true);
+  focusMachine(state.machine);
 }
 function addSystem(machine, index) {
   const list = asList(machine.systems),
@@ -821,10 +849,19 @@ function objectControls(items, index, select, label, remove) {
   return controls;
 }
 function machineTabs() {
-  const e = node("div", "machine-tabs");
+  const e = node("div", "machine-tabs machine-picker");
+  const editable = state.step === 0;
+  let draggedMachine = null;
+  const clearDropTargets = () => {
+    e.querySelectorAll(".drop-target").forEach((tab) =>
+      tab.classList.remove("drop-target"),
+    );
+  };
   machines().forEach((m, index) => {
+    const tab = node("div", "machine-tab");
+    const name = m.id || `机器 ${index + 1}`;
     const b = button(
-      m.id || `机器 ${index + 1}`,
+      name,
       () => {
         state.machine = index;
         state.system = null;
@@ -833,25 +870,61 @@ function machineTabs() {
       "chip-button",
     );
     b.classList.toggle("active", index === state.machine);
-    e.append(b);
+    b.setAttribute("aria-pressed", String(index === state.machine));
+    tab.append(b);
+    if (editable) {
+      b.draggable = true;
+      b.title = "拖动调整顺序；Alt + ← / → 前后移动";
+      b.setAttribute("aria-keyshortcuts", "Alt+ArrowLeft Alt+ArrowRight");
+      b.addEventListener("keydown", (event) => {
+        if (!event.altKey || !["ArrowLeft", "ArrowRight"].includes(event.key))
+          return;
+        event.preventDefault();
+        moveMachine(
+          m,
+          machines().indexOf(m) + (event.key === "ArrowLeft" ? -1 : 1),
+        );
+      });
+      b.addEventListener("dragstart", (event) => {
+        draggedMachine = m;
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", name);
+        tab.classList.add("dragging");
+      });
+      b.addEventListener("dragend", () => {
+        draggedMachine = null;
+        tab.classList.remove("dragging");
+        clearDropTargets();
+      });
+      tab.addEventListener("dragover", (event) => {
+        if (!draggedMachine || draggedMachine === m) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "move";
+        clearDropTargets();
+        tab.classList.add("drop-target");
+      });
+      tab.addEventListener("dragleave", (event) => {
+        if (!tab.contains(event.relatedTarget))
+          tab.classList.remove("drop-target");
+      });
+      tab.addEventListener("drop", (event) => {
+        if (!draggedMachine) return;
+        event.preventDefault();
+        const source = draggedMachine;
+        draggedMachine = null;
+        clearDropTargets();
+        moveMachine(source, machines().indexOf(m));
+      });
+      const remove = button("", () => removeMachine(m), "machine-remove");
+      remove.setAttribute("aria-label", `删除机器 ${name}`);
+      remove.title = `删除机器 ${name} 及其系统配置`;
+      remove.append(icon("error"));
+      tab.append(remove);
+    }
+    e.append(tab);
   });
-  e.append(button("＋ 添加机器", addMachine, "text-button"));
-  const picker = node("div");
-  picker.append(e);
-  if (machines()[state.machine])
-    picker.append(
-      objectControls(
-        machines(),
-        state.machine,
-        (index) => {
-          state.machine = index;
-          state.system = null;
-        },
-        "机器",
-        () => removeMachine(state.machine),
-      ),
-    );
-  return picker;
+  if (editable) e.append(button("＋ 添加机器", addMachine, "text-button"));
+  return e;
 }
 export function renderConfig() {
   const container = $("config-body");
