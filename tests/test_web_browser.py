@@ -121,6 +121,139 @@ def fill_connection(page, server):
     page.locator("#input-machines-0-ssh-known_hosts").fill(str(server.root / "known_hosts"))
 
 
+def assert_current_page(page, key):
+    page.wait_for_function(
+        "key => sessionStorage.getItem('autobench-page') === key",
+        arg=key,
+    )
+    titles = {"config": "测试配置", "inspect": "环境检查", "runs": "运行记录"}
+    page.locator(f"#page-{key}").wait_for()
+    assert page.locator("[data-page].active").count() == 1
+    assert page.locator("[data-page].active").get_attribute("data-page") == key
+    assert page.locator("#breadcrumb").text_content() == titles[key]
+    for other in titles.keys() - {key}:
+        assert page.locator(f"#page-{other}").is_hidden()
+
+
+@pytest.mark.parametrize("key", ["config", "inspect", "runs"])
+def test_reload_does_not_flash_config_while_script_or_api_is_loading(browser_page, ui_server, key):
+    page = browser_page
+    ready(page, ui_server)
+    page.locator(f'[data-page="{key}"]').click()
+    scripts, requests = [], []
+    page.route("**/static/app.js", lambda route: scripts.append(route))
+    page.route("**/api/info", lambda route: requests.append(route))
+    page.reload(wait_until="commit")
+    page.locator(".sidebar").wait_for()
+    assert page.locator("#page-config").is_hidden()
+    assert page.locator("[data-page].active").count() == 0
+    assert page.locator("#breadcrumb").text_content() == ""
+    assert scripts
+    with page.expect_request("**/api/info"):
+        scripts[0].continue_()
+    assert_current_page(page, key)
+    assert requests
+    assert page.locator("#input-machines-0-ssh-host").count() == 0
+    requests[0].continue_()
+    page.wait_for_function("() => document.querySelector('#input-machines-0-ssh-host') !== null")
+    assert_current_page(page, key)
+
+
+@pytest.mark.parametrize("key", ["config", "inspect", "runs"])
+def test_sidebar_page_survives_reload_without_selected_run(browser_page, ui_server, key):
+    page = browser_page
+    ready(page, ui_server)
+    page.locator(f'[data-page="{key}"]').click()
+    page.reload()
+    assert_current_page(page, key)
+    if key == "runs":
+        page.get_by_text("没有匹配的运行记录", exact=True).wait_for()
+        assert page.locator("#state-location").text_content() == str(
+            ui_server.config.policy.state_dir
+        )
+    assert page.evaluate("sessionStorage.getItem('autobench-selection')") is None
+
+
+@pytest.mark.parametrize("key", ["config", "inspect", "runs"])
+def test_selected_run_does_not_override_page_after_reload(browser_page, ui_server, key):
+    from autobench.storage import Store
+
+    page, server = browser_page, ui_server
+    history = server.root / "other-history"
+    store = Store(history)
+    run_id = store.create(server.config)
+    store.close()
+    ready(page, server)
+    page.locator('[data-page="runs"]').click()
+    page.locator("#change-location").click()
+    page.wait_for_function(
+        "() => document.querySelector('#file-selected').textContent !== ''",
+    )
+    page.locator("#file-path").fill(str(history))
+    page.locator("#file-go").click()
+    page.wait_for_function(
+        "path => document.querySelector('#file-selected').textContent === path",
+        arg=str(history),
+    )
+    page.locator("#file-confirm").click()
+    page.get_by_role("button", name="查看详情", exact=True).click()
+    page.locator("#run-detail").get_by_text(run_id, exact=True).wait_for()
+    page.locator(f'[data-page="{key}"]').click()
+    for _ in range(2):
+        page.reload()
+        page.wait_for_function(
+            "id => document.querySelector('#run-detail').textContent.includes(id)",
+            arg=run_id,
+        )
+        assert_current_page(page, key)
+    page.locator('[data-page="runs"]').click()
+    page.locator("#run-detail").get_by_text(run_id, exact=True).wait_for()
+    assert page.locator("#state-location").text_content() == str(history)
+    page.get_by_role("button", name="当前查看", exact=True).wait_for()
+    assert page.get_by_role("button", name="当前查看", exact=True).count() == 1
+
+
+@pytest.mark.parametrize("saved_page", [None, "unknown", "__proto__"])
+def test_missing_or_invalid_page_defaults_to_config_with_saved_run(
+    browser_page, ui_server, saved_page
+):
+    from autobench.storage import Store
+
+    page, server = browser_page, ui_server
+    store = Store(server.config.policy.state_dir)
+    run_id = store.create(server.config)
+    store.close()
+    ready(page, server)
+    page.evaluate(
+        """({savedPage, selection}) => {
+            sessionStorage.setItem('autobench-selection', JSON.stringify(selection));
+            if (savedPage === null) sessionStorage.removeItem('autobench-page');
+            else sessionStorage.setItem('autobench-page', savedPage);
+        }""",
+        {
+            "savedPage": saved_page,
+            "selection": {"id": run_id, "stateDir": str(server.config.policy.state_dir)},
+        },
+    )
+    page.reload()
+    page.wait_for_function(
+        "id => document.querySelector('#run-detail').textContent.includes(id)",
+        arg=run_id,
+    )
+    assert_current_page(page, "config")
+    page.locator('[data-page="runs"]').click()
+    page.locator("#run-detail").get_by_text(run_id, exact=True).wait_for()
+
+
+def test_inspection_link_persists_return_to_config(browser_page, ui_server):
+    page = browser_page
+    ready(page, ui_server)
+    page.locator('[data-page="inspect"]').click()
+    page.locator("#inspect-config").click()
+    page.reload()
+    assert_current_page(page, "config")
+
+
 def test_wizard_password_probe_files_save_run_and_cancel(browser_page, ui_server):
     page, server = browser_page, ui_server
     ready(page, server)
@@ -166,7 +299,9 @@ def test_wizard_password_probe_files_save_run_and_cancel(browser_page, ui_server
     assert saved["machines"][0]["systems"][0]["boot_entry"] == "0001"
     page.locator("#primary-action").click()
     page.get_by_role("button", name="取消运行", exact=True).wait_for()
+    assert_current_page(page, "runs")
     page.reload()
+    assert_current_page(page, "runs")
     page.get_by_role("button", name="取消运行", exact=True).click()
     page.wait_for_function(
         "() => document.querySelector('#run-detail').textContent.includes('运行已取消')"
@@ -410,6 +545,7 @@ def test_pending_cancel_has_explicit_completion_action(browser_page, ui_server):
     store.update(store.jobs(run_id)[0]["id"], "cancel_pending")
     store.close()
     page.add_init_script(
+        "sessionStorage.setItem('autobench-page', 'runs');"
         "sessionStorage.setItem('autobench-selection', "
         + json.dumps(json.dumps({"id": run_id, "stateDir": str(server.config.policy.state_dir)}))
         + ")"

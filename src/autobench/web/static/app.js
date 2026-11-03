@@ -31,12 +31,15 @@ let ready = false,
   pathAction = "save";
 const titles = { config: "测试配置", inspect: "环境检查", runs: "运行记录" };
 function setPage(page) {
+  if (!Object.hasOwn(titles, page)) page = "config";
   state.page = page;
+  sessionStorage.setItem("autobench-page", page);
   for (const key of Object.keys(titles)) $("page-" + key).hidden = key !== page;
   document
     .querySelectorAll("[data-page]")
     .forEach((e) => e.classList.toggle("active", e.dataset.page === page));
   $("breadcrumb").textContent = titles[page];
+  if (!ready) return;
   if (page === "runs") {
     renderRuns();
     refreshRuns().catch((error) => show(error.message, "error"));
@@ -155,6 +158,7 @@ function bind(id, fn) {
   $(id).addEventListener("click", () => perform($(id), fn));
 }
 async function boot() {
+  setPage(sessionStorage.getItem("autobench-page"));
   state.info = await api("/api/info");
   const initialPath =
     state.info.config || sessionStorage.getItem("autobench-config-path");
@@ -310,8 +314,8 @@ async function boot() {
       show(error.message, "error");
     }
   }
-  const selected = await initRuns();
-  if (selected) setPage("runs");
+  await initRuns();
+  setPage(sessionStorage.getItem("autobench-page"));
   render(true);
 }
 boot().catch((error) => show("初始化失败：" + error.message, "error"));
