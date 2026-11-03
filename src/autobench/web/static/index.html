@@ -8,46 +8,95 @@
     <script type="module" src="/static/app.js"></script>
   </head>
   <body>
+    <a class="skip-link" href="#main-content">跳转到主要内容</a>
     <div class="app-shell">
       <aside class="sidebar">
         <a class="brand" href="/" aria-label="AutoBench 首页"
-          ><span class="brand-mark">A↗</span
-          ><span>AutoBench<small>TEST WORKSPACE</small></span></a
+          ><span class="brand-mark"
+            ><svg
+              class="brand-symbol"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.6"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path
+                d="m3 19 7-14h3l7 14M6 14h10M16 6h5v5M21 6l-7 7"
+              /></svg></span
+          ><span>AutoBench<small>Linux 性能测试</small></span></a
         >
-        <div class="nav-caption">测试工作空间</div>
+        <div class="nav-caption">工作空间</div>
         <nav aria-label="主导航">
           <button data-page="config" class="nav-item">
-            <span>▤</span> 测试配置</button
+            <svg
+              class="icon"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.6"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M4 5h16v14H4zM4 10h16M9 10v9" />
+            </svg>
+            测试配置</button
           ><button data-page="inspect" class="nav-item">
-            <span>⌁</span> 环境检查</button
+            <svg
+              class="icon"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.6"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M3 12h4l3-7 4 14 3-7h4" />
+            </svg>
+            环境检查</button
           ><button data-page="runs" class="nav-item">
-            <span>▥</span> 运行记录
+            <svg
+              class="icon"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.6"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M5 4h14v16H5zM8 8h8M8 12h5M8 16h7" />
+            </svg>
+            运行记录
           </button>
         </nav>
         <div class="sidebar-note">
-          <span class="live-dot"></span> SSH 测试控制器
-          <p>连接机器，安排测试<br />结果回收，中断恢复</p>
+          <span class="live-dot"></span> SSH 远程控制
+          <p>跨系统测试 · 断点恢复<br />UnixBench benchmark</p>
         </div>
         <footer>
           <span id="version">AutoBench</span><span id="server-address"></span>
         </footer>
       </aside>
-      <main>
+      <main id="main-content" tabindex="-1">
         <header class="topbar">
           <span
             >工作空间 <span class="divider">/</span>
             <span id="breadcrumb"></span></span
           ><span class="service-tag"
-            ><span class="live-dot"></span> 服务工作空间</span
+            ><span class="live-dot"></span> 本地工作空间</span
           >
         </header>
         <div id="notice" role="status" aria-live="polite" hidden></div>
         <section id="page-config" class="page" hidden>
           <div class="page-heading">
             <div>
-              <div class="eyebrow">CONFIGURE YOUR NEXT RUN</div>
-              <h1>把测试准备好</h1>
-              <p>连接机器、选择系统，再安排一份可恢复的测试计划。</p>
+              <h1>测试配置</h1>
+              <p>配置机器与系统，编排可恢复的 UnixBench 测试。</p>
             </div>
             <button id="new-config" class="button secondary">
               ＋ 新建配置
@@ -55,7 +104,18 @@
           </div>
           <div class="project-bar">
             <div class="project-file">
-              <span class="project-icon">▤</span>
+              <svg
+                class="icon project-icon"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.6"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M14 3H6v18h12V7zM14 3v5h4M9 12h6M9 16h6" />
+              </svg>
               <div>
                 <div class="file-title">
                   <button id="file-name" class="file-name">正在加载…</button
@@ -105,7 +165,14 @@
             role="alert"
             hidden
           ></div>
-          <div id="config-body"></div>
+          <div id="config-layout" class="config-layout">
+            <div id="config-body"></div>
+            <aside
+              id="config-plan"
+              class="config-plan"
+              aria-label="测试计划预览"
+            ></aside>
+          </div>
           <section id="yaml-panel" class="panel yaml-panel" hidden>
             <div class="yaml-help">
               完整 YAML 编辑。只修改源码会保留注释；修改可视化配置后将重新生成
@@ -135,9 +202,8 @@
         <section id="page-inspect" class="page" hidden>
           <div class="page-heading">
             <div>
-              <div class="eyebrow">ENVIRONMENT READINESS</div>
-              <h1>确认机器已准备好</h1>
-              <p>先看问题与处理方式，再按需展开技术细节。</p>
+              <h1>环境检查</h1>
+              <p>检查 SSH 连接、UEFI 启动项与当前系统的运行依赖。</p>
             </div>
             <span class="pill">只读检查</span>
           </div>
@@ -167,7 +233,18 @@
           </section>
           <div id="inspection-result">
             <div class="empty">
-              <span class="empty-icon">⌁</span>
+              <svg
+                class="icon empty-icon"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.6"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M3 12h4l3-7 4 14 3-7h4" />
+              </svg>
               <h3>准备检查当前系统</h3>
               <p class="hint">只读启动项及运行依赖，不切换系统。</p>
             </div>
@@ -176,9 +253,8 @@
         <section id="page-runs" class="page" hidden>
           <div class="page-heading">
             <div>
-              <div class="eyebrow">RUNS & RESULTS</div>
-              <h1>每次测试，都有迹可循</h1>
-              <p>跟踪执行进度，恢复控制，查看原始结果。</p>
+              <h1>运行记录</h1>
+              <p>跟踪测试进度、恢复中断任务，回收原始结果。</p>
             </div>
             <span class="pill"><span class="live-dot"></span> 每 2 秒更新</span>
           </div>
@@ -237,7 +313,7 @@
       <p id="preview-path" class="secondary mono"></p>
       <pre id="artifact-preview"></pre>
     </aside>
-    <dialog id="path-dialog">
+    <dialog id="path-dialog" aria-labelledby="path-title">
       <form id="path-form">
         <h2 id="path-title">保存配置</h2>
         <p class="hint">配置文件保存在运行 Web 服务的服务器上。</p>
@@ -273,7 +349,7 @@
         </div>
       </form>
     </dialog>
-    <dialog id="file-dialog" class="file-dialog">
+    <dialog id="file-dialog" class="file-dialog" aria-labelledby="file-title">
       <h2 id="file-title">选择服务器文件</h2>
       <p id="file-help" class="hint"></p>
       <div class="file-path-bar">

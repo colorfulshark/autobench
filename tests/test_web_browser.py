@@ -452,7 +452,7 @@ def test_connection_test_spinner_success_and_configuration_invalidation(browser_
     pending[0].fulfill(response=response)
     status = page.locator('.connection-test-status[data-phase="success"]')
     status.wait_for()
-    assert status.locator(".status-icon").text_content() == "✓"
+    assert status.locator(".status-icon svg[aria-hidden=true]").count() == 1
     assert status.evaluate("e => getComputedStyle(e).color") == "rgb(32, 101, 76)"
     assert not connect.is_disabled()
     assert page.locator(".connection-test-panel button").count() == 1
@@ -494,7 +494,7 @@ def test_connection_test_failure_summary_and_retry(browser_page, ui_server, widt
     connect.click()
     status = page.locator('.connection-test-status[data-phase="error"]')
     status.wait_for()
-    assert status.locator(".status-icon").text_content() == "✗"
+    assert status.locator(".status-icon svg[aria-hidden=true]").count() == 1
     assert status.evaluate("e => getComputedStyle(e).color") == "rgb(165, 62, 53)"
     labels = {
         "connection": "SSH 连接",
@@ -718,6 +718,65 @@ def test_mobile_and_validation_field_navigation(browser_page, ui_server):
     assert page.locator("#yaml-panel").is_visible()
 
 
+def test_plan_preview_tracks_systems_rounds_and_yaml_changes(browser_page, ui_server):
+    page, server = browser_page, ui_server
+    ready(page, server)
+    plan = page.locator("#config-plan")
+    assert plan.locator(".plan-figure strong").text_content() == "0"
+    raw = server.config.model_dump(mode="json")
+    raw["benchmarks"][0]["repetitions"] = 3
+    other = {**raw["benchmarks"][0], "id": "second-benchmark", "repetitions": 2}
+    raw["benchmarks"].append(other)
+    system_count = sum(len(machine["systems"]) for machine in raw["machines"])
+    page.locator("#mode-yaml").click()
+    page.locator("#yaml-editor").fill(yaml.safe_dump(raw))
+    page.locator("#mode-form").click()
+    plan.wait_for(state="visible")
+    assert plan.locator(".plan-figure strong").text_content() == str(system_count * 5)
+    assert plan.locator(".plan-route li").count() == system_count
+    assert plan.locator(".plan-test").count() == len(raw["benchmarks"])
+    plan.get_by_role("button", name="编辑测试 →", exact=True).click()
+    page.locator("#input-benchmarks-0-repetitions").fill("4")
+    assert plan.locator(".plan-figure strong").text_content() == str(system_count * 6)
+    page.locator("#mode-yaml").click()
+    page.locator("#yaml-panel").wait_for()
+    assert plan.is_hidden()
+    result = yaml.safe_load(page.locator("#yaml-editor").input_value())
+    assert result["benchmarks"][0]["repetitions"] == 4
+    assert "plan" not in result
+    page.locator("#mode-form").click()
+    plan.wait_for(state="visible")
+    page.locator("#workbench-switch").click()
+    assert plan.is_hidden()
+    page.set_viewport_size({"width": 390, "height": 844})
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+
+def test_mobile_run_row_keeps_details_action_and_dates_visible(browser_page, ui_server):
+    from autobench.storage import Store
+
+    page, server = browser_page, ui_server
+    store = Store(server.config.policy.state_dir)
+    run_id = store.create(server.config)
+    store.close()
+    page.set_viewport_size({"width": 390, "height": 844})
+    ready(page, server)
+    page.locator('[data-page="runs"]').click()
+    action = page.get_by_role("button", name="查看详情", exact=True)
+    action.wait_for()
+    cells = page.locator("#runs-list tbody tr").first.locator("td")
+    assert cells.count() == 4
+    assert run_id in cells.nth(0).text_content()
+    assert cells.nth(1).text_content()
+    assert cells.nth(2).text_content()
+    for cell in (cells.nth(0), cells.nth(2), action):
+        box = cell.bounding_box()
+        assert box["x"] >= 0 and box["x"] + box["width"] <= 390
+    assert page.locator("#runs-list").evaluate("e => e.scrollWidth === e.clientWidth")
+    action.click()
+    page.locator("#run-detail").get_by_text(run_id, exact=True).wait_for()
+
+
 def test_system_groups_reset_independently(browser_page, ui_server):
     page, server = browser_page, ui_server
     raw = server.config.model_dump(mode="json")
@@ -924,7 +983,7 @@ def test_boot_entry_identification_spinner_choices_and_selection(
     pending[0].fulfill(response=response)
     status = page.locator('.boot-entry-status[data-phase="success"]')
     status.wait_for()
-    assert status.locator(".status-icon").text_content() == "✓"
+    assert status.locator(".status-icon svg[aria-hidden=true]").count() == 1
     assert status.evaluate("e => getComputedStyle(e).color") == "rgb(32, 101, 76)"
     assert entry.evaluate("e => e.tagName") == "SELECT"
     assert entry.input_value() == value
@@ -976,7 +1035,7 @@ def test_boot_entry_identification_failure_preserves_input_and_allows_retry(
     identify.click()
     status = page.locator('.boot-entry-status[data-phase="error"]')
     status.wait_for()
-    assert status.locator(".status-icon").text_content() == "✗"
+    assert status.locator(".status-icon svg[aria-hidden=true]").count() == 1
     assert status.evaluate("e => getComputedStyle(e).color") == "rgb(165, 62, 53)"
     assert status.locator(".status-message").text_content()
     assert entry.evaluate("e => e.tagName") == "INPUT" and entry.input_value() == "00AB"

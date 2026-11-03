@@ -1,6 +1,26 @@
 import { state, change, show, dirty } from "./state.js";
 import { at, own, put, statusLabels, statusTone } from "./model.js";
 export const $ = (id) => document.getElementById(id);
+export function icon(name, cls = "icon") {
+  const paths = {
+    check: "M5 12l4 4L19 6",
+    error: "M6 6l12 12M6 18L18 6",
+    pending: "M12 5v7l4 2",
+  };
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("class", cls);
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "1.7");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  svg.setAttribute("aria-hidden", "true");
+  const path = document.createElementNS(svg.namespaceURI, "path");
+  path.setAttribute("d", paths[name] || paths.pending);
+  svg.append(path);
+  return svg;
+}
 export function node(tag, cls, text) {
   const e = document.createElement(tag);
   if (cls) e.className = cls;
@@ -42,13 +62,11 @@ export function updateStatusIndicator(status, phase, message) {
   status.setAttribute("aria-label", message);
   status.replaceChildren();
   if (["running", "success", "error"].includes(phase)) {
-    const icon = node(
-      "span",
-      "status-icon",
-      phase === "success" ? "✓" : phase === "error" ? "✗" : "",
-    );
-    icon.setAttribute("aria-hidden", "true");
-    status.append(icon);
+    const mark = node("span", "status-icon");
+    mark.setAttribute("aria-hidden", "true");
+    if (phase !== "running")
+      mark.append(icon(phase === "success" ? "check" : "error"));
+    status.append(mark);
   }
   if (phase === "error" || phase === "stale")
     status.append(node("span", "status-message", message));
@@ -176,7 +194,12 @@ export function inputField(
       button("清除", () => change(path, null, true), "link-button"),
     );
   wrap.append(header, controls);
-  if (help) wrap.append(hint(help));
+  if (help) {
+    const description = hint(help);
+    description.id = id + "-help";
+    input.setAttribute("aria-describedby", description.id);
+    wrap.append(description);
+  }
   const errors = state.errors.filter(
     (error) => JSON.stringify(error.path) === JSON.stringify(path),
   );
@@ -386,6 +409,7 @@ export function table(headers, rows) {
     const row = node("tr");
     for (const cell of cells) {
       const td = node("td");
+      if (typeof cell === "number") td.classList.add("num");
       td.append(
         cell instanceof Node ? cell : node("span", "", String(cell ?? "—")),
       );
@@ -395,6 +419,10 @@ export function table(headers, rows) {
     body.append(row);
   }
   e.append(body);
+  for (let index = 0; index < headers.length; index++) {
+    if (rows.some((cells) => typeof cells[index] === "number"))
+      tr.children[index].classList.add("num");
+  }
   return e;
 }
 export const date = (timestamp) =>

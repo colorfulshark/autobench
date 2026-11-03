@@ -6,4 +6,5 @@ __pycache__/
 build/
 dist/
 results/
+.taste-skill/
 *.sqlite3*

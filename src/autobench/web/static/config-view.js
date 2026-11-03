@@ -974,10 +974,9 @@ export function renderConfig() {
         "wizard-step",
       );
       b.dataset.active = String(index === state.step);
-      b.append(
-        node("span", "step-number", index < state.step ? "✓" : index + 1),
-        node("span", "", text),
-      );
+      if (index === state.step) b.setAttribute("aria-current", "step");
+      const number = node("span", "step-number", index + 1);
+      b.append(number, node("span", "", text));
       return b;
     }),
   );

@@ -27,18 +27,23 @@ import {
 } from "./config-view.js";
 import { renderChecksPage, inspectSaved } from "./checks.js";
 import { initRuns, renderRuns, refreshRuns, startRun } from "./runs.js";
+import { renderPlan } from "./config-plan.js";
 let ready = false,
   pathAction = "save";
 const titles = { config: "测试配置", inspect: "环境检查", runs: "运行记录" };
 function setPage(page) {
   if (!Object.hasOwn(titles, page)) page = "config";
+  const changed = state.page !== page;
   state.page = page;
   sessionStorage.setItem("autobench-page", page);
   for (const key of Object.keys(titles)) $("page-" + key).hidden = key !== page;
-  document
-    .querySelectorAll("[data-page]")
-    .forEach((e) => e.classList.toggle("active", e.dataset.page === page));
+  document.querySelectorAll("[data-page]").forEach((e) => {
+    e.classList.toggle("active", e.dataset.page === page);
+    if (e.dataset.page === page) e.setAttribute("aria-current", "page");
+    else e.removeAttribute("aria-current");
+  });
   $("breadcrumb").textContent = titles[page];
+  if (changed) window.scrollTo(0, 0);
   if (!ready) return;
   if (page === "runs") {
     renderRuns();
@@ -57,6 +62,11 @@ function chrome() {
     `${c.machines} 台机器 · ${c.systems} 个系统 · ${c.benchmarks} 项测试`;
   $("mode-form").classList.toggle("active", state.mode === "form");
   $("mode-yaml").classList.toggle("active", state.mode === "yaml");
+  $("mode-form").setAttribute("aria-pressed", String(state.mode === "form"));
+  $("mode-yaml").setAttribute("aria-pressed", String(state.mode === "yaml"));
+  $("config-layout").hidden = state.mode !== "form";
+  $("config-layout").dataset.wizard = String(state.wizard);
+  renderPlan();
   $("prev-step").hidden =
     !state.wizard || state.step === 0 || state.mode === "yaml";
   const checked = state.validation?.version === state.version && saved;

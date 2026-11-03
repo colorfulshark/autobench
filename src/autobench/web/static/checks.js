@@ -10,6 +10,7 @@ import {
   jsonDetails,
   statusIndicator,
   updateStatusIndicator,
+  icon,
 } from "./ui.js";
 const records = new WeakMap();
 const panelTargets = new WeakMap();
@@ -89,18 +90,17 @@ function checkRows(checks) {
       node("strong", "", labels[item.id] || item.label || item.id),
       hint(item.message),
     );
-    r.append(
-      node(
-        "span",
-        "check-icon",
+    const mark = node("span", "check-icon");
+    mark.append(
+      icon(
         item.status === "passed"
-          ? "✓"
+          ? "check"
           : item.status === "unchecked"
-            ? "○"
-            : "!",
+            ? "pending"
+            : "error",
       ),
-      content,
     );
+    r.append(mark, content);
     r.append(
       pill(
         item.status === "passed"
