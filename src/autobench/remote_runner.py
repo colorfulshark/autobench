@@ -233,6 +233,17 @@ def seal_build(directory, manifest, state):
 
 def finalize(directory, state):
     """Seal inventories only after the process tree is no longer writing."""
+    # Also clean up when status() reconciles a worker killed or interrupted by reboot.
+    shutil.rmtree(directory / "warmup", ignore_errors=True)
+    warmup = state.get("warmup")
+    if warmup and warmup["status"] not in TERMINAL and state["status"] in TERMINAL:
+        warmup.update(
+            {
+                "status": state["status"],
+                "finished": state.get("finished", now()),
+                "reason": state.get("reason"),
+            }
+        )
     artifacts = directory / "artifacts"
     artifacts.mkdir(mode=0o700, exist_ok=True)
     manifest = read_json(directory / "manifest.json")
@@ -619,6 +630,80 @@ def prepare_build(directory, manifest, state):
     return build, verify_build(build)
 
 
+def prepare_run(source, build, directory, manifest):
+    cwd = directory / "work"
+    shutil.copytree(source, cwd, ignore=shutil.ignore_patterns("pgms", "tmp", "results"))
+    (cwd / "tmp").mkdir(mode=0o700)
+    (directory / "artifacts" / manifest["execution"]["artifact_dir"]).mkdir(
+        mode=0o700, parents=True, exist_ok=True
+    )
+    return cwd, runtime_environment(manifest, build, directory)
+
+
+def stabilize(directory, manifest, state):
+    state.pop("wait_finished", None)
+    state.update(
+        {
+            "status": "stabilizing",
+            "wait_started": now(),
+            "ready_at": time.time() + manifest["settle_seconds"],
+        }
+    )
+    atomic_json(directory / "state.json", state)
+    # The monotonic deadline prevents a wall-clock adjustment shortening the wait.
+    deadline = time.monotonic() + manifest["settle_seconds"]
+    while time.monotonic() < deadline:
+        time.sleep(min(1, max(0, deadline - time.monotonic())))
+    state["wait_finished"] = now()
+
+
+def run_warmup(directory, manifest, state, build, source):
+    temporary = directory / "warmup"
+    record = {"status": "preparing"}
+    state["warmup"] = record
+    try:
+        cwd, env = prepare_run(source, build, temporary, manifest)
+        verify_build(build)
+        stabilize(directory, manifest, state)
+        record.update(
+            {
+                "status": "warming_up",
+                "started": now(),
+                "wait_started": state["wait_started"],
+                "wait_finished": state["wait_finished"],
+                "ready_at": state["ready_at"],
+                "command": {},
+            }
+        )
+        verify_build(build)
+        state["status"] = "warming_up"
+        state.pop("ready_at", None)
+        atomic_json(directory / "state.json", state)
+        execution = manifest["execution"]
+        run_process(
+            execution["run_argv"],
+            cwd,
+            env,
+            execution["timeout"],
+            Path(os.devnull),
+            Path(os.devnull),
+            record["command"],
+        )
+        verify_build(build)
+        record["status"] = "succeeded"
+    except BaseException as exc:
+        record.update(
+            {
+                "status": "cancelled" if isinstance(exc, WorkerCancelled) else "failed",
+                "reason": str(exc),
+            }
+        )
+        raise
+    finally:
+        record["finished"] = now()
+        shutil.rmtree(temporary, ignore_errors=True)
+
+
 def worker(manifest_path):
     os.umask(0o077)
     manifest_path = Path(manifest_path)
@@ -638,27 +723,13 @@ def worker(manifest_path):
         atomic_json(directory / "state.json", state)
         build, source = prepare_build(directory, manifest, state)
         verified_build = build
-        cwd = directory / "work"
-        shutil.copytree(source, cwd, ignore=shutil.ignore_patterns("pgms", "tmp", "results"))
-        (cwd / "tmp").mkdir(mode=0o700)
+        if manifest.get("warmup", False):
+            run_warmup(directory, manifest, state, build, source)
+        cwd, env = prepare_run(source, build, directory, manifest)
         execution = manifest["execution"]
-        (artifacts / execution["artifact_dir"]).mkdir(mode=0o700, exist_ok=True)
-        env = runtime_environment(manifest, build, directory)
         atomic_json(artifacts / "run-environment.json", env)
         verify_build(build)
-        state.update(
-            {
-                "status": "stabilizing",
-                "wait_started": now(),
-                "ready_at": time.time() + manifest["settle_seconds"],
-            }
-        )
-        atomic_json(directory / "state.json", state)
-        # The monotonic deadline prevents a wall-clock adjustment shortening the wait.
-        deadline = time.monotonic() + manifest["settle_seconds"]
-        while time.monotonic() < deadline:
-            time.sleep(min(1, max(0, deadline - time.monotonic())))
-        state["wait_finished"] = now()
+        stabilize(directory, manifest, state)
         verify_build(build)
         state["status"] = "running"
         state["commands"]["run"] = {
@@ -681,7 +752,10 @@ def worker(manifest_path):
     except WorkerCancelled as exc:
         state.update({"status": "cancelled", "reason": str(exc)})
     except Exception as exc:
-        state.update({"status": "failed", "reason": str(exc)})
+        reason = str(exc)
+        if state.get("warmup", {}).get("status") == "failed":
+            reason = "warmup failed: " + reason
+        state.update({"status": "failed", "reason": reason})
     finally:
         # Let systemd enforce its stop deadline rather than interrupting a manifest write.
         signal.signal(signal.SIGTERM, signal.SIG_IGN)

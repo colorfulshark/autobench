@@ -53,6 +53,7 @@ export const policyDefaults = {
 export const benchmarkDefaults = {
   type: "unixbench",
   repetitions: 1,
+  warmup: true,
   make_args: [],
   args: [],
   tests: [],
@@ -175,6 +176,7 @@ export const statusLabels = {
   pending: "待执行",
   preparing: "准备中",
   building: "构建中",
+  warming_up: "预热中",
   submitting: "提交中",
   running: "运行中",
   switching: "切换系统",
@@ -199,6 +201,7 @@ export const statusTone = (status) =>
             "running",
             "preparing",
             "building",
+            "warming_up",
             "stabilizing",
             "submitting",
             "switching",

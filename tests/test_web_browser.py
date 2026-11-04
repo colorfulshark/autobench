@@ -181,7 +181,9 @@ def test_notices_auto_dismiss(browser_page, ui_server, width, tone, duration, re
     assert notice.get_attribute("aria-live") == "polite"
     assert notice.evaluate("el => getComputedStyle(el).position") == "fixed"
     assert page.locator(".project-bar").bounding_box() == original_position
-    assert page.locator("main").evaluate("el => el.getBoundingClientRect().height") == original_height
+    assert (
+        page.locator("main").evaluate("el => el.getBoundingClientRect().height") == original_height
+    )
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     page.clock.run_for(duration - 1)
     assert notice.is_visible()
@@ -194,7 +196,9 @@ def test_notices_auto_dismiss(browser_page, ui_server, width, tone, duration, re
     assert notice.text_content() == ""
     assert notice.bounding_box() is None
     assert page.locator(".project-bar").bounding_box() == original_position
-    assert page.locator("main").evaluate("el => el.getBoundingClientRect().height") == original_height
+    assert (
+        page.locator("main").evaluate("el => el.getBoundingClientRect().height") == original_height
+    )
 
 
 @pytest.mark.parametrize(
@@ -602,8 +606,12 @@ def test_header_files_layout_and_independent_locations(browser_page, ui_server, 
         selectors = [".brand", "#tab-config", "#tab-runs", f"#header-{key}", ".service-info"]
         selectors += (
             [
-                "#file-name", "#save-state", "#mode-toggle", "#file-menu summary",
-                "#file-location", "#matrix-summary",
+                "#file-name",
+                "#save-state",
+                "#mode-toggle",
+                "#file-menu summary",
+                "#file-location",
+                "#matrix-summary",
             ]
             if key == "config"
             else ["#state-location", "#use-config-location", "#change-location"]
@@ -1021,6 +1029,130 @@ def test_connection_test_ignores_outdated_completion(browser_page, ui_server, ol
     page.wait_for_timeout(50)
     assert page.locator(".status-message").text_content() == "SSH 连接：新连接失败"
     assert not connect.is_disabled()
+
+
+@pytest.mark.parametrize("width", [1440, 390])
+def test_warmup_defaults_toggle_save_reload_and_yaml_roundtrip(browser_page, ui_server, width):
+    page, server = browser_page, ui_server
+    page.set_viewport_size({"width": width, "height": 1000})
+    raw = server.config.model_dump(mode="json")
+    del raw["benchmarks"][0]["warmup"]
+    raw["benchmarks"][0]["repetitions"] = 3
+    server.existing.write_text(yaml.safe_dump(raw))
+    ready(page, server)
+    load_existing(page, server)
+    open_step(page, "设置测试")
+    control = page.get_by_role("checkbox", name="预热", exact=True)
+    assert control.is_checked()
+    assert "先完整运行 1 轮，预热结果不保存" in page.locator("#config-body").text_content()
+    plan = page.locator("#config-plan")
+    assert plan.locator(".plan-test-rounds strong").text_content() == "3"
+    assert plan.locator(".plan-test-warmup").text_content() == "另预热 1 轮 · 不保存结果"
+    expected_jobs = str(len(raw["machines"][0]["systems"]) * 3)
+    assert plan.locator(".plan-figure strong").text_content() == expected_jobs
+    # Viewing a missing field does not modify the original YAML.
+    set_editor_mode(page, "yaml")
+    assert (
+        "warmup" not in yaml.safe_load(page.locator("#yaml-editor").input_value())["benchmarks"][0]
+    )
+    set_editor_mode(page, "form")
+    control.uncheck()
+    assert plan.locator(".plan-test-warmup").text_content() == "预热已关闭"
+    assert plan.locator(".plan-figure strong").text_content() == expected_jobs
+    control.press("Space")
+    assert control.is_checked()
+    assert control.evaluate("input => document.activeElement === input")
+    control.press("Space")
+    assert not control.is_checked()
+    open_step(page, "检查运行")
+    table = page.locator("#config-body table")
+    assert "正式轮数" in table.text_content() and "预热" in table.text_content()
+    assert all("关闭" in row.text_content() for row in table.locator("tbody tr").all())
+    assert table.evaluate("table => table.scrollWidth <= table.clientWidth")
+    page.locator("#secondary-action").click()
+    page.wait_for_function("() => document.querySelector('#save-state').textContent === '已保存'")
+    assert yaml.safe_load(server.existing.read_text())["benchmarks"][0]["warmup"] is False
+    page.reload()
+    page.locator("#input-machines-0-ssh-host").wait_for()
+    open_step(page, "设置测试")
+    assert not control.is_checked()
+    set_editor_mode(page, "yaml")
+    document = yaml.safe_load(page.locator("#yaml-editor").input_value())
+    document["benchmarks"][0]["warmup"] = True
+    page.locator("#yaml-editor").fill(yaml.safe_dump(document))
+    set_editor_mode(page, "form")
+    assert control.is_checked()
+    assert plan.locator(".plan-test-rounds strong").text_content() == "3"
+    assert plan.locator(".plan-test-warmup").text_content() == "另预热 1 轮 · 不保存结果"
+    assert page.evaluate("() => document.documentElement.scrollWidth <= innerWidth")
+
+
+@pytest.mark.parametrize("width", [1440, 768, 390])
+def test_warmup_alignment_and_pointer_vs_keyboard_focus(browser_page, ui_server, width):
+    page, server = browser_page, ui_server
+    page.set_viewport_size({"width": width, "height": 1000})
+    ready(page, server)
+    load_existing(page, server)
+    open_step(page, "设置测试")
+    rounds = page.locator(".benchmark-rounds")
+    formal = page.locator("#input-benchmarks-0-repetitions")
+    control = page.get_by_role("checkbox", name="预热", exact=True)
+    labels = rounds.locator(".field-label").all()
+    assert abs(labels[0].bounding_box()["y"] - labels[1].bounding_box()["y"]) <= 1
+    formal_box, switch_box = formal.bounding_box(), control.bounding_box()
+    assert (
+        abs(formal_box["y"] + formal_box["height"] / 2 - switch_box["y"] - switch_box["height"] / 2)
+        <= 1
+    )
+    hints = rounds.locator(".field > .hint").all()
+    assert abs(hints[0].bounding_box()["y"] - hints[1].bounding_box()["y"]) <= 1
+
+    control.click()
+    assert not control.is_checked()
+    assert control.evaluate("input => getComputedStyle(input).outlineStyle") == "none"
+    assert (
+        page.locator(".warmup-setting").evaluate("label => getComputedStyle(label).outlineStyle")
+        == "none"
+    )
+    rounds.locator(".warmup-field > .field-label").click()
+    assert control.is_checked()
+    assert control.evaluate("input => getComputedStyle(input).outlineStyle") == "none"
+
+    formal.focus()
+    page.keyboard.press("Tab")
+    assert control.evaluate("input => document.activeElement === input")
+    assert control.evaluate("input => input.matches(':focus-visible')")
+    assert control.evaluate("input => getComputedStyle(input).outlineWidth") == "2px"
+    control.press("Space")
+    assert not control.is_checked()
+    assert control.evaluate("input => input.matches(':focus-visible')")
+    assert (
+        page.locator(".warmup-setting").evaluate("label => getComputedStyle(label).outlineStyle")
+        == "none"
+    )
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+
+def test_warmup_status_shows_as_active_in_run_details(browser_page, ui_server):
+    from autobench.storage import Store
+
+    page, server = browser_page, ui_server
+    store = Store(server.config.policy.state_dir)
+    try:
+        run_id = store.create(server.config)
+        store.set_run_status(run_id, "running")
+        store.update(store.jobs(run_id)[0]["id"], "warming_up")
+    finally:
+        store.close()
+    ready(page, server)
+    page.locator('[data-page="runs"]').click()
+    page.get_by_role("button", name="查看详情", exact=True).click()
+    detail = page.locator("#run-detail")
+    detail.locator(".current-stage").wait_for()
+    assert "预热中" in detail.locator(".current-stage").text_content()
+    assert detail.locator(".stat").nth(1).text_content() == "1进行中"
+    detail.get_by_text("按机器与系统查看任务", exact=True).click()
+    detail.get_by_text("预热中", exact=True).wait_for()
 
 
 def test_unixbench_tests_selection_save_reload_and_yaml_roundtrip(browser_page, ui_server):
@@ -1560,7 +1692,11 @@ def test_bottom_bar_geometry_stays_fixed_across_steps_and_scroll(browser_page, u
                 actual = geometry()
                 for reference, current in zip(baseline, actual, strict=True):
                     assert all(abs(a - b) <= 1 for a, b in zip(reference, current, strict=True)), (
-                        width, height, index, reference, current
+                        width,
+                        height,
+                        index,
+                        reference,
+                        current,
                     )
                 assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
@@ -1591,16 +1727,18 @@ def test_bottom_bar_combines_steps_and_actions(browser_page, ui_server, width):
         assert footer["y"] + footer["height"] <= 901
         if width > 1100:
             assert navigation["x"] + navigation["width"] <= actions["x"]
-            assert abs(
-                navigation["y"] + navigation["height"] / 2
-                - actions["y"] - actions["height"] / 2
-            ) <= 1
+            assert (
+                abs(
+                    navigation["y"]
+                    + navigation["height"] / 2
+                    - actions["y"]
+                    - actions["height"] / 2
+                )
+                <= 1
+            )
         else:
             assert navigation["y"] + navigation["height"] <= actions["y"]
-            assert abs(
-                navigation["x"] + navigation["width"]
-                - actions["x"] - actions["width"]
-            ) <= 1
+            assert abs(navigation["x"] + navigation["width"] - actions["x"] - actions["width"]) <= 1
         previous_right = navigation["x"]
         for step in page.locator(".wizard-step").all():
             box = step.bounding_box()

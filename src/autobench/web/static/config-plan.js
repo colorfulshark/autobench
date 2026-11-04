@@ -81,9 +81,19 @@ export function renderPlan() {
   tests.append(node("h3", "", "测试与轮次"));
   for (const benchmark of benchmarks.slice(0, 3)) {
     const item = node("div", "plan-test");
+    const rounds = node("span", "plan-test-rounds");
+    rounds.append(
+      node("strong", "", benchmark.repetitions ?? 1),
+      node("span", "", "轮正式"),
+    );
     item.append(
-      node("span", "mono", benchmark.id || "未命名测试"),
-      node("span", "", `${benchmark.repetitions ?? 1} 轮`),
+      node("span", "plan-test-name mono", benchmark.id || "未命名测试"),
+      rounds,
+      node(
+        "span",
+        "plan-test-warmup",
+        (benchmark.warmup ?? true) ? "另预热 1 轮 · 不保存结果" : "预热已关闭",
+      ),
     );
     tests.append(item);
   }

@@ -17,7 +17,7 @@ from autobench.adapters import get_adapter
 from autobench.config import inspect_archive
 
 
-def manifest_for(config, tmp_path, job_id="a" * 32, build_id=None):
+def manifest_for(config, tmp_path, job_id="a" * 32, build_id=None, *, warmup=None):
     benchmark = config.benchmarks[0]
     directory = tmp_path / "remote" / "jobs" / job_id
     manifest = {
@@ -32,6 +32,8 @@ def manifest_for(config, tmp_path, job_id="a" * 32, build_id=None):
         "benchmark_env": benchmark.env,
         "execution": get_adapter("unixbench").execution(benchmark),
     }
+    if warmup is not None:
+        manifest["warmup"] = warmup
     payload = {"job_id": job_id, "job_dir": str(directory), "manifest": manifest}
     rr.stage(payload)
     return directory, manifest, payload
@@ -307,6 +309,179 @@ def completed_worker(directory, expected=0, **kwargs):
     assert process.returncode == expected, (stdout, stderr, rr.read_json(directory / "state.json"))
     assert_no_removed_outputs(directory.parent.parent)
     return rr.read_json(directory / "state.json")
+
+
+@pytest.mark.parametrize("warmup", [True, False, None])
+def test_warmup_once_before_three_formal_rounds_with_isolated_results(config, tmp_path, warmup):
+    benchmark = config.benchmarks[0]
+    calls = tmp_path / "invocations.jsonl"
+    benchmark.env["CALLS"] = str(calls)
+    benchmark.args = ["-c", "1"]
+    benchmark.tests = ["execl", "shell"]
+    config.policy.settle_seconds = 0.04
+    source_archive(
+        benchmark.source_archive,
+        make="all:\n\t@echo built >> build-count\n",
+        run="""import json, os, pathlib, sys
+cwd = pathlib.Path.cwd()
+assert pathlib.Path("testdir/input").read_text() == "fresh input\\n"
+assert not pathlib.Path(os.environ["UB_TMPDIR"], "touched").exists()
+assert os.environ["SHARED"] == "benchmark"
+assert os.environ["SYSTEM_ONLY"] == "yes"
+assert sys.argv[1:] == ["-c", "1", "execl", "shell"]
+pathlib.Path("testdir/input").write_text("modified")
+pathlib.Path(os.environ["UB_TMPDIR"], "touched").touch()
+with open(os.environ["CALLS"], "a") as stream:
+    stream.write(json.dumps({"cwd": str(cwd), "binary": os.environ["UB_BINDIR"]}) + "\\n")
+kind = "warmup" if cwd.parent.name == "warmup" else "formal"
+pathlib.Path(os.environ["UB_RESULTDIR"], kind + ".txt").write_text(kind)
+print(kind + " output")
+print(kind + " error", file=sys.stderr)
+""",
+    )
+    benchmark.source_sha256 = None
+    inspect_archive(benchmark)
+    directories = []
+    for index, char in enumerate("abc"):
+        directory, manifest, _ = manifest_for(
+            config,
+            tmp_path,
+            job_id=char * 32,
+            build_id="a" * 32,
+            warmup=warmup if index == 0 else False,
+        )
+        directories.append(directory)
+        state = completed_worker(directory)
+        if index == 0 and warmup:
+            record = state["warmup"]
+            assert record["status"] == "succeeded"
+            assert datetime.fromisoformat(record["started"]).timestamp() >= record["ready_at"]
+            assert (
+                datetime.fromisoformat(record["wait_finished"])
+                - datetime.fromisoformat(record["wait_started"])
+            ).total_seconds() >= 0.04
+            assert datetime.fromisoformat(state["wait_started"]) >= datetime.fromisoformat(
+                record["finished"]
+            )
+        else:
+            assert "warmup" not in state
+        assert (
+            datetime.fromisoformat(state["wait_finished"])
+            - datetime.fromisoformat(state["wait_started"])
+        ).total_seconds() >= 0.04
+        assert (
+            datetime.fromisoformat(state["commands"]["run"]["started"]).timestamp()
+            >= state["ready_at"]
+        )
+        assert (directory / "artifacts/run.stdout").read_text() == "formal output\n"
+        assert (directory / "artifacts/run.stderr").read_text() == "formal error\n"
+        inventory = rr.read_json(directory / "artifacts.json")
+        assert {item["path"] for item in inventory["files"]} == {
+            "run.stdout",
+            "run.stderr",
+            "run-environment.json",
+            "results/formal.txt",
+        }
+        assert not (directory / "warmup").exists()
+    observed = [json.loads(line) for line in calls.read_text().splitlines()]
+    assert len(observed) == 3 + bool(warmup)
+    assert len({call["cwd"] for call in observed}) == len(observed)
+    assert len({call["binary"] for call in observed}) == 1
+    assert not list((tmp_path / "remote").rglob("warmup.txt"))
+    build = rr.build_path(directories[0], manifest)
+    assert (build / "source/UnixBench/build-count").read_text() == "built\n"
+
+
+@pytest.mark.parametrize("mode", ["exit", "timeout"])
+def test_failed_warmup_does_not_start_or_archive_formal_test(config, tmp_path, mode):
+    benchmark = config.benchmarks[0]
+    benchmark.timeout = 0.2
+    source_archive(
+        benchmark.source_archive,
+        run="""import os, pathlib, sys, time
+assert pathlib.Path.cwd().parent.name == "warmup"
+pathlib.Path(os.environ["UB_RESULTDIR"], "score.txt").write_text("discard me")
+print("discard stdout", flush=True)
+print("discard stderr", file=sys.stderr, flush=True)
+"""
+        + ("sys.exit(7)\n" if mode == "exit" else "time.sleep(60)\n"),
+    )
+    benchmark.source_sha256 = None
+    inspect_archive(benchmark)
+    directory, _, _ = manifest_for(config, tmp_path, warmup=True)
+    state = completed_worker(directory, expected=1)
+    assert state["status"] == state["warmup"]["status"] == "failed"
+    assert "run" not in state["commands"]
+    if mode == "timeout":
+        assert state["warmup"]["command"]["timed_out"] is True
+        assert state["warmup"]["command"]["exit_code"] < 0
+    else:
+        assert state["warmup"]["command"]["exit_code"] == 7
+    assert not (directory / "warmup").exists()
+    assert rr.read_json(directory / "artifacts.json")["files"] == []
+    assert not (directory / "work").exists()
+
+
+def test_cancel_during_warmup_kills_descendants_and_removes_results(config, tmp_path):
+    benchmark = config.benchmarks[0]
+    pid_file = tmp_path / "child.pid"
+    benchmark.env["CHILD_PID"] = str(pid_file)
+    source_archive(
+        benchmark.source_archive,
+        run="""import os, pathlib, subprocess, time
+assert pathlib.Path.cwd().parent.name == "warmup"
+child = subprocess.Popen(["sleep", "60"])
+pathlib.Path(os.environ["UB_RESULTDIR"], "score.txt").write_text("discard me")
+pathlib.Path(os.environ["CHILD_PID"]).write_text(str(child.pid))
+time.sleep(60)
+""",
+    )
+    benchmark.source_sha256 = None
+    inspect_archive(benchmark)
+    directory, _, _ = manifest_for(config, tmp_path, warmup=True)
+    process = launch(directory)
+    try:
+        deadline = time.monotonic() + 15
+        while not pid_file.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert pid_file.exists()
+        assert rr.read_json(directory / "state.json")["status"] == "warming_up"
+        process.send_signal(signal.SIGTERM)
+        process.communicate(timeout=15)
+        state = rr.read_json(directory / "state.json")
+        assert state["status"] == state["warmup"]["status"] == "cancelled"
+        child = Path("/proc") / pid_file.read_text() / "stat"
+        assert not child.exists() or child.read_text().split()[2] == "Z"
+        assert not (directory / "warmup").exists()
+        assert rr.read_json(directory / "artifacts.json")["files"] == []
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.communicate()
+
+
+def test_reboot_during_warmup_cleans_up_without_replaying(config, tmp_path, monkeypatch):
+    directory, _, payload = manifest_for(config, tmp_path, warmup=True)
+    results = directory / "warmup/artifacts/results"
+    results.mkdir(parents=True)
+    (results / "score.txt").write_text("discard me")
+    rr.atomic_json(
+        directory / "state.json",
+        {
+            "status": "warming_up",
+            "warmup": {"status": "warming_up"},
+        },
+    )
+    monkeypatch.setattr(rr, "boot_id", lambda: "new-boot")
+    monkeypatch.setattr(
+        rr, "service", lambda d: {"LoadState": "not-found", "ActiveState": "inactive"}
+    )
+    result = rr.status(payload)
+    assert result["state"]["status"] == "interrupted"
+    assert result["state"]["warmup"]["status"] == "interrupted"
+    assert not (directory / "warmup").exists()
+    assert result["inventory"]["files"] == []
+    assert rr.start(payload)["existing"] is True
 
 
 def test_three_rounds_build_once_and_record_complete_environment(config, tmp_path):

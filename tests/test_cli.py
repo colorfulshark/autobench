@@ -151,17 +151,18 @@ def test_validate_requires_hosts_only_when_verification_enabled(config, tmp_path
         assert "SHA256" in result.output
 
 
-def test_cli_status_reports_remote_build_and_wait(config):
+@pytest.mark.parametrize("phase", ["building", "warming_up"])
+def test_cli_status_reports_remote_build_warmup_and_wait(config, phase):
     import time
 
     store = Store(config.policy.state_dir)
     run_id = store.create(config)
     first, second = store.jobs(run_id)
-    store.update(first["id"], "building")
+    store.update(first["id"], phase)
     store.update(second["id"], "stabilizing", ready_at=time.time() + 30)
     result = runner.invoke(app, ["status", run_id, "--state-dir", str(config.policy.state_dir)])
     assert result.exit_code == 0, result.output
     jobs = json.loads(result.output)["jobs"]
-    assert jobs[0]["phase"] == "building"
+    assert jobs[0]["phase"] == phase
     assert jobs[1]["phase"] == "stabilizing" and 0 < jobs[1]["wait_seconds"] <= 30
     store.close()

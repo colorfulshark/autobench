@@ -719,6 +719,155 @@ main {
   margin: 13px 0;
   cursor: pointer;
 }
+.benchmark-rounds {
+  display: grid;
+  grid-template-columns: 160px minmax(0, 1fr);
+  gap: 12px 24px;
+  padding: 16px;
+  margin: 0 0 24px;
+  background: var(--raised);
+  border-radius: var(--radius-control);
+}
+.benchmark-rounds > .field {
+  margin-bottom: 0;
+}
+.benchmark-rounds .field-label,
+.benchmark-rounds .field-label label {
+  font-size: 14px;
+  font-weight: 500;
+}
+.warmup-setting {
+  display: flex;
+  align-items: center;
+  width: 44px;
+  min-height: 40px;
+  cursor: pointer;
+}
+.warmup-setting input:focus:not(:focus-visible) {
+  outline: none;
+}
+.warmup-setting input:focus-visible {
+  outline: 2px solid var(--muted);
+  outline-offset: 3px;
+}
+.benchmark-rounds .field > .hint {
+  font-size: 13px;
+  line-height: 1.6;
+}
+.warmup-setting input {
+  appearance: none;
+  position: relative;
+  flex: none;
+  width: 36px;
+  height: 22px;
+  min-height: 0;
+  margin: 0;
+  padding: 2px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--muted);
+  cursor: pointer;
+}
+.warmup-setting input::before {
+  content: "";
+  display: block;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--panel);
+}
+.warmup-setting input:checked {
+  background: var(--primary);
+}
+.warmup-setting input:checked::before {
+  transform: translateX(14px);
+}
+.benchmark-rounds > .rounds-note {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+.review-scope {
+  display: grid;
+  gap: 2px;
+}
+.review-scope .secondary {
+  font-size: 12px;
+}
+.review-plan-table td:nth-child(n + 3),
+.review-plan-table th:nth-child(n + 3) {
+  text-align: right;
+  white-space: nowrap;
+}
+@media (max-width: 640px) {
+  .benchmark-rounds {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr);
+    padding: 14px;
+    gap: 12px 16px;
+  }
+  .warmup-setting {
+    min-height: 44px;
+  }
+  .review-plan-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .review-plan-table tbody {
+    display: block;
+  }
+  .review-plan-table tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 6px 12px;
+    padding: 14px 0;
+    border-bottom: 1px solid var(--rule);
+  }
+  .review-plan-table td {
+    display: block;
+    padding: 0;
+    border: 0;
+    min-width: 0;
+    max-width: none;
+    overflow: visible;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .review-plan-table td:first-child {
+    grid-column: 1;
+    grid-row: 2;
+  }
+  .review-plan-table td:nth-child(2) {
+    grid-column: 1;
+    grid-row: 1;
+    font-weight: 500;
+  }
+  .review-plan-table td:nth-child(3) {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .review-plan-table td:nth-child(3)::after {
+    content: "正式";
+    margin-left: 4px;
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .review-plan-table td:nth-child(4) {
+    grid-column: 2;
+    grid-row: 2;
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .review-scope {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px 8px;
+    align-items: baseline;
+    font-size: 12px;
+  }
+}
 .unixbench-test-group {
   min-width: 0;
   margin: 14px 0;
@@ -850,6 +999,16 @@ main {
 .object-tab {
   position: relative;
   flex: none;
+}
+.benchmark-tab {
+  min-width: 0;
+  max-width: 100%;
+}
+.benchmark-tab .chip-button {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: left;
 }
 .object-tab .chip-button[draggable="true"] {
   cursor: grab;
@@ -1657,21 +1816,35 @@ dialog input {
   margin-top: 8px;
 }
 .plan-test {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
+  gap: 4px 12px;
   font-size: 13px;
-  margin-bottom: 8px;
+  margin-bottom: 16px;
 }
-.plan-test > span:first-child {
+.plan-test-name {
   min-width: 0;
   overflow-wrap: anywhere;
 }
-.plan-test > span:last-child {
-  color: var(--muted);
+.plan-test-rounds {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
   white-space: nowrap;
-  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+.plan-test-rounds strong {
+  font-size: 18px;
+  font-weight: 500;
+}
+.plan-test-rounds > span,
+.plan-test-warmup {
+  color: var(--muted);
+  font-size: 12px;
+}
+.plan-test-warmup {
+  grid-column: 1 / -1;
 }
 .plan-note {
   margin: 20px -20px -20px;

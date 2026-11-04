@@ -146,7 +146,11 @@ class Store:
         return dict(row)
 
     def config(self, run_id: str) -> Config:
-        return Config.model_validate_json(self.run(run_id)["config"])
+        frozen = json.loads(self.run(run_id)["config"])
+        # New documents default to warmup; existing runs keep their frozen behavior.
+        for benchmark in frozen["benchmarks"]:
+            benchmark.setdefault("warmup", False)
+        return Config.model_validate(frozen)
 
     def runs(self) -> list[dict]:
         return [

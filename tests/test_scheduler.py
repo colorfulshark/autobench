@@ -167,6 +167,86 @@ async def execute(store, run_id, world, **kwargs):
     ).execute(**kwargs)
 
 
+async def test_warmup_only_on_first_round_of_each_enabled_group(config):
+    enabled = config.benchmarks[0]
+    enabled.repetitions = 3
+    disabled = enabled.model_copy(deep=True)
+    disabled.id = "no-warmup"
+    disabled.warmup = False
+    config.benchmarks.append(disabled)
+    store, run_id, world = setup(config)
+    try:
+        assert await execute(store, run_id, world) == "succeeded"
+        assert len(store.jobs(run_id)) == len(world.starts) == 12
+        for job in world.jobs.values():
+            manifest = job["manifest"]
+            assert manifest["warmup"] is (
+                manifest["benchmark"] == enabled.id and manifest["repetition"] == 1
+            )
+        assert len({j["manifest"]["build_id"] for j in world.jobs.values()}) == 4
+        assert len(list((config.policy.output_dir / run_id).rglob("round-*"))) == 12
+    finally:
+        store.close()
+
+
+async def test_legacy_frozen_run_does_not_gain_warmup(config):
+    store, run_id, world = setup(config)
+    try:
+        frozen = json.loads(store.run(run_id)["config"])
+        del frozen["benchmarks"][0]["warmup"]
+        with store.db:
+            store.db.execute("UPDATE runs SET config=? WHERE id=?", (json.dumps(frozen), run_id))
+        assert await execute(store, run_id, world) == "succeeded"
+        assert all(job["manifest"]["warmup"] is False for job in world.jobs.values())
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize("failed", [True, False])
+async def test_warmup_status_resume_and_failure_follow_existing_job_policy(
+    config, monkeypatch, failed
+):
+    config.benchmarks[0].repetitions = 2
+    store, run_id, world = setup(config)
+    original_status = FakeRemote.status
+
+    async def warming_up(self, job_id, directory):
+        result = await original_status(self, job_id, directory)
+        if result["phase"] == "active":
+            result["state"]["status"] = "warming_up"
+        return result
+
+    monkeypatch.setattr(FakeRemote, "status", warming_up)
+    world.fail = failed
+    reports = []
+
+    def stop_controller(message):
+        reports.append(message)
+        if "预热中" in message:
+            raise asyncio.CancelledError()
+
+    try:
+        scheduler = Scheduler(store, run_id, client_factory=world.factory, report=stop_controller)
+        assert await scheduler.execute() == "paused"
+        first = store.jobs(run_id)[0]
+        assert first["status"] == "warming_up"
+        assert first["details"]["manifest"]["warmup"] is True
+        manifest = copy.deepcopy(first["details"]["manifest"])
+        # Resuming must reconcile the original service, including its warmup.
+        config.benchmarks[0].warmup = False
+        assert await execute(store, run_id, world) == ("failed" if failed else "succeeded")
+        assert world.starts.count(first["id"]) == 1
+        assert world.jobs[first["id"]]["manifest"] == manifest
+        assert any("预热中" in message for message in reports)
+        if failed:
+            assert world.starts == [first["id"]]
+            assert all(job["status"] == "blocked" for job in store.jobs(run_id)[1:])
+        else:
+            assert len(world.starts) == 4
+    finally:
+        store.close()
+
+
 async def test_lost_start_reply_and_transfer_resume_never_duplicate(config, monkeypatch):
     store, run_id, world = setup(config)
     world.drop_start = world.drop_download = True

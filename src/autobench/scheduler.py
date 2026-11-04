@@ -240,6 +240,7 @@ class Scheduler:
                 "system": system.id,
                 "benchmark": benchmark.id,
                 "repetition": job["repetition"],
+                "warmup": benchmark.warmup and job["repetition"] == 1,
                 "boot_id": probe["boot_id"],
                 "efi": probe["efi"],
                 "source_path": str(
@@ -304,7 +305,7 @@ class Scheduler:
                 status = await self.retry(lambda: client.cancel(job["id"], directory))
             else:
                 phase = status.get("state", {}).get("status", "preparing")
-                if phase not in {"preparing", "building", "stabilizing", "running"}:
+                if phase not in {"preparing", "building", "stabilizing", "warming_up", "running"}:
                     phase = "preparing"
                 previous = self.store.job(job["id"])["status"]
                 ready_at = status.get("state", {}).get("ready_at")
@@ -315,7 +316,7 @@ class Scheduler:
                         if phase == "stabilizing" and ready_at is not None
                         else ""
                     )
-                    self.event(job, phase + suffix)
+                    self.event(job, ("预热中" if phase == "warming_up" else phase) + suffix)
                 await asyncio.sleep(self.config.policy.poll_interval)
                 status = await self.retry(lambda: client.status(job["id"], directory))
         job = self.store.job(job["id"])

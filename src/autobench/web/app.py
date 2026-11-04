@@ -58,6 +58,7 @@ benchmarks:
   - id: unixbench
     type: unixbench
     source_archive: ./sources/unixbench.tar.gz
+    warmup: true
 """
 
 

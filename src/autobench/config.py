@@ -161,6 +161,7 @@ class Benchmark(Model):
     tests: list[StrictStr] = Field(default_factory=list)
     env: Environment = Field(default_factory=dict)
     repetitions: Annotated[int, Field(ge=1)] = 1
+    warmup: StrictBool = True
     build_timeout: PositiveSeconds = 1800
     timeout: PositiveSeconds = 21600
 

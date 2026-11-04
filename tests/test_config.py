@@ -20,6 +20,35 @@ from autobench.config import (
 from autobench.storage import Store
 
 
+@pytest.mark.parametrize("value", [True, False])
+def test_warmup_configuration_defaults_and_explicit_values(archive, value):
+    assert Benchmark(id="default", source_archive=archive).warmup is True
+    assert Benchmark(id="explicit", source_archive=archive, warmup=value).warmup is value
+
+
+@pytest.mark.parametrize("value", [None, 0, 1, "true", "false", [], {}])
+def test_warmup_requires_a_boolean(archive, value):
+    with pytest.raises(ValidationError):
+        Benchmark(id="invalid", source_archive=archive, warmup=value)
+
+
+def test_frozen_warmup_and_legacy_runs_keep_their_original_behavior(config):
+    with closing(Store(config.policy.state_dir)) as store:
+        run_id = store.create(config)
+        config.benchmarks[0].warmup = False
+        assert store.config(run_id).benchmarks[0].warmup is True
+        disabled = store.create(config)
+        assert store.config(disabled).benchmarks[0].warmup is False
+        legacy = json.loads(store.run(run_id)["config"])
+        del legacy["benchmarks"][0]["warmup"]
+        with store.db:
+            store.db.execute("UPDATE runs SET config=? WHERE id=?", (json.dumps(legacy), run_id))
+        assert store.config(run_id).benchmarks[0].warmup is False
+        assert json.loads(store.run(run_id)["config"]) == legacy
+        # The compatibility default applies only to frozen runs, never new documents.
+        assert Benchmark.model_validate(legacy["benchmarks"][0]).warmup is True
+
+
 @pytest.mark.parametrize("tests", [[], ["execl"], ["execl", "shell"], ["C", "custom-test"]])
 def test_unixbench_test_selection(archive, tests):
     benchmark = Benchmark(id="test", source_archive=archive, tests=tests)

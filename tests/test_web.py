@@ -640,6 +640,20 @@ def test_run_status_explains_system_stabilization_wait(client, config):
     store.close()
 
 
+def test_run_status_exposes_warmup_without_a_formal_result(client, config):
+    store = Store(config.policy.state_dir)
+    try:
+        run_id = store.create(config)
+        job = store.jobs(run_id)[0]
+        store.update(job["id"], "warming_up", remote_dir="/remote/job")
+        result = client.get(f"/api/runs/{run_id}").json()
+        assert result["jobs"][0]["phase"] == "warming_up"
+        assert result["jobs"][0]["output"] is None
+        assert "wait_seconds" not in result["jobs"][0]
+    finally:
+        store.close()
+
+
 def test_missing_connection_file_error_locates_advanced_field(client, saved):
     data = saved["document"]
     data["machines"][0]["ssh"].update(known_hosts="missing-hosts", password="a")

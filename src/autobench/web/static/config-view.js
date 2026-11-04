@@ -45,6 +45,7 @@ import {
   listEditor,
   envEditor,
   table,
+  friendlyError,
 } from "./ui.js";
 import { bootEntryField, updateBootEntryFields } from "./boot-entries.js";
 import { chooseFile } from "./files.js";
@@ -658,13 +659,49 @@ function benchmarkEditor(b, index) {
         help: "不是浏览器所在电脑的文件；相对路径以 YAML 所在目录为准。",
         width: "grow",
       }),
-      field("重复次数", [...path, "repetitions"], {
-        fallback: 1,
-        type: "number",
-        width: "short-field",
-      }),
     ),
   );
+  const rounds = node("div", "benchmark-rounds");
+  const warmup = node("div", "field warmup-field");
+  warmup.dataset.fieldPath = JSON.stringify([...path, "warmup"]);
+  const control = node("label", "warmup-setting");
+  const title = node("label", "field-label", "预热");
+  const input = node("input");
+  input.type = "checkbox";
+  input.checked = b.warmup ?? true;
+  input.addEventListener("change", () => {
+    change([...path, "warmup"], input.checked);
+    warmup.classList.remove("invalid");
+    input.removeAttribute("aria-invalid");
+    warmup.querySelector(".field-error")?.remove();
+  });
+  input.id = `input-benchmarks-${index}-warmup`;
+  title.id = input.id + "-label";
+  title.htmlFor = input.id;
+  input.setAttribute("aria-labelledby", title.id);
+  const description = hint("先完整运行 1 轮，预热结果不保存。");
+  description.id = input.id + "-help";
+  input.setAttribute("aria-describedby", description.id);
+  control.append(input);
+  warmup.append(title, control, description);
+  const errors = state.errors.filter(
+    (error) => JSON.stringify(error.path) === warmup.dataset.fieldPath,
+  );
+  if (errors.length) {
+    warmup.classList.add("invalid");
+    input.setAttribute("aria-invalid", "true");
+    warmup.append(node("p", "field-error", errors.map(friendlyError).join("；")));
+  }
+  rounds.append(
+    field("正式轮数", [...path, "repetitions"], {
+      fallback: 1,
+      type: "number",
+      help: "仅保存正式结果。",
+    }),
+    warmup,
+    node("p", "hint rounds-note", "预热与每轮正式测试前，均等待系统稳定。"),
+  );
+  panel.append(rounds);
   panel.append(unixbenchTestsEditor([...path, "tests"]));
   panel.append(
     advanced(
@@ -818,10 +855,20 @@ export function review() {
   const rows = [];
   for (const m of machines())
     for (const s of asList(m.systems))
-      for (const b of benchmarks())
-        rows.push([m.id, s.id, b.id, b.repetitions ?? 1]);
+      for (const b of benchmarks()) {
+        const scope = node("span", "review-scope");
+        scope.append(node("span", "mono", m.id), node("span", "secondary", s.id));
+        rows.push([
+          scope,
+          b.id,
+          `${b.repetitions ?? 1} 轮`,
+          (b.warmup ?? true) ? "1 轮预热" : "关闭",
+        ]);
+      }
   const wrap = node("div", "table-scroll");
-  wrap.append(table(["机器", "系统", "测试", "重复次数"], rows));
+  const plan = table(["机器 / 系统", "测试", "正式轮数", "预热"], rows);
+  plan.classList.add("review-plan-table");
+  wrap.append(plan);
   panel.append(wrap);
   panel.append(
     node(
@@ -1155,7 +1202,8 @@ const fieldNames = {
   boot_entry: "启动项",
   source_archive: "源码包",
   tests: "测试项",
-  repetitions: "重复次数",
+  repetitions: "正式轮数",
+  warmup: "预热",
 };
 export function errorLabel(error) {
   return error.path?.length

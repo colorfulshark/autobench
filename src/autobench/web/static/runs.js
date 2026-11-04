@@ -307,6 +307,7 @@ function renderDetail() {
     [
       "preparing",
       "building",
+      "warming_up",
       "submitting",
       "running",
       "switching",
@@ -333,6 +334,7 @@ function renderDetail() {
     [
       "preparing",
       "building",
+      "warming_up",
       "submitting",
       "running",
       "switching",

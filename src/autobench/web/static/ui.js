@@ -435,6 +435,7 @@ export function friendlyError(error) {
     missing: "请填写此项",
     string_type: "请输入文本",
     int_type: "请输入整数",
+    bool_type: "请使用 true 或 false，或通过开关设置",
     int_parsing: "请输入整数",
     int_from_float: "请输入整数",
     greater_than: "数值需要大于允许的下限",
