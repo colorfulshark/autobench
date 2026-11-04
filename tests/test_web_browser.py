@@ -1529,6 +1529,131 @@ def test_boot_entry_identification_uses_overrides_and_ignores_outdated_results(
     assert entry.evaluate("e => e.tagName") == "INPUT" and entry.input_value() == "00AB"
 
 
+@pytest.mark.parametrize("width", [1440, 1101, 1100, 768, 390])
+def test_bottom_bar_geometry_stays_fixed_across_steps_and_scroll(browser_page, ui_server, width):
+    page = browser_page
+    page.set_viewport_size({"width": width, "height": 900})
+    ready(page, ui_server)
+    load_existing(page, ui_server)
+    page.evaluate("document.fonts.ready")
+
+    def geometry():
+        return page.locator(".action-bar").evaluate(
+            """bar => [bar, bar.querySelector('#wizard-steps'),
+                ...bar.querySelectorAll('.wizard-step'),
+                ...bar.querySelectorAll('.step-number'),
+                bar.querySelector('#secondary-action'),
+                bar.querySelector('#primary-action')].map(el => {
+                    const r = el.getBoundingClientRect();
+                    return [r.x, r.y, r.width, r.height];
+                })"""
+        )
+
+    for height in (900, 640):
+        page.set_viewport_size({"width": width, "height": height})
+        baseline = geometry()
+        assert abs(baseline[0][1] + baseline[0][3] - height) <= 1
+        for index in (0, 1, 2, 3, 4, 0, 4, 2):
+            page.locator(".wizard-step").nth(index).click()
+            for offset in ("0", "300", "document.documentElement.scrollHeight"):
+                page.evaluate(f"window.scrollTo(0, {offset})")
+                actual = geometry()
+                for reference, current in zip(baseline, actual, strict=True):
+                    assert all(abs(a - b) <= 1 for a, b in zip(reference, current, strict=True)), (
+                        width, height, index, reference, current
+                    )
+                assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+    open_step(page, "检查运行")
+    page.locator("#primary-action").click()
+    page.wait_for_function(
+        "() => document.querySelector('#primary-action').textContent.includes('开始测试')"
+    )
+    for reference, current in zip(baseline, geometry(), strict=True):
+        assert all(abs(a - b) <= 1 for a, b in zip(reference, current, strict=True))
+
+
+@pytest.mark.parametrize("width", [1440, 1101, 1100, 768, 390])
+def test_bottom_bar_combines_steps_and_actions(browser_page, ui_server, width):
+    page = browser_page
+    page.set_viewport_size({"width": width, "height": 900})
+    ready(page, ui_server)
+    bar = page.locator(".action-bar")
+    assert bar.locator("#wizard-steps").count() == 1
+    for index in range(5):
+        page.locator(".wizard-step").nth(index).click()
+        page.evaluate("window.scrollTo(0, 0)")
+        navigation = page.locator("#wizard-steps").bounding_box()
+        actions = bar.locator(".actions").bounding_box()
+        footer = bar.bounding_box()
+        assert page.locator(".wizard-step[aria-current=step]").count() == 1
+        assert footer["y"] >= 44
+        assert footer["y"] + footer["height"] <= 901
+        if width > 1100:
+            assert navigation["x"] + navigation["width"] <= actions["x"]
+            assert abs(
+                navigation["y"] + navigation["height"] / 2
+                - actions["y"] - actions["height"] / 2
+            ) <= 1
+        else:
+            assert navigation["y"] + navigation["height"] <= actions["y"]
+            assert abs(
+                navigation["x"] + navigation["width"]
+                - actions["x"] - actions["width"]
+            ) <= 1
+        previous_right = navigation["x"]
+        for step in page.locator(".wizard-step").all():
+            box = step.bounding_box()
+            assert box["height"] >= 44
+            assert box["x"] >= previous_right - 1
+            assert box["x"] + box["width"] <= width
+            previous_right = box["x"] + box["width"]
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+    # The expanded connection form must remain reachable behind the sticky footer.
+    open_step(page, "连接机器")
+    page.get_by_text("高级连接设置", exact=True).click()
+    last_input = page.locator("#config-body input:visible").last
+    last_input.evaluate("el => el.scrollIntoView({block: 'center'})")
+    last_field = last_input.bounding_box()
+    assert last_field["y"] >= 44
+    assert last_field["y"] + last_field["height"] <= bar.bounding_box()["y"]
+
+    set_editor_mode(page, "yaml")
+    assert page.locator("#wizard-steps").is_hidden()
+    assert page.locator("#prev-step").is_hidden()
+    assert page.locator("#secondary-action").is_visible()
+    assert page.locator("#primary-action").text_content().strip() == "保存并检查"
+    page.evaluate("window.scrollTo(0, document.documentElement.scrollHeight)")
+    actions = bar.locator(".actions").bounding_box()
+    footer = bar.bounding_box()
+    assert abs(actions["x"] + actions["width"] - footer["x"] - footer["width"]) <= 1
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.locator("#tab-runs").click()
+    assert bar.is_hidden()
+
+
+@pytest.mark.parametrize("width", [1440, 768, 390])
+def test_bottom_bar_step_keyboard_focus_survives_render(browser_page, ui_server, width):
+    page = browser_page
+    page.set_viewport_size({"width": width, "height": 900})
+    ready(page, ui_server)
+    step = page.locator(".wizard-step").nth(3)
+    step.focus()
+    page.keyboard.press("Space")
+    assert page.locator(".wizard-step[aria-current=step]").get_attribute("id") == "wizard-step-3"
+    assert page.evaluate("document.activeElement.id") == "wizard-step-3"
+    page.keyboard.press("Tab")
+    assert page.evaluate("document.activeElement.id") == "wizard-step-4"
+    page.keyboard.press("Enter")
+    assert page.evaluate("document.activeElement.id") == "wizard-step-4"
+    assert page.locator(".wizard-step[aria-current=step]").get_attribute("id") == "wizard-step-4"
+    page.keyboard.press("Tab")
+    assert page.evaluate("document.activeElement.id") == "prev-step"
+    page.keyboard.press("Enter")
+    assert "运行设置" in page.locator(".wizard-step[aria-current=step]").inner_text()
+
+
 @pytest.mark.parametrize("width", [1440, 768, 390])
 def test_five_steps_preserve_existing_config_and_fit_viewport(browser_page, ui_server, width):
     page, server = browser_page, ui_server

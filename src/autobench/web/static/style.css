@@ -73,6 +73,9 @@
 html {
   scroll-padding-top: calc(var(--topbar-height) + 8px);
 }
+html:has(#page-config:not([hidden])) {
+  scrollbar-gutter: stable;
+}
 body {
   margin: 0;
   background: var(--ground);
@@ -371,8 +374,20 @@ main {
   border-radius: 16px;
 }
 .page {
+  --page-gutter: 32px;
+  --page-inset: 9px;
   margin: 0;
-  padding: 28px 32px 0;
+  padding: 28px var(--page-gutter) 0;
+}
+#page-config {
+  --footer-padding: 18px;
+  --footer-gap: 16px;
+  --footer-navigation-height: 44px;
+  --footer-height: calc(1px + 2 * var(--footer-padding) + 44px);
+  padding-bottom: calc(var(--footer-height) + 16px);
+}
+#page-config:has(#wizard-steps[hidden]) {
+  --footer-height: calc(1px + 2 * var(--footer-padding) + 44px);
 }
 .pill {
   font-size: 12px;
@@ -562,12 +577,10 @@ main {
 .wizard-steps {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
+  flex: 1;
+  min-width: 0;
+  height: var(--footer-navigation-height);
   gap: 0;
-  padding: 14px 16px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-card);
-  margin-bottom: 24px;
-  background: var(--raised);
 }
 .wizard-step {
   position: relative;
@@ -579,13 +592,14 @@ main {
   background: none;
   color: var(--muted);
   padding: 0 12px;
-  min-height: 28px;
+  min-height: 44px;
   text-align: left;
   font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
 }
 .wizard-step[data-active="true"] {
   color: var(--ink);
-  font-weight: 500;
 }
 .step-number {
   width: 24px;
@@ -1029,9 +1043,11 @@ main {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  padding: 18px 0;
-  position: sticky;
+  gap: var(--footer-gap);
+  height: var(--footer-height);
+  padding: var(--footer-padding) 0;
+  position: fixed;
+  inset-inline: calc(var(--page-inset) + var(--page-gutter));
   bottom: 0;
   background: var(--panel);
   border-top: 1px solid var(--line);
@@ -1039,7 +1055,24 @@ main {
   z-index: 5;
 }
 .action-bar > .actions {
+  display: grid;
+  grid-template-columns: 88px 64px 104px;
   flex-shrink: 0;
+  margin-left: auto;
+}
+.action-bar > .actions > button {
+  min-width: 0;
+  height: 44px;
+  padding-inline: 8px;
+}
+#prev-step {
+  grid-column: 1;
+}
+#secondary-action {
+  grid-column: 2;
+}
+#primary-action {
+  grid-column: 3;
 }
 .actions {
   display: flex;
@@ -1805,7 +1838,8 @@ textarea:focus-visible {
     grid-template-columns: 172px auto minmax(0, 1fr);
   }
   .page {
-    padding: 24px 24px 0;
+    --page-gutter: 24px;
+    padding: 24px var(--page-gutter) 0;
   }
   .config-layout {
     grid-template-columns: minmax(0, 1fr) 240px;
@@ -1827,6 +1861,12 @@ textarea:focus-visible {
   }
 }
 @media (max-width: 1100px) {
+  #page-config {
+    --footer-height: calc(
+      1px + 2 * var(--footer-padding) + var(--footer-navigation-height) +
+        var(--footer-gap) + 44px
+    );
+  }
   .topbar {
     grid-template-columns: 156px auto minmax(0, 1fr);
     gap: 12px;
@@ -1855,8 +1895,8 @@ textarea:focus-visible {
   .action-bar {
     flex-wrap: wrap;
   }
-  .action-bar > .actions {
-    margin-left: auto;
+  .action-bar > .wizard-steps {
+    flex-basis: 100%;
   }
 }
 @media (max-width: 850px) {
@@ -1926,7 +1966,14 @@ textarea:focus-visible {
     min-height: calc(100vh - var(--topbar-height));
   }
   .page {
-    padding: 20px 16px 0;
+    --page-gutter: 16px;
+    --page-inset: 0px;
+    padding: 20px var(--page-gutter) 0;
+  }
+  #page-config {
+    --footer-padding: 12px;
+    --footer-gap: 8px;
+    --footer-navigation-height: 50px;
   }
   .project-bar {
     gap: 8px;
@@ -1972,10 +2019,6 @@ textarea:focus-visible {
   }
   #save-state[data-tone="success"] {
     background: var(--success-ink);
-  }
-  .wizard-steps {
-    padding: 12px 4px;
-    margin-bottom: 20px;
   }
   .wizard-step {
     display: grid;
@@ -2086,20 +2129,9 @@ textarea:focus-visible {
   .boot-entry-controls > select {
     flex: 1 1 100px;
   }
-  .action-bar {
-    padding: 12px 0;
-    gap: 8px;
-  }
-  .action-bar > div:first-child {
-    flex: 1 1 100%;
-  }
   .action-bar > .actions {
     justify-content: flex-end;
-    flex-wrap: nowrap;
     gap: 12px;
-  }
-  #action-hint {
-    font-size: 12px;
   }
   .action-bar .button {
     padding: 8px 12px;

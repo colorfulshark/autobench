@@ -941,6 +941,7 @@ export function renderConfig() {
         },
         "wizard-step",
       );
+      b.id = `wizard-step-${index}`;
       b.dataset.active = String(index === state.step);
       if (index === state.step) b.setAttribute("aria-current", "step");
       const number = node("span", "step-number", index + 1);

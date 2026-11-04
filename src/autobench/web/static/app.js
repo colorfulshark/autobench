@@ -1,6 +1,5 @@
 import {
   state,
-  configSteps,
   reviewStep,
   api,
   subscribe,
@@ -78,11 +77,6 @@ function chrome() {
       : checked
         ? "开始测试 →"
         : "保存并检查";
-  $("action-hint").textContent = checked
-    ? "配置检查已通过；开始后可能按计划切换远端系统。"
-    : state.step < reviewStep && state.mode === "form"
-      ? `第 ${state.step + 1} 步，共 ${configSteps.length} 步 · 可以随时保存草稿`
-      : "检查会校验配置、源码包和本地 SSH 文件，不启动测试。";
   $("yaml-meta").textContent =
     `${$("yaml-editor").value.split("\n").length} 行 · UTF-8`;
   $("config-errors").hidden = !state.errors.length;

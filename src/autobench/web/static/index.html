@@ -185,11 +185,6 @@
           hidden
         >
           <div
-            id="wizard-steps"
-            class="wizard-steps"
-            aria-label="配置步骤"
-          ></div>
-          <div
             id="config-errors"
             class="error-summary"
             role="alert"
@@ -217,7 +212,11 @@
           </section>
           <div id="validation-result" class="callout success" hidden></div>
           <div class="action-bar">
-            <div><span id="action-hint" class="secondary"></span></div>
+            <nav
+              id="wizard-steps"
+              class="wizard-steps"
+              aria-label="配置步骤"
+            ></nav>
             <div class="actions">
               <button id="prev-step" class="button secondary" hidden>
                 ← 上一步</button
