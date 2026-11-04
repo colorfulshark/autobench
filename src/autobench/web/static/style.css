@@ -830,10 +830,6 @@ main {
 .env-editor .hint {
   margin: 6px 0 0;
 }
-.object-controls {
-  flex-wrap: wrap;
-  margin-bottom: 16px;
-}
 .machine-tabs {
   display: flex;
   align-items: center;
@@ -851,24 +847,24 @@ main {
   border-color: var(--control);
   color: var(--ink);
 }
-.machine-tab {
+.object-tab {
   position: relative;
   flex: none;
 }
-.machine-tab .chip-button[draggable="true"] {
+.object-tab .chip-button[draggable="true"] {
   cursor: grab;
 }
-.machine-tab.dragging {
+.object-tab.dragging {
   opacity: 0.5;
 }
-.machine-tab.dragging .chip-button {
+.object-tab.dragging .chip-button {
   cursor: grabbing;
 }
-.machine-tab.drop-target .chip-button {
+.object-tab.drop-target .chip-button {
   outline: 2px solid var(--ink);
   outline-offset: 2px;
 }
-.machine-remove {
+.object-remove {
   position: absolute;
   top: -8px;
   left: -8px;
@@ -886,21 +882,21 @@ main {
   opacity: 0;
   pointer-events: none;
 }
-.machine-remove .icon {
+.object-remove .icon {
   width: 12px;
   height: 12px;
 }
-.machine-tab:hover .machine-remove,
-.machine-tab:focus-within .machine-remove {
+.object-tab:hover .object-remove,
+.object-tab:focus-within .object-remove {
   opacity: 1;
   pointer-events: auto;
 }
-.machine-remove:hover {
+.object-remove:hover {
   color: var(--danger);
   border-color: var(--danger);
 }
 @media (hover: none), (pointer: coarse) {
-  .machine-remove {
+  .object-remove {
     opacity: 1;
     pointer-events: auto;
   }

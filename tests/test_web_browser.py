@@ -1874,27 +1874,161 @@ def test_system_step_only_selects_existing_machines(browser_page, ui_server):
     assert page.locator(".machine-remove").count() == 3
 
 
-def test_benchmark_management_preserves_selection_and_handles_empty_list(browser_page, ui_server):
-    page, server = browser_page, ui_server
+def load_benchmark_picker(page, server, count=3):
     ready(page, server)
+    load_existing(page, server)
+    set_editor_mode(page, "yaml")
+    editor = page.locator("#yaml-editor")
+    document = yaml.safe_load(editor.input_value())
+    items = [
+        {
+            "id": f"unixbench{i:02}",
+            "type": "unixbench",
+            "source_archive": f"archive-{i}.tar.gz",
+            "repetitions": i,
+            "make_args": [f"-j{i}"],
+            "env": {"CASE": f"case-{i}"},
+            "tests": ["dhry2reg"],
+        }
+        for i in range(1, count + 1)
+    ]
+    document["benchmarks"] = items
+    editor.fill(yaml.safe_dump(document))
+    set_editor_mode(page, "form")
     open_step(page, "设置测试")
-    page.locator("#input-benchmarks-0-source_archive").fill("original.tar.gz")
-    assert page.get_by_role("button", name="上移测试", exact=True).is_disabled()
-    page.get_by_role("button", name="＋ 添加测试", exact=True).click()
-    page.locator("#input-benchmarks-1-source_archive").fill("second.tar.gz")
-    page.get_by_role("button", name="上移测试", exact=True).click()
-    assert page.locator("#input-benchmarks-0-source_archive").input_value() == "second.tar.gz"
-    page.get_by_role("button", name="下移测试", exact=True).click()
-    assert page.locator("#input-benchmarks-1-source_archive").input_value() == "second.tar.gz"
-    page.get_by_role("button", name="移除此测试", exact=True).click()
-    assert page.locator("#input-benchmarks-0-source_archive").input_value() == "original.tar.gz"
-    page.get_by_role("button", name="移除此测试", exact=True).click()
+    return items
+
+
+@pytest.mark.parametrize("width", [1440, 768, 390])
+def test_benchmark_drag_and_keyboard_sort_preserve_config(browser_page, ui_server, width):
+    page, server = browser_page, ui_server
+    page.set_viewport_size({"width": width, "height": 1000})
+    original = load_benchmark_picker(page, server)
+    tabs = page.locator(".benchmark-picker .chip-button")
+    assert page.get_by_role("button", name="上移测试", exact=True).count() == 0
+    assert page.get_by_role("button", name="下移测试", exact=True).count() == 0
+    assert page.get_by_role("button", name="移除此测试", exact=True).count() == 0
+    tabs.nth(2).click()
+    tabs.nth(0).drag_to(tabs.nth(2))
+    assert tabs.all_text_contents() == ["unixbench02", "unixbench03", "unixbench01"]
+    assert page.locator(".benchmark-picker .active").text_content() == "unixbench03"
+    assert page.locator("#input-benchmarks-1-source_archive").input_value() == "archive-3.tar.gz"
+    tabs.nth(2).drag_to(tabs.nth(0))
+    assert tabs.all_text_contents() == ["unixbench01", "unixbench02", "unixbench03"]
+    tabs.nth(2).drag_to(tabs.nth(0))
+    tabs.nth(0).press("Alt+ArrowRight")
+    assert tabs.all_text_contents() == ["unixbench01", "unixbench03", "unixbench02"]
+    assert tabs.nth(1).evaluate("e => e === document.activeElement")
+    assert page.locator(".benchmark-picker .active").text_content() == "unixbench03"
+    tabs.nth(1).press("Alt+ArrowLeft")
+    tabs.nth(0).press("Alt+ArrowLeft")
+    assert tabs.all_text_contents() == ["unixbench03", "unixbench01", "unixbench02"]
+    assert page.locator(".dragging, .drop-target").count() == 0
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.locator("#secondary-action").click()
+    page.wait_for_function("() => document.querySelector('#save-state').textContent === '已保存'")
+    saved = yaml.safe_load(server.existing.read_text())
+    assert saved["benchmarks"] == [original[2], original[0], original[1]]
+    page.reload()
+    page.locator("#input-machines-0-ssh-host").wait_for()
+    open_step(page, "设置测试")
+    assert tabs.all_text_contents() == ["unixbench03", "unixbench01", "unixbench02"]
+    set_editor_mode(page, "yaml")
+    assert yaml.safe_load(page.locator("#yaml-editor").input_value()) == saved
+
+
+@pytest.mark.parametrize("width", [1440, 768, 390])
+def test_benchmark_drag_across_rows_and_cancel(browser_page, ui_server, width):
+    page, server = browser_page, ui_server
+    page.set_viewport_size({"width": width, "height": 1000})
+    original = load_benchmark_picker(page, server, count=14)
+    tabs = page.locator(".benchmark-picker .chip-button")
+    tabs.nth(13).click()
+    assert tabs.nth(0).bounding_box()["y"] < tabs.nth(13).bounding_box()["y"]
+    tabs.nth(13).drag_to(tabs.nth(0))
+    assert tabs.all_text_contents() == [original[-1]["id"], *[b["id"] for b in original[:-1]]]
+    assert page.locator(".benchmark-picker .active").text_content() == "unixbench14"
+    page.locator("#secondary-action").click()
+    page.wait_for_function("() => document.querySelector('#save-state').textContent === '已保存'")
+    before = tabs.all_text_contents()
+    source = tabs.nth(0).bounding_box()
+    page.mouse.move(source["x"] + source["width"] / 2, source["y"] + source["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(source["x"] + 30, source["y"] + 80, steps=8)
+    page.locator(".benchmark-tab.dragging").wait_for()
+    page.mouse.move(5, 5, steps=8)
+    page.mouse.up()
+    tabs.nth(0).press("Alt+ArrowLeft")
+    tabs.nth(13).press("Alt+ArrowRight")
+    tabs.nth(0).drag_to(tabs.nth(0))
+    assert tabs.all_text_contents() == before
+    assert page.locator(".dragging, .drop-target").count() == 0
+    assert page.locator("#save-state").text_content() == "已保存"
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+
+@pytest.mark.parametrize("selected,removed", [(2, 0), (0, 2), (1, 1), (0, 0), (2, 2)])
+def test_benchmark_corner_delete_preserves_selection(browser_page, ui_server, selected, removed):
+    page, server = browser_page, ui_server
+    original = load_benchmark_picker(page, server)
+    tabs = page.locator(".benchmark-picker .chip-button")
+    tabs.nth(selected).click()
+    dialogs = []
+    page.on("dialog", lambda dialog: dialogs.append(dialog.type))
+    corner = page.get_by_role("button", name=f"删除测试 {original[removed]['id']}", exact=True)
+    page.locator(".benchmark-tab").nth(removed).hover()
+    corner.click()
+    remaining = original[:removed] + original[removed + 1 :]
+    expected = original[selected] if selected != removed else remaining[max(0, removed - 1)]
+    assert tabs.all_text_contents() == [b["id"] for b in remaining]
+    assert page.locator(".benchmark-picker .active").text_content() == expected["id"]
+    index = remaining.index(expected)
+    assert (
+        page.locator(f"#input-benchmarks-{index}-source_archive").input_value()
+        == expected["source_archive"]
+    )
+    assert tabs.nth(index).evaluate("e => e === document.activeElement")
+    assert dialogs == []
+    page.locator("#secondary-action").click()
+    page.wait_for_function("() => document.querySelector('#save-state').textContent === '已保存'")
+    saved = yaml.safe_load(server.existing.read_text())
+    assert saved["benchmarks"] == remaining
+    page.reload()
+    page.locator("#input-machines-0-ssh-host").wait_for()
+    open_step(page, "设置测试")
+    assert tabs.all_text_contents() == [b["id"] for b in remaining]
+
+
+def test_benchmark_corner_keyboard_delete_and_empty_state(browser_page, ui_server):
+    page, server = browser_page, ui_server
+    load_benchmark_picker(page, server, count=2)
+    tabs = page.locator(".benchmark-picker .chip-button")
+    tabs.nth(1).click()
+    page.mouse.move(0, 0)
+    corner = page.get_by_role("button", name="删除测试 unixbench01", exact=True)
+    assert corner.evaluate("e => getComputedStyle(e).opacity") == "0"
+    page.locator(".benchmark-tab").nth(0).hover()
+    assert corner.evaluate("e => getComputedStyle(e).opacity") == "1"
+    page.mouse.move(0, 0)
+    tabs.nth(0).focus()
+    assert corner.evaluate("e => getComputedStyle(e).opacity") == "1"
+    tabs.nth(0).press("Tab")
+    assert corner.evaluate("e => e === document.activeElement")
+    corner.press("Enter")
+    assert page.locator(".benchmark-picker .active").text_content() == "unixbench02"
+    assert page.locator("#input-benchmarks-0-source_archive").input_value() == "archive-2.tar.gz"
+    page.get_by_role("button", name="删除测试 unixbench02", exact=True).press("Space")
+    assert tabs.count() == 0
+    assert page.locator(".benchmark-remove").count() == 0
+    assert page.get_by_role("button", name="＋ 添加测试", exact=True).evaluate(
+        "e => e === document.activeElement"
+    )
     assert page.get_by_text("尚未添加测试", exact=True).is_visible()
     page.locator("#primary-action").click()
     assert page.get_by_text("请添加至少一项测试。", exact=True).is_visible()
     page.get_by_role("button", name="＋ 添加测试", exact=True).click()
     assert page.locator("#input-benchmarks-0-source_archive").input_value() == ""
-    assert page.locator(".machine-tabs .chip-button.active").text_content() == "unixbench01"
+    assert page.locator(".benchmark-picker .active").text_content() == "unixbench01"
 
 
 @pytest.mark.parametrize("field,invalid", [("policy-poll_interval", "-1"), ("version", "2")])

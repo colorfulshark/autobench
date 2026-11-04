@@ -419,8 +419,8 @@ function addMachine() {
   state.system = null;
   emit(true);
 }
-function focusMachine(index) {
-  const picker = $("config-body").querySelector(".machine-picker");
+function focusObject(kind, index) {
+  const picker = $("config-body").querySelector(`.${kind}-picker`);
   (
     picker?.querySelectorAll(".chip-button")[index] ||
     picker?.querySelector(".text-button")
@@ -437,7 +437,7 @@ function moveMachine(machine, target) {
   list.splice(target, 0, machine);
   state.machine = list.indexOf(selected);
   dirty(true);
-  focusMachine(target);
+  focusObject("machine", target);
 }
 function removeMachine(machine) {
   if (state.step !== 0) return;
@@ -451,7 +451,39 @@ function removeMachine(machine) {
     state.system = null;
   } else state.machine = list.indexOf(selected);
   dirty(true);
-  focusMachine(state.machine);
+  focusObject("machine", state.machine);
+}
+function addBenchmark() {
+  if (state.step !== 2) return;
+  const list = benchmarks();
+  change(["benchmarks"], [...list, newBenchmark(list)]);
+  state.benchmark = list.length;
+  emit(true);
+}
+function moveBenchmark(benchmark, target) {
+  if (state.step !== 2) return;
+  const list = benchmarks();
+  const index = list.indexOf(benchmark),
+    selected = list[state.benchmark];
+  if (index < 0 || target < 0 || target >= list.length || index === target)
+    return;
+  list.splice(index, 1);
+  list.splice(target, 0, benchmark);
+  state.benchmark = list.indexOf(selected);
+  dirty(true);
+  focusObject("benchmark", target);
+}
+function removeBenchmark(benchmark) {
+  if (state.step !== 2) return;
+  const list = benchmarks();
+  const index = list.indexOf(benchmark),
+    selected = list[state.benchmark];
+  if (index < 0) return;
+  list.splice(index, 1);
+  state.benchmark =
+    selected === benchmark ? Math.max(0, index - 1) : list.indexOf(selected);
+  dirty(true);
+  focusObject("benchmark", state.benchmark);
 }
 function addSystem(machine, index) {
   const list = asList(machine.systems),
@@ -816,61 +848,38 @@ export function review() {
     );
   return panel;
 }
-function orderControls(items, index, select, label) {
-  const controls = node("div", "actions object-order");
-  for (const [offset, text] of [
-    [-1, "上移"],
-    [1, "下移"],
-  ]) {
-    const b = button(
-      text,
-      () => {
-        [items[index], items[index + offset]] = [
-          items[index + offset],
-          items[index],
-        ];
-        select(index + offset);
-        dirty(true);
-      },
-      "icon-button",
-    );
-    b.disabled = index + offset < 0 || index + offset >= items.length;
-    b.setAttribute("aria-label", text + label);
-    controls.append(b);
-  }
-  return controls;
-}
-function objectControls(items, index, select, label, remove) {
-  const controls = node("div", "actions object-controls");
-  controls.append(
-    orderControls(items, index, select, label),
-    button("移除此" + label, remove, "text-button danger"),
-  );
-  return controls;
-}
-function machineTabs() {
-  const e = node("div", "machine-tabs machine-picker");
-  const editable = state.step === 0;
-  let draggedMachine = null;
+function objectTabs({
+  kind,
+  label,
+  items,
+  selected,
+  editable,
+  onSelect,
+  onMove,
+  onRemove,
+  onAdd,
+  removeTitle = (name) => `删除${label} ${name}`,
+}) {
+  const e = node("div", `machine-tabs ${kind}-picker`);
+  let draggedItem = null;
   const clearDropTargets = () => {
     e.querySelectorAll(".drop-target").forEach((tab) =>
       tab.classList.remove("drop-target"),
     );
   };
-  machines().forEach((m, index) => {
-    const tab = node("div", "machine-tab");
-    const name = m.id || `机器 ${index + 1}`;
+  items.forEach((item, index) => {
+    const tab = node("div", `object-tab ${kind}-tab`);
+    const name = item.id || `${label} ${index + 1}`;
     const b = button(
       name,
       () => {
-        state.machine = index;
-        state.system = null;
+        onSelect(index);
         emit(true);
       },
       "chip-button",
     );
-    b.classList.toggle("active", index === state.machine);
-    b.setAttribute("aria-pressed", String(index === state.machine));
+    b.classList.toggle("active", index === selected);
+    b.setAttribute("aria-pressed", String(index === selected));
     tab.append(b);
     if (editable) {
       b.draggable = true;
@@ -880,24 +889,24 @@ function machineTabs() {
         if (!event.altKey || !["ArrowLeft", "ArrowRight"].includes(event.key))
           return;
         event.preventDefault();
-        moveMachine(
-          m,
-          machines().indexOf(m) + (event.key === "ArrowLeft" ? -1 : 1),
+        onMove(
+          item,
+          items.indexOf(item) + (event.key === "ArrowLeft" ? -1 : 1),
         );
       });
       b.addEventListener("dragstart", (event) => {
-        draggedMachine = m;
+        draggedItem = item;
         event.dataTransfer.effectAllowed = "move";
         event.dataTransfer.setData("text/plain", name);
         tab.classList.add("dragging");
       });
       b.addEventListener("dragend", () => {
-        draggedMachine = null;
+        draggedItem = null;
         tab.classList.remove("dragging");
         clearDropTargets();
       });
       tab.addEventListener("dragover", (event) => {
-        if (!draggedMachine || draggedMachine === m) return;
+        if (!draggedItem || draggedItem === item) return;
         event.preventDefault();
         event.dataTransfer.dropEffect = "move";
         clearDropTargets();
@@ -908,23 +917,59 @@ function machineTabs() {
           tab.classList.remove("drop-target");
       });
       tab.addEventListener("drop", (event) => {
-        if (!draggedMachine) return;
+        if (!draggedItem) return;
         event.preventDefault();
-        const source = draggedMachine;
-        draggedMachine = null;
+        const source = draggedItem;
+        draggedItem = null;
         clearDropTargets();
-        moveMachine(source, machines().indexOf(m));
+        onMove(source, items.indexOf(item));
       });
-      const remove = button("", () => removeMachine(m), "machine-remove");
-      remove.setAttribute("aria-label", `删除机器 ${name}`);
-      remove.title = `删除机器 ${name} 及其系统配置`;
+      const remove = button(
+        "",
+        () => onRemove(item),
+        `object-remove ${kind}-remove`,
+      );
+      remove.setAttribute("aria-label", `删除${label} ${name}`);
+      remove.title = removeTitle(name);
       remove.append(icon("error"));
       tab.append(remove);
     }
     e.append(tab);
   });
-  if (editable) e.append(button("＋ 添加机器", addMachine, "text-button"));
+  if (editable) e.append(button(`＋ 添加${label}`, onAdd, "text-button"));
   return e;
+}
+function machineTabs() {
+  return objectTabs({
+    kind: "machine",
+    label: "机器",
+    items: machines(),
+    selected: state.machine,
+    editable: state.step === 0,
+    onSelect: (index) => {
+      state.machine = index;
+      state.system = null;
+    },
+    onMove: moveMachine,
+    onRemove: removeMachine,
+    onAdd: addMachine,
+    removeTitle: (name) => `删除机器 ${name} 及其系统配置`,
+  });
+}
+function benchmarkTabs() {
+  return objectTabs({
+    kind: "benchmark",
+    label: "测试",
+    items: benchmarks(),
+    selected: state.benchmark,
+    editable: state.step === 2,
+    onSelect: (index) => {
+      state.benchmark = index;
+    },
+    onMove: moveBenchmark,
+    onRemove: removeBenchmark,
+    onAdd: addBenchmark,
+  });
 }
 export function renderConfig() {
   const container = $("config-body");
@@ -1029,49 +1074,9 @@ export function renderConfig() {
     } else container.append(empty("请先添加机器", "返回上一步填写连接信息。"));
   }
   if (state.step === 2) {
-    const tab = node("div", "machine-tabs");
-    benchmarks().forEach((b, index) => {
-      const btn = button(
-        b.id || `测试 ${index + 1}`,
-        () => {
-          state.benchmark = index;
-          emit(true);
-        },
-        "chip-button",
-      );
-      btn.classList.toggle("active", index === state.benchmark);
-      tab.append(btn);
-    });
-    tab.append(
-      button(
-        "＋ 添加测试",
-        () => {
-          const list = benchmarks();
-          change(["benchmarks"], [...list, newBenchmark(list)]);
-          state.benchmark = list.length;
-          emit(true);
-        },
-        "text-button",
-      ),
-    );
-    container.append(tab);
+    container.append(benchmarkTabs());
     const b = benchmarks()[state.benchmark];
-    if (b)
-      container.append(
-        objectControls(
-          benchmarks(),
-          state.benchmark,
-          (index) => (state.benchmark = index),
-          "测试",
-          () => {
-            const items = benchmarks();
-            items.splice(state.benchmark, 1);
-            state.benchmark = Math.max(0, state.benchmark - 1);
-            dirty(true);
-          },
-        ),
-        benchmarkEditor(b, state.benchmark),
-      );
+    if (b) container.append(benchmarkEditor(b, state.benchmark));
     else
       container.append(empty("尚未添加测试", "点击添加测试来配置 UnixBench。"));
   }
