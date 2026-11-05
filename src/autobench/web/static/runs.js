@@ -13,6 +13,7 @@ import {
   perform,
 } from "./ui.js";
 import { chooseFile } from "./files.js";
+import { createReportPanel } from "./reports.js";
 const view = {
   directory: "",
   selected: null,
@@ -29,6 +30,7 @@ const view = {
   filter: "",
   token: 0,
   renderKey: null,
+  report: null,
 };
 export const directory = () => view.directory || state.info.state_dir;
 const query = (extra) =>
@@ -48,6 +50,7 @@ export function setDirectory(path) {
   view.directory = path;
   view.selected = null;
   view.detail = null;
+  view.report = null;
   view.token++;
   storage();
   renderRuns();
@@ -56,6 +59,7 @@ export function setDirectory(path) {
 export async function selectRun(id) {
   view.selected = id;
   view.detail = null;
+  view.report = null;
   view.renderKey = null;
   view.after = 0;
   view.events = [];
@@ -416,7 +420,13 @@ function renderDetail() {
     ),
   );
   panel.append(events);
-  root.replaceChildren(panel, artifactPanel());
+  if (view.report?.isConnected) {
+    root.firstElementChild.replaceWith(panel);
+    root.lastElementChild.replaceWith(artifactPanel());
+  } else {
+    view.report = createReportPanel(url("/report"));
+    root.replaceChildren(panel, view.report, artifactPanel());
+  }
   root.querySelectorAll("details[data-keep]").forEach((e) => {
     if (openDetails.has(e.dataset.keep))
       e.open = openDetails.get(e.dataset.keep);

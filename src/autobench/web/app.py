@@ -11,7 +11,7 @@ import zipfile
 from collections.abc import Callable, Coroutine
 from contextlib import asynccontextmanager, contextmanager
 from ipaddress import ip_address
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
 
@@ -24,6 +24,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from starlette.background import BackgroundTask
 
 from autobench import __version__, services
+from autobench.artifacts import UnsafeArtifactPath, result_path
 from autobench.config import (
     Config,
     PositiveSeconds,
@@ -33,6 +34,7 @@ from autobench.config import (
     resolve_ssh_paths,
 )
 from autobench.errors import AutoBenchError, ConfigurationFieldError
+from autobench.reports import build_report, report_workbook
 from autobench.storage import RUN_ID_PATTERN, Store
 from autobench.web.files import ConfigFiles, ConflictError, parse_document
 
@@ -586,19 +588,38 @@ def create_app(
         return root
 
     def artifact(root: Path, name: str) -> Path:
-        relative = PurePosixPath(name)
-        if not name or relative.is_absolute() or ".." in relative.parts or "\\" in name:
-            raise HTTPException(403, "无效的产物路径")
-        path = root
-        for part in relative.parts:
-            path = path / part
-            if path.is_symlink():
-                raise HTTPException(403, "不允许访问符号链接产物")
-        if not path.resolve().is_relative_to(root.resolve()):
-            raise HTTPException(403, "产物路径越界")
+        try:
+            path = result_path(root, name)
+        except UnsafeArtifactPath as exc:
+            raise HTTPException(403, str(exc)) from exc
         if not path.is_file():
             raise HTTPException(404, "产物不存在")
         return path
+
+    def run_report(run_id: str, state_dir: str | None, baseline: str | None) -> dict:
+        root = result_root(run_id, state_dir)
+        with store_at(state_dir) as store:
+            config = store.config(run_id)
+            jobs = store.jobs(run_id)
+        try:
+            return build_report(run_id, config, jobs, root, baseline)
+        except UnsafeArtifactPath as exc:
+            raise HTTPException(403, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    @app.get("/api/runs/{run_id}/report")
+    def report(run_id: RunID, state_dir: str | None = None, baseline: str | None = None):
+        return run_report(run_id, state_dir, baseline)
+
+    @app.get("/api/runs/{run_id}/report.xlsx")
+    def download_report(run_id: RunID, state_dir: str | None = None, baseline: str | None = None):
+        value = report_workbook(run_report(run_id, state_dir, baseline))
+        return Response(
+            value,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="unixbench-{run_id}.xlsx"'},
+        )
 
     @app.get("/api/runs/{run_id}/artifacts")
     def artifacts(run_id: RunID, state_dir: str | None = None):

@@ -2249,3 +2249,154 @@ def test_guided_system_order_delete_and_readd(browser_page, ui_server):
     page.locator("#yaml-panel").wait_for()
     data = yaml.safe_load(page.locator("#yaml-editor").input_value())
     assert data["machines"][0]["systems"] == [{"id": "linux01", "boot_entry": "00AB"}]
+
+
+def report_history(server, *, empty=False):
+    from test_reports import TEST_ORDER, unixbench_text, write_round
+
+    from autobench.storage import Store
+
+    config = server.config.model_copy(deep=True)
+    config.benchmarks[0].repetitions = 3
+    with_store = Store(config.policy.state_dir)
+    run_id = with_store.create(config)
+    if not empty:
+        root = config.policy.output_dir / run_id
+        for system, values in (("os1", (100, 200, 900)), ("os2", (480, 480, 480))):
+            for repetition, value in enumerate(values, 1):
+                text = ""
+                for copies in (1, 64):
+                    extra = "".join(
+                        f"{name}   1.0   10000.0   {value * copies}\n" for name in TEST_ORDER[2:]
+                    )
+                    text += unixbench_text(value * copies, value * copies / 10, copies, extra=extra)
+                write_round(root, system, repetition, text, machine="server01")
+        for job in with_store.jobs(run_id):
+            with_store.update(job["id"], "succeeded", archived=True)
+        with_store.set_run_status(run_id, "succeeded")
+    with_store.close()
+    return run_id
+
+
+def open_report_history(page, server, run_id):
+    page.add_init_script(
+        "sessionStorage.setItem('autobench-selection', "
+        + json.dumps(json.dumps({"id": run_id, "stateDir": str(server.config.policy.state_dir)}))
+        + "); sessionStorage.setItem('autobench-page', 'runs');"
+    )
+    ready(page, server)
+    page.locator("#tab-runs").click()
+    page.locator("#generate-report").wait_for()
+
+
+@pytest.mark.parametrize("width", [1440, 768, 390])
+def test_report_preview_baseline_download_and_layout(browser_page, ui_server, width):
+    from openpyxl import load_workbook
+
+    page, server = browser_page, ui_server
+    run_id = report_history(server)
+    page.set_viewport_size({"width": width, "height": 900})
+    calls = []
+    page.on("request", lambda req: calls.append(req.url) if "/report?" in req.url else None)
+    open_report_history(page, server, run_id)
+    assert not calls
+    page.locator("#generate-report").click()
+    page.locator("#download-report").wait_for()
+    assert len(calls) == 1
+    panel = page.locator(".report-panel")
+    assert "400.00 (0.00%)" in panel.text_content()
+    assert "480.00 (+20.00%)" in panel.text_content()
+    assert "有效轮次 3/3" in panel.text_content()
+    page.locator("#report-copies").select_option("64")
+    assert "25600.00 (0.00%)" in panel.text_content()
+    # Polling must keep the report DOM, selection, and keyboard focus intact.
+    page.locator("#report-copies").focus()
+    page.wait_for_timeout(2300)
+    assert len(calls) == 1
+    assert page.locator("#report-copies").input_value() == "64"
+    assert page.evaluate("document.activeElement.id") == "report-copies"
+    page.locator("#report-baseline").select_option("server01/os2/ub")
+    page.locator("#download-report").wait_for()
+    assert "25600.00 (-16.67%)" in panel.text_content()
+    with page.expect_download() as download:
+        page.locator("#download-report").click()
+    result = download.value
+    assert result.suggested_filename == f"unixbench-{run_id}.xlsx"
+    with result.path().open("rb") as stream:
+        book = load_workbook(stream)
+    assert book["1 parallel copy"]["B4"].value == "400.00 (-16.67%)"
+    assert book["64 parallel copies"]["B4"].value == "25600.00 (-16.67%)"
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    assert (
+        panel.locator(".report-table").first.evaluate(
+            "el => getComputedStyle(el.querySelector('td')).position"
+        )
+        == "sticky"
+    )
+    page.locator("#generate-report").click()
+    page.locator("#download-report").wait_for()
+    assert page.locator("#report-baseline").input_value() == "server01/os2/ub"
+
+
+def test_report_loading_error_retry_and_empty_state(browser_page, ui_server):
+    page, server = browser_page, ui_server
+    run_id = report_history(server, empty=True)
+    pending = []
+    page.route("**/report?*", lambda route: pending.append(route))
+    open_report_history(page, server, run_id)
+    page.locator("#generate-report").click()
+    page.wait_for_function(
+        "() => document.querySelector('.report-panel').getAttribute('aria-busy') === 'true'"
+    )
+    assert page.locator("#generate-report").is_disabled()
+    assert page.locator(".report-panel").get_by_role("status").is_visible()
+    assert len(pending) == 1
+    pending.pop().fulfill(status=500, json={"detail": "模拟读取失败"})
+    page.locator(".report-panel").get_by_role("alert").wait_for()
+    page.unroute("**/report?*")
+    page.get_by_role("button", name="重试", exact=True).click()
+    page.get_by_text("暂无可解析的 INDEX 结果。结果回收后可刷新报告。", exact=True).wait_for()
+    assert page.locator(".report-warnings").get_attribute("open") is not None
+
+
+def test_report_stale_baseline_response_cannot_replace_new_selection(browser_page, ui_server):
+    page, server = browser_page, ui_server
+    run_id = report_history(server)
+    open_report_history(page, server, run_id)
+    page.locator("#generate-report").click()
+    page.locator("#download-report").wait_for()
+    pending = []
+    page.route("**/report?*baseline=*", lambda route: pending.append(route))
+    page.locator("#report-baseline").select_option("server01/os2/ub")
+    page.locator("#report-baseline").select_option("server01/os1/ub")
+    page.wait_for_timeout(50)
+    assert len(pending) == 2
+    pending[1].continue_()
+    page.locator("#download-report").wait_for()
+    pending[0].continue_()
+    page.wait_for_timeout(150)
+    assert page.locator("#report-baseline").input_value() == "server01/os1/ub"
+    assert "480.00 (+20.00%)" in page.locator(".report-panel").text_content()
+
+
+def test_report_stale_response_does_not_leak_into_another_run(browser_page, ui_server):
+    page, server = browser_page, ui_server
+    first = report_history(server)
+    second = report_history(server, empty=True)
+    open_report_history(page, server, first)
+    pending = []
+    page.route("**/report?*", lambda route: pending.append(route))
+    page.locator("#generate-report").click()
+    page.wait_for_function(
+        "() => document.querySelector('.report-panel').getAttribute('aria-busy') === 'true'"
+    )
+    page.locator("#runs-list tbody tr").filter(has_text=second).get_by_role(
+        "button", name="查看详情", exact=True
+    ).click()
+    page.wait_for_function(
+        "id => document.querySelector('#run-detail').textContent.includes(id)", arg=second
+    )
+    pending.pop().continue_()
+    page.wait_for_timeout(150)
+    assert page.locator("#generate-report").text_content() == "生成报告"
+    assert "400.00" not in page.locator(".report-panel").text_content()
