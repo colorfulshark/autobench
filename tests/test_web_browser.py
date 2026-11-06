@@ -113,11 +113,54 @@ def ready(page, server):
 def load_existing(page, server):
     page.locator("#file-menu summary").click()
     page.locator("#open-config").click()
+    page.wait_for_function(
+        "() => document.querySelector('#file-list').getAttribute('aria-busy') === 'false'"
+    )
     page.locator("#file-path").fill(str(server.root))
     with page.expect_response("**/api/files?*"):
         page.locator("#file-go").click()
     page.wait_for_function(
         "() => document.querySelector('#file-list').getAttribute('aria-busy') === 'false'"
+    )
+    page.get_by_role("button", name="▤ existing.yaml 文件").click()
+    page.locator("#file-confirm").click()
+    page.wait_for_function("() => document.querySelector('#save-state').textContent === '已保存'")
+
+
+@pytest.mark.parametrize("editing", ["selected", "typed-and-blurred"])
+def test_initial_directory_response_preserves_path_editing(browser_page, ui_server, editing):
+    page, server = browser_page, ui_server
+    ready(page, server)
+    destination = server.root / "configs"
+    destination.mkdir()
+    (destination / "existing.yaml").write_text(server.existing.read_text())
+    pending = []
+    page.route("**/api/files?*", lambda route: pending.append(route))
+    page.locator("#file-menu summary").click()
+    with page.expect_request("**/api/files?*"):
+        page.locator("#open-config").click()
+    path = page.locator("#file-path")
+    if editing == "selected":
+        # A fill selects the input before inserting text in a separate browser call.
+        path.focus()
+        path.evaluate("el => el.select()")
+    else:
+        path.fill(str(destination))
+        path.press("Tab")
+    pending[0].continue_()
+    page.wait_for_function(
+        "() => document.querySelector('#file-list').getAttribute('aria-busy') === 'false'"
+    )
+    if editing == "selected":
+        page.keyboard.insert_text(str(destination))
+    assert path.input_value() == str(destination)
+    with page.expect_request("**/api/files?*"):
+        page.locator("#file-go").click()
+    pending[1].continue_()
+    page.wait_for_function(
+        "path => document.querySelector('#file-path').value === path && "
+        "document.querySelector('#file-list').getAttribute('aria-busy') === 'false'",
+        arg=str(destination),
     )
     page.get_by_role("button", name="▤ existing.yaml 文件").click()
     page.locator("#file-confirm").click()

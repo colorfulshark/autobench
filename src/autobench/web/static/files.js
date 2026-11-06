@@ -30,6 +30,8 @@ export function chooseFile(initial = "", options = {}) {
 }
 async function navigate(path) {
   const version = ++request;
+  const input = $("file-path");
+  const originalInput = input.value;
   current = null;
   selected = null;
   $("file-confirm").disabled = true;
@@ -49,7 +51,9 @@ async function navigate(path) {
   if (version !== request) return;
   current = result;
   selected = null;
-  $("file-path").value = result.path;
+  // A response can arrive between selecting input text and typing its replacement.
+  if (document.activeElement !== input && input.value === originalInput)
+    input.value = result.path;
   render();
 }
 function render() {
