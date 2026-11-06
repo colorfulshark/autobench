@@ -2289,6 +2289,30 @@ def open_report_history(page, server, run_id):
     page.locator("#generate-report").wait_for()
 
 
+@pytest.mark.parametrize("width", [1101, 1440, 1800])
+def test_report_summary_rows_align_with_long_group_names(browser_page, ui_server, width):
+    page, server = browser_page, ui_server
+    extra = server.config.machines[0].systems[0].model_copy(deep=True)
+    extra.id = "system_" + "longname_" * 6
+    extra.boot_entry = "0003"
+    server.config.machines[0].systems.append(extra)
+    run_id = report_history(server)
+    page.set_viewport_size({"width": width, "height": 900})
+    open_report_history(page, server, run_id)
+    page.locator("#generate-report").click()
+    page.locator("#download-report").wait_for()
+    left = page.locator(".report-rounds tbody tr")
+    right = page.locator(".report-overall tbody tr")
+    assert left.count() == right.count() == 3
+    for index in range(3):
+        a = left.nth(index).bounding_box()
+        b = right.nth(index).bounding_box()
+        assert abs(a["y"] - b["y"]) < 1
+        assert abs(a["height"] - b["height"]) < 1
+    assert extra.id in left.last.locator("td").first.get_attribute("title")
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+
 @pytest.mark.parametrize("width", [1440, 768, 390])
 def test_report_preview_baseline_download_and_layout(browser_page, ui_server, width):
     from openpyxl import load_workbook
