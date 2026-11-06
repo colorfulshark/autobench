@@ -114,8 +114,60 @@ def load_existing(page, server):
     page.locator("#file-menu summary").click()
     page.locator("#open-config").click()
     page.locator("#file-path").fill(str(server.root))
-    page.locator("#file-go").click()
+    with page.expect_response("**/api/files?*"):
+        page.locator("#file-go").click()
+    page.wait_for_function(
+        "() => document.querySelector('#file-list').getAttribute('aria-busy') === 'false'"
+    )
     page.get_by_role("button", name="▤ existing.yaml 文件").click()
+    page.locator("#file-confirm").click()
+    page.wait_for_function("() => document.querySelector('#save-state').textContent === '已保存'")
+
+
+@pytest.mark.parametrize("stale_error", [False, True])
+def test_file_navigation_blocks_old_entries_and_ignores_stale_responses(
+    browser_page, ui_server, stale_error
+):
+    page, server = browser_page, ui_server
+    ready(page, server)
+    pending = []
+    page.route("**/api/files?*", lambda route: pending.append(route))
+    page.locator("#file-menu summary").click()
+    with page.expect_request("**/api/files?*"):
+        page.locator("#open-config").click()
+    pending[0].continue_()
+    entry = page.get_by_role("button", name="▤ existing.yaml 文件")
+    entry.wait_for()
+    entry.click()
+    assert page.locator("#file-confirm").is_enabled()
+
+    with page.expect_request("**/api/files?*"):
+        page.locator("#file-go").click()
+    assert page.locator("#file-list").get_attribute("aria-busy") == "true"
+    assert page.locator("#file-confirm").is_disabled()
+    assert page.locator(".file-entry").count() == 0
+    page.locator("#file-hidden").check()
+    assert page.locator(".file-entry").count() == 0
+
+    # A newer navigation completes before the previous directory response.
+    with page.expect_request("**/api/files?*"):
+        page.locator("#file-go").click()
+    pending[2].continue_()
+    entry.click()
+    assert page.locator("#file-selected").text_content() == str(server.existing)
+    with page.expect_response("**/api/files?*") as response:
+        if stale_error:
+            pending[1].fulfill(status=404, json={"detail": "outdated directory"})
+        else:
+            pending[1].continue_()
+    response.value.finished()
+    page.evaluate(
+        "() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))"
+    )
+    assert len(pending) == 3
+    assert page.locator("#file-selected").text_content() == str(server.existing)
+    assert page.locator("#file-list").get_attribute("aria-busy") == "false"
+    assert page.locator("#file-confirm").is_enabled()
     page.locator("#file-confirm").click()
     page.wait_for_function("() => document.querySelector('#save-state').textContent === '已保存'")
 
@@ -1893,7 +1945,10 @@ def test_machine_drag_across_rows_and_cancel(browser_page, ui_server, width):
     assert page.locator(".machine-picker .active").text_content() == "server14"
     page.locator("#secondary-action").click()
     page.wait_for_function("() => document.querySelector('#save-state').textContent === '已保存'")
+    page.wait_for_function("() => !document.querySelector('#secondary-action').disabled")
+    page.locator("#notice").wait_for(state="hidden")
     before = tabs.all_text_contents()
+    tabs.nth(0).hover()
     source = tabs.nth(0).bounding_box()
     page.mouse.move(source["x"] + source["width"] / 2, source["y"] + source["height"] / 2)
     page.mouse.down()
@@ -2088,7 +2143,10 @@ def test_benchmark_drag_across_rows_and_cancel(browser_page, ui_server, width):
     assert page.locator(".benchmark-picker .active").text_content() == "unixbench14"
     page.locator("#secondary-action").click()
     page.wait_for_function("() => document.querySelector('#save-state').textContent === '已保存'")
+    page.wait_for_function("() => !document.querySelector('#secondary-action').disabled")
+    page.locator("#notice").wait_for(state="hidden")
     before = tabs.all_text_contents()
+    tabs.nth(0).hover()
     source = tabs.nth(0).bounding_box()
     page.mouse.move(source["x"] + source["width"] / 2, source["y"] + source["height"] / 2)
     page.mouse.down()

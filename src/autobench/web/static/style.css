@@ -1315,7 +1315,7 @@ main {
   right: 0;
   z-index: 50;
   width: max-content;
-  max-width: min(560px, calc(100vw - 32px));
+  max-width: min(560px, calc(100% - 32px));
   max-height: min(360px, calc(100dvh - var(--topbar-height) - 32px));
   margin: 0 auto;
   padding: 12px 20px;

@@ -30,7 +30,22 @@ export function chooseFile(initial = "", options = {}) {
 }
 async function navigate(path) {
   const version = ++request;
-  const result = await api("/api/files?" + new URLSearchParams({ path }));
+  current = null;
+  selected = null;
+  $("file-confirm").disabled = true;
+  $("file-selected").textContent = "";
+  $("file-list").replaceChildren(hint("正在加载目录…"));
+  $("file-list").setAttribute("aria-busy", "true");
+  let result;
+  try {
+    result = await api("/api/files?" + new URLSearchParams({ path }));
+  } catch (error) {
+    if (version !== request) return;
+    throw error;
+  } finally {
+    if (version === request)
+      $("file-list").setAttribute("aria-busy", "false");
+  }
   if (version !== request) return;
   current = result;
   selected = null;
@@ -78,6 +93,8 @@ function select(path) {
 function finish(path) {
   const resolve = resolver;
   resolver = null;
+  request++;
+  $("file-list").setAttribute("aria-busy", "false");
   $("file-dialog").close();
   if (resolve) resolve(path);
 }
@@ -105,8 +122,6 @@ export function initFiles() {
   );
   $("file-cancel").addEventListener("click", () => finish(null));
   $("file-dialog").addEventListener("cancel", () => {
-    const resolve = resolver;
-    resolver = null;
-    if (resolve) resolve(null);
+    finish(null);
   });
 }
