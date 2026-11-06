@@ -17,10 +17,7 @@ export function renderPlan() {
   );
   const totals = counts(state.document);
   const header = node("div", "plan-heading");
-  header.append(
-    node("h2", "", "测试计划"),
-    node("span", "secondary", "实时预览"),
-  );
+  header.append(node("h2", "", "测试计划"));
   const figure = node("div", "plan-figure");
   figure.append(
     node("strong", "", totals.jobs.toLocaleString("zh-CN")),
@@ -104,14 +101,4 @@ export function renderPlan() {
     );
   tests.append(button("编辑测试 →", () => goTo(2), "text-button"));
   root.append(tests);
-  const note = node("div", "plan-note");
-  note.append(
-    node("strong", "", "随时中断，继续执行"),
-    node(
-      "p",
-      "",
-      "远端任务由 systemd 托管。关闭工作台后，可从运行记录恢复控制。",
-    ),
-  );
-  root.append(note);
 }

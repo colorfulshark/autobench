@@ -36,7 +36,6 @@ import {
   row,
   hint,
   heading,
-  pill,
   advanced,
   inputField,
   select,
@@ -150,7 +149,7 @@ function authEditor(path, effective) {
         help:
           effective.password === "" && !!state.path
             ? "当前值是空密码；如非预期，请填写密码。"
-            : "密码按原样使用，不进行变量替换。",
+            : "",
       }),
     );
   else if (mode === "key") {
@@ -380,7 +379,7 @@ function machineEditor(machine, index) {
     ssh = [...path, "ssh"],
     effective = mergedSSH(machine);
   panel.append(
-    heading("连接服务器", "填入地址并选择一种认证方式。"),
+    heading("连接服务器"),
     connectionFields(ssh, effective),
     authEditor(ssh, effective),
   );
@@ -500,7 +499,7 @@ function systemEditor(machine, mi, system, si) {
     ssh = [...path, "ssh"];
   const effective = mergedSSH(machine, system),
     raw = system.ssh || {};
-  panel.append(heading("系统详情", "每个系统需要独立的 UEFI 启动项。"));
+  panel.append(heading("系统详情"));
   const fields = row(
     field("系统标识", [...path, "id"], {
       required: true,
@@ -580,7 +579,7 @@ function systemsBoard(machine, index) {
   actions.append(
     button("＋ 手动添加系统", () => addSystem(machine, index), "text-button"),
   );
-  e.append(heading("参与测试的系统", "系统将按列表顺序依次测试。", actions));
+  e.append(heading("参与测试的系统", "", actions));
   const systems = asList(machine.systems);
   if (!systems.length)
     e.append(empty("尚未添加系统", "请手动添加系统并填写对应的 UEFI 启动项。"));
@@ -594,12 +593,12 @@ function systemsBoard(machine, index) {
       ),
       node(
         "span",
-        "mono muted",
-        system.boot_entry ? "Boot" + system.boot_entry : "待填写启动项",
-      ),
-      pill(
-        /^[a-f\d]{4}$/i.test(system.boot_entry || "") ? "已配置" : "待完善",
-        /^[a-f\d]{4}$/i.test(system.boot_entry || "") ? "success" : "warning",
+        /^[a-f\d]{4}$/i.test(system.boot_entry || "") ? "mono muted" : "mono danger",
+        !system.boot_entry
+          ? "待填写启动项"
+          : /^[a-f\d]{4}$/i.test(system.boot_entry)
+            ? "Boot" + system.boot_entry
+            : "启动项无效：" + system.boot_entry,
       ),
     );
     const up = button(
@@ -644,19 +643,14 @@ function systemsBoard(machine, index) {
 function benchmarkEditor(b, index) {
   const panel = node("section", "panel");
   const path = ["benchmarks", index];
-  panel.append(
-    heading(
-      "UnixBench 测试",
-      "默认执行标准 index 测试；同一次运行内，每个系统的同一测试配置只构建一次，各轮复用相同二进制。",
-    ),
-  );
+  panel.append(heading("UnixBench 测试"));
   panel.append(
     row(
-      field("源码包", [...path, "source_archive"], {
+      field("服务器源码包", [...path, "source_archive"], {
         file: true,
         required: true,
-        placeholder: "选择服务器上的 tar / tar.gz 源码包",
-        help: "不是浏览器所在电脑的文件；相对路径以 YAML 所在目录为准。",
+        placeholder: "tar / tar.gz 文件路径",
+        help: "相对路径以 YAML 所在目录为准。",
         width: "grow",
       }),
     ),
@@ -761,7 +755,7 @@ function benchmarkEditor(b, index) {
 }
 function policyEditor() {
   const panel = node("section", "panel");
-  panel.append(heading("运行设置", "常规测试可直接使用默认调度策略。"));
+  panel.append(heading("运行设置"));
   panel.append(
     row(
       field("结果输出目录", ["policy", "output_dir"], {
@@ -773,13 +767,6 @@ function policyEditor() {
         type: "number",
         width: "short-field",
       }),
-    ),
-  );
-  panel.append(
-    node(
-      "p",
-      "callout",
-      "默认每 10 秒轮询；每轮测试开始前稳定等待 60 秒，首轮在构建完成后等待。机器之间并行，同一机器的系统依次执行。",
     ),
   );
   panel.append(
@@ -839,7 +826,7 @@ function policyEditor() {
 export function review() {
   const panel = node("section", "panel");
   const n = counts(state.document);
-  panel.append(heading("检查测试计划", "确认配置与结果位置，再保存并检查。"));
+  panel.append(heading("检查测试计划"));
   const stats = node("div", "stat-grid");
   for (const [label, count] of [
     ["机器", n.machines],
@@ -1109,12 +1096,8 @@ export function renderConfig() {
       } else {
         const p = node("section", "panel");
         p.append(
-          heading(
-            "选择参与测试的系统",
-            "手动添加系统并填写对应的 UEFI 启动项。",
-          ),
-          connectionTestPanel(m),
           systemsBoard(m, state.machine),
+          connectionTestPanel(m),
         );
         container.append(p);
       }

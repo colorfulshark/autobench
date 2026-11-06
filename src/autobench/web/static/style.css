@@ -1061,9 +1061,15 @@ main {
   }
 }
 .systems-board {
-  border-top: 1px solid var(--line);
-  padding-top: 20px;
-  margin-top: 23px;
+  counter-reset: system-order;
+}
+.system-item::before {
+  counter-increment: system-order;
+  content: counter(system-order, decimal-leading-zero);
+  flex: none;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
 }
 .systems-board .section-heading {
   margin-bottom: 10px;
@@ -1091,6 +1097,11 @@ main {
 }
 .connection-test-panel {
   margin-top: 8px;
+}
+.systems-board + .connection-test-panel {
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
 }
 .connection-test-panel > .hint {
   margin: 9px 0 0;
@@ -1956,20 +1967,6 @@ dialog input {
 }
 .plan-test-warmup {
   grid-column: 1 / -1;
-}
-.plan-note {
-  margin: 20px -20px -20px;
-  padding: 16px 20px;
-  border-top: 1px solid var(--line);
-  font-size: 13px;
-}
-.plan-note strong {
-  font-weight: 500;
-}
-.plan-note p {
-  color: var(--muted);
-  margin: 6px 0 0;
-  line-height: 1.7;
 }
 .stat + .stat {
   border-left: 1px solid var(--line);

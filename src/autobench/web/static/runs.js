@@ -446,7 +446,7 @@ function artifactCategory(path) {
 }
 function artifactPanel() {
   const panel = node("section", "panel");
-  panel.append(heading("结果与日志", "选择文件预览，或下载原始结果。"));
+  panel.append(heading("结果与日志"));
   if (!view.artifacts.length) {
     panel.append(hint(view.artifactError || "暂无已回收文件。"));
     return panel;

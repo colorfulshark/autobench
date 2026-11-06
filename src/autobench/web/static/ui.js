@@ -103,14 +103,8 @@ export function advanced(title, paths, build, key = title) {
     (path) => at(state.document, path) !== undefined,
   ).length;
   const s = node("summary");
-  s.append(
-    node("span", "", title),
-    node(
-      "span",
-      "advanced-count",
-      count ? `已配置 ${count} 项` : "使用默认设置",
-    ),
-  );
+  s.append(node("span", "", title));
+  if (count) s.append(node("span", "advanced-count", `已配置 ${count} 项`));
   const content = node("div", "advanced-body");
   build(content);
   e.append(s, content);
