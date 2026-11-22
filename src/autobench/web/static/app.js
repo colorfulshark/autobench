@@ -6,6 +6,7 @@ import {
   emit,
   show,
   createProject,
+  saveStartupProject,
   load,
   save,
   validate,
@@ -162,18 +163,69 @@ async function primary() {
 function bind(id, fn) {
   $(id).addEventListener("click", () => perform($(id), fn));
 }
-async function boot() {
-  setPage(sessionStorage.getItem("autobench-page"));
-  state.info = await api("/api/info");
-  const initialPath =
-    state.info.config || sessionStorage.getItem("autobench-config-path");
-  $("version").textContent = `v${state.info.version}`;
-  $("server-address").textContent = window.location.host;
-  initFiles();
-  subscribe(render);
-  await createProject();
-  ready = true;
-  render(true);
+function showStartupError(message) {
+  const error = $("startup-error");
+  error.textContent = message;
+  error.hidden = !message;
+}
+function selectStartupProject(initialPath) {
+  const directory = $("startup-directory"),
+    filename = $("startup-filename"),
+    form = $("startup-form"),
+    fields = $("startup-fields"),
+    submit = $("startup-save");
+  directory.value = pathParent(initialPath);
+  filename.value = initialPath.split("/").at(-1);
+  fields.disabled = false;
+  directory.focus();
+  fields.addEventListener("input", () => showStartupError(""));
+  bind("startup-browse", async () => {
+    const folder = await chooseFile(directory.value, {
+      kind: "directory",
+      title: "选择配置保存目录",
+    });
+    if (!folder) {
+      directory.focus();
+      return;
+    }
+    directory.value = folder;
+    showStartupError("");
+    filename.focus();
+  });
+  return new Promise((resolve) => {
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (fields.disabled) return;
+      const folder = directory.value,
+        name = filename.value;
+      if (!folder.trim()) {
+        showStartupError("请选择或填写配置保存目录。");
+        directory.focus();
+        return;
+      }
+      if (!name.trim() || name.includes("/") || name === "." || name === "..") {
+        showStartupError("请填写配置文件名，路径填写在保存目录中。");
+        filename.focus();
+        return;
+      }
+      const path = `${folder.replace(/\/+$/, "")}/${name}`;
+      showStartupError("");
+      fields.disabled = true;
+      form.setAttribute("aria-busy", "true");
+      submit.textContent = "正在保存…";
+      try {
+        resolve(await saveStartupProject(path));
+      } catch (error) {
+        fields.disabled = false;
+        form.removeAttribute("aria-busy");
+        submit.textContent = "保存并进入";
+        showStartupError(error.message);
+        filename.focus();
+      }
+    });
+  });
+}
+function initWorkspace() {
   const tabs = [...document.querySelectorAll("[data-page]")];
   tabs.forEach((tab, index) => {
     tab.addEventListener("click", () => setPage(tab.dataset.page));
@@ -312,15 +364,56 @@ async function boot() {
       event.returnValue = "";
     }
   });
-  if (initialPath) {
-    try {
-      await load(initialPath);
-    } catch (error) {
-      show(error.message, "error");
-    }
-  }
-  await initRuns();
-  setPage(sessionStorage.getItem("autobench-page"));
-  render(true);
 }
-boot().catch((error) => show("初始化失败：" + error.message, "error"));
+async function restoreProject(path) {
+  if (!path) {
+    await createProject();
+    return;
+  }
+  try {
+    await load(path);
+  } catch (error) {
+    await createProject();
+    show(error.message, "error");
+  }
+}
+async function boot() {
+  const restoring =
+    performance.getEntriesByType("navigation")[0]?.type === "reload" &&
+    history.state?.autobenchConfigConfirmed === true;
+  const dialog = $("startup-dialog");
+  if (!restoring) {
+    dialog.addEventListener("cancel", (event) => event.preventDefault());
+    dialog.showModal();
+  }
+  state.info = await api("/api/info");
+  $("version").textContent = `v${state.info.version}`;
+  $("server-address").textContent = window.location.host;
+  initFiles();
+  const rememberedPath = sessionStorage.getItem("autobench-config-path");
+  if (restoring) {
+    await restoreProject(rememberedPath || state.info.config);
+  } else {
+    const saved = await selectStartupProject(
+      state.info.config || rememberedPath || state.info.base_dir + "/autobench.yaml",
+    );
+    accept(saved);
+    history.replaceState({ ...history.state, autobenchConfigConfirmed: true }, "");
+  }
+  initWorkspace();
+  await initRuns();
+  subscribe(render);
+  ready = true;
+  render(true);
+  $("app-shell").inert = false;
+  setPage(restoring ? sessionStorage.getItem("autobench-page") : "config");
+  if (!restoring) {
+    dialog.close();
+    $("tab-config").focus({ preventScroll: true });
+  }
+}
+boot().catch((error) => {
+  const message = "初始化失败：" + error.message;
+  if ($("startup-dialog").open) showStartupError(message);
+  else show(message, "error");
+});

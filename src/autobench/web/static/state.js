@@ -143,12 +143,28 @@ export function accept(saved, { draft = false } = {}) {
   document.getElementById("yaml-editor").value = state.text;
   emit(true);
 }
+function renderNewProject() {
+  return api("/api/config/render", { document: newProject() });
+}
 export async function createProject() {
   state.mode = "form";
-  const document = newProject();
-  const rendered = await api("/api/config/render", { document });
-  accept(rendered, { draft: true });
+  accept(await renderNewProject(), { draft: true });
   state.touched = false;
+}
+export async function saveStartupProject(path) {
+  let project;
+  try {
+    project = await api("/api/config/load", { path });
+  } catch (error) {
+    if (error.status !== 404) throw error;
+    project = await renderNewProject();
+  }
+  if (project.parse_error) throw new Error(project.parse_error);
+  return api("/api/config/save", {
+    path: project.path || path,
+    text: project.text,
+    revision: project.revision ?? null,
+  });
 }
 export async function load(path) {
   const version = state.version;

@@ -105,9 +105,173 @@ def ui_server(tmp_path, config, monkeypatch):
     assert not thread.is_alive()
 
 
-def ready(page, server):
+def fill_startup_destination(page, path):
+    page.locator("#startup-directory").fill(str(path.parent))
+    page.locator("#startup-filename").fill(path.name)
+
+
+def complete_startup(page, path=None):
+    if path is not None:
+        fill_startup_destination(page, path)
+    page.locator("#startup-save").click()
+    page.locator("#page-config").wait_for()
+
+
+def ready(page, server, startup_path=None):
     page.goto(server.url)
-    page.wait_for_function("() => document.querySelector('#input-machines-0-ssh-host') !== null")
+    complete_startup(page, startup_path)
+
+
+@pytest.mark.parametrize("width", [1440, 390])
+def test_startup_blocks_workbench_until_new_config_is_saved(browser_page, ui_server, width):
+    page, server = browser_page, ui_server
+    page.set_viewport_size({"width": width, "height": 750})
+    page.goto(server.url)
+    dialog = page.get_by_role("dialog", name="选择配置文件")
+    directory = page.get_by_label("保存目录", exact=True)
+    filename = page.get_by_label("配置文件名", exact=True)
+    folder = server.root / "new configs"
+    folder.mkdir()
+    target = folder / "new-benchmark.yaml"
+    page.wait_for_function(
+        "path => document.activeElement.id === 'startup-directory' && "
+        "document.activeElement.value === path",
+        arg=str(server.root),
+    )
+    assert filename.input_value() == "autobench.yaml"
+    box = dialog.bounding_box()
+    assert box["x"] + box["width"] / 2 == pytest.approx(width / 2, abs=1)
+    assert box["y"] + box["height"] / 2 == pytest.approx(750 / 2, abs=1)
+    for _ in range(5):
+        page.keyboard.press("Tab")
+        assert not page.evaluate("document.activeElement.closest('#app-shell') !== null")
+    page.keyboard.press("Escape")
+    page.mouse.click(4, 4)
+    assert dialog.is_visible()
+    assert page.locator("#page-config").is_hidden()
+    assert page.locator("#page-runs").is_hidden()
+    assert not target.exists()
+
+    page.reload()
+    page.get_by_role("button", name="选择目录…", exact=True).click()
+    page.get_by_role("dialog", name="选择配置保存目录").wait_for()
+    page.get_by_role("button", name="▱ new configs 目录").click()
+    page.locator("#file-confirm").click()
+    assert directory.input_value() == str(folder)
+    assert filename.input_value() == "autobench.yaml"
+    filename.fill(target.name)
+    pending = []
+    page.route("**/api/config/save", lambda route: pending.append(route))
+    with page.expect_request("**/api/config/save") as request:
+        page.locator("#startup-save").click()
+    assert request.value.post_data_json["path"] == str(target)
+    assert request.value.post_data_json["revision"] is None
+    assert page.locator("#startup-save").is_disabled()
+    assert page.locator("#startup-browse").is_disabled()
+    assert directory.is_disabled()
+    assert filename.is_disabled()
+    page.locator("#startup-form").evaluate("form => form.requestSubmit()")
+    assert len(pending) == 1
+    assert dialog.is_visible()
+    assert page.locator("#page-config").is_hidden()
+    assert not target.exists()
+    pending[0].continue_()
+    assert_current_page(page, "config")
+    assert dialog.is_hidden()
+    assert page.locator("#save-state").text_content() == "已保存"
+    assert page.locator(".wizard-step[aria-current=step]").text_content() == "1连接机器"
+    assert yaml.safe_load(target.read_text())["machines"][0]["id"] == "server01"
+
+
+def test_startup_saves_existing_text_in_selected_directory(browser_page, ui_server):
+    page, server = browser_page, ui_server
+    original = server.existing.read_bytes().replace(b"\n", b"\r\n")
+    server.existing.write_bytes(original)
+    page.goto(server.url)
+    page.locator("#startup-browse").click()
+    page.keyboard.press("Escape")
+    page.locator("#file-dialog").wait_for(state="hidden")
+    assert page.locator("#startup-dialog").is_visible()
+    page.locator("#startup-browse").click()
+    assert page.get_by_role("button", name="▤ existing.yaml 文件").is_disabled()
+    page.locator("#file-confirm").click()
+    assert page.locator("#startup-directory").input_value() == str(server.root)
+    page.locator("#startup-filename").fill(server.existing.name)
+    with page.expect_request("**/api/config/save") as request:
+        complete_startup(page)
+    assert request.value.post_data_json["text"].encode() == original
+    assert request.value.post_data_json["revision"]
+    assert server.existing.read_bytes() == original
+    assert page.locator("#file-location").text_content() == str(server.existing)
+
+
+def test_startup_save_errors_keep_config_locked_and_allow_retry(browser_page, ui_server):
+    page, server = browser_page, ui_server
+    broken = server.root / "broken.yaml"
+    broken.write_text("machines: [\n")
+    page.goto(server.url)
+    directory = page.locator("#startup-directory")
+    filename = page.locator("#startup-filename")
+    confirm = page.locator("#startup-save")
+    alert = page.locator("#startup-error")
+
+    filename.fill("missing/config.yaml")
+    confirm.click()
+    alert.wait_for()
+    assert "路径填写在保存目录中" in alert.inner_text()
+    fill_startup_destination(page, broken)
+    confirm.click()
+    alert.wait_for()
+    assert "YAML 格式错误" in alert.inner_text()
+    assert broken.read_text() == "machines: [\n"
+    fill_startup_destination(page, server.root / "missing" / "config.yaml")
+    confirm.click()
+    alert.wait_for()
+    assert directory.input_value() == str(server.root / "missing")
+    assert filename.input_value() == "config.yaml"
+    assert page.locator("#page-config").is_hidden()
+
+    changed = server.existing.read_bytes() + b"# external change\n"
+
+    def change_before_save(route):
+        server.existing.write_bytes(changed)
+        route.continue_()
+
+    page.route("**/api/config/save", change_before_save)
+    fill_startup_destination(page, server.existing)
+    confirm.click()
+    alert.wait_for()
+    assert "外部修改" in alert.inner_text()
+    assert server.existing.read_bytes() == changed
+    assert page.locator("#startup-dialog").is_visible()
+    assert page.locator("#page-config").is_hidden()
+    page.unroute("**/api/config/save")
+    complete_startup(page)
+    assert server.existing.read_bytes() == changed
+
+
+def test_startup_requires_confirmation_in_new_tab_with_copied_session(browser_page, ui_server):
+    page, server = browser_page, ui_server
+    ready(page, server, startup_path=server.existing)
+    page.locator("#tab-runs").click()
+    with page.expect_popup() as popup_event:
+        page.evaluate("window.open(location.href)")
+    popup = popup_event.value
+    try:
+        popup.locator("#startup-dialog").wait_for()
+        assert popup.evaluate("sessionStorage.getItem('autobench-page')") == "runs"
+        popup.wait_for_function(
+            "name => document.querySelector('#startup-filename').value === name",
+            arg=server.existing.name,
+        )
+        assert popup.locator("#startup-directory").input_value() == str(server.root)
+        assert popup.locator("#page-config").is_hidden()
+        assert popup.locator("#page-runs").is_hidden()
+        complete_startup(popup)
+        assert_current_page(popup, "config")
+        assert_current_page(page, "runs")
+    finally:
+        popup.close()
 
 
 def load_existing(page, server):
@@ -463,25 +627,31 @@ def test_reload_does_not_flash_config_while_script_or_api_is_loading(browser_pag
     page = browser_page
     ready(page, ui_server)
     page.locator(f'[data-page="{key}"]').click()
-    scripts, requests = [], []
+    scripts, visible_while_loading = [], []
+
+    def check_loading(route):
+        visible_while_loading.extend(
+            selector
+            for selector in ["#startup-dialog", "#page-config", "#page-runs"]
+            if page.locator(selector).is_visible()
+        )
+        route.continue_()
+
     page.route("**/static/app.js", lambda route: scripts.append(route))
-    page.route("**/api/info", lambda route: requests.append(route))
+    page.route("**/api/info", check_loading)
     page.reload(wait_until="commit")
-    page.get_by_role("tablist").wait_for()
+    page.locator(".page-tabs").wait_for()
     assert page.locator("#page-config").is_hidden()
     assert page.locator("#header-config").is_hidden()
     assert page.locator("#header-runs").is_hidden()
     assert page.locator("[data-page].active").count() == 0
     assert page.get_by_role("tab", selected=True).count() == 0
     assert scripts
-    with page.expect_request("**/api/info"):
+    with page.expect_response("**/api/info"):
         scripts[0].continue_()
+    assert not visible_while_loading
     assert_current_page(page, key)
-    assert requests
-    assert page.locator("#input-machines-0-ssh-host").count() == 0
-    requests[0].continue_()
-    page.wait_for_function("() => document.querySelector('#input-machines-0-ssh-host') !== null")
-    assert_current_page(page, key)
+    assert page.locator("#startup-dialog").is_hidden()
 
 
 @pytest.mark.parametrize("key", ["config", "runs"])
@@ -804,6 +974,8 @@ def test_tabs_keep_configuration_draft_and_step(browser_page, ui_server, width):
     page = browser_page
     page.set_viewport_size({"width": width, "height": 900})
     ready(page, ui_server)
+    saved_path = ui_server.root / "autobench.yaml"
+    saved_text = saved_path.read_bytes()
     page.locator("#input-machines-0-ssh-host").fill("unsaved.example")
     page.locator(".wizard-step").nth(3).click()
     page.get_by_role("tab", name="运行记录", exact=True).click()
@@ -821,7 +993,7 @@ def test_tabs_keep_configuration_draft_and_step(browser_page, ui_server, width):
     assert page.locator("#yaml-editor").is_visible()
     assert page.locator("#yaml-editor").input_value() == text
     assert page.locator("#save-state").text_content() == "未保存"
-    assert not (ui_server.root / "autobench.yaml").exists()
+    assert saved_path.read_bytes() == saved_text
     assert page.locator(".brand").is_visible()
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
@@ -957,6 +1129,8 @@ def test_existing_advanced_values_and_comments_survive_viewing_and_editing(brows
 def test_connection_test_spinner_success_and_configuration_invalidation(browser_page, ui_server):
     page, server = browser_page, ui_server
     ready(page, server)
+    saved_path = server.root / "autobench.yaml"
+    saved_text = saved_path.read_bytes()
     fill_connection(page, server)
     pending = []
     page.route("**/api/operations/*", lambda route: pending.append(route))
@@ -994,7 +1168,7 @@ def test_connection_test_spinner_success_and_configuration_invalidation(browser_
     assert (
         yaml.safe_load(page.locator("#yaml-editor").input_value())["machines"][0]["systems"] == []
     )
-    assert not (server.root / "autobench.yaml").exists()
+    assert saved_path.read_bytes() == saved_text
 
 
 @pytest.mark.parametrize("width", [1440, 390])
@@ -1520,7 +1694,8 @@ def test_pending_cancel_has_explicit_completion_action(browser_page, ui_server):
         + json.dumps(json.dumps({"id": run_id, "stateDir": str(server.config.policy.state_dir)}))
         + ")"
     )
-    page.goto(server.url)
+    ready(page, server)
+    page.locator("#tab-runs").click()
     page.get_by_role("button", name="继续处理取消", exact=True).click()
     page.wait_for_function(
         "() => document.querySelector('#run-detail').textContent.includes('运行已取消')"
@@ -1572,6 +1747,8 @@ def test_ignore_host_key_allows_connection_test_and_validation_without_hosts(
 ):
     page, server = browser_page, ui_server
     ready(page, server)
+    saved_path = server.root / "autobench.yaml"
+    saved_text = saved_path.read_bytes()
     page.locator("#input-machines-0-ssh-host").fill("localhost")
     page.locator("#input-machines-0-ssh-username").fill("bench")
     page.locator("#input-machines-0-ssh-password").fill("test-secret")
@@ -1580,7 +1757,7 @@ def test_ignore_host_key_allows_connection_test_and_validation_without_hosts(
     page.get_by_label("忽略主机密钥检查", exact=True).check()
     page.get_by_role("button", name="连接测试", exact=True).click()
     page.locator('.connection-test-status[data-phase="success"]').wait_for()
-    assert not (server.root / "autobench.yaml").exists()
+    assert saved_path.read_bytes() == saved_text
     data = server.config.model_dump(mode="json")
     data["machines"][0]["ssh"].update(verify_host_key=False, known_hosts="absent-hosts")
     set_editor_mode(page, "yaml")
@@ -2309,7 +2486,7 @@ def test_run_settings_error_navigation_and_validation_invalidation(
 
 def test_imported_yaml_enters_guided_steps_without_changing_content(browser_page, ui_server):
     page, server = browser_page, ui_server
-    ready(page, server)
+    ready(page, server, startup_path=server.root / "startup.yaml")
     raw = server.config.model_dump(mode="json")
     raw["machines"][0]["systems"][0]["ssh"] = {"password": None, "client_keys": [], "proxy": None}
     text = "# imported config\n" + yaml.safe_dump(raw)

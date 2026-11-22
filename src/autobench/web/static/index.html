@@ -8,8 +8,8 @@
     <script type="module" src="/static/app.js"></script>
   </head>
   <body>
-    <a class="skip-link" href="#main-content">跳转到主要内容</a>
-    <div class="app-shell">
+    <div id="app-shell" class="app-shell" inert>
+      <a class="skip-link" href="#main-content">跳转到主要内容</a>
       <header class="topbar">
         <a class="brand" href="/" aria-label="AutoBench 首页"
           ><span class="brand-mark"
@@ -278,6 +278,47 @@
       <p id="preview-path" class="secondary mono"></p>
       <pre id="artifact-preview"></pre>
     </aside>
+    <dialog
+      id="startup-dialog"
+      aria-labelledby="startup-title"
+      aria-describedby="startup-help"
+    >
+      <h2 id="startup-title">选择配置文件</h2>
+      <p id="startup-help" class="hint">
+        配置文件保存在运行 Web 服务的服务器上。新文件会写入默认草稿。
+      </p>
+      <form id="startup-form">
+        <fieldset id="startup-fields" disabled>
+          <div class="field">
+            <label for="startup-directory" class="field-label">保存目录</label>
+            <div class="input-controls">
+              <input
+                id="startup-directory"
+                required
+                autocomplete="off"
+                spellcheck="false"
+              /><button id="startup-browse" class="browse-button" type="button">
+                选择目录…
+              </button>
+            </div>
+          </div>
+          <label for="startup-filename" class="field-label">配置文件名</label>
+          <input
+            id="startup-filename"
+            required
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="autobench.yaml"
+          />
+          <div class="dialog-actions">
+            <button id="startup-save" class="button primary" type="submit">
+              保存并进入
+            </button>
+          </div>
+        </fieldset>
+        <p id="startup-error" class="callout error" role="alert" hidden></p>
+      </form>
+    </dialog>
     <dialog id="path-dialog" aria-labelledby="path-title">
       <form id="path-form">
         <h2 id="path-title">保存配置</h2>

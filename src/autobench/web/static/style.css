@@ -1745,6 +1745,19 @@ dialog input {
   gap: 8px;
   margin-top: 20px;
 }
+#startup-fields {
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+#startup-directory {
+  min-width: 0;
+}
+#startup-error {
+  margin: 12px 0 0;
+  overflow-wrap: anywhere;
+}
 .file-dialog {
   width: min(680px, calc(100vw - 32px));
 }
