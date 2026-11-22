@@ -600,17 +600,17 @@ async function preview(item) {
   );
   if (token !== view.previewToken) return;
   view.previewPath = item.path;
-  $("preview-drawer").hidden = false;
   $("preview-title").textContent = item.path.split("/").at(-1);
   $("preview-path").textContent = item.path;
   $("artifact-preview").textContent =
     result.text +
     (result.truncated ? "\n\n仅预览前 256 KiB，请下载查看完整文件。" : "");
-  $("close-preview").focus({ preventScroll: true });
+  $("preview-drawer").showModal();
+  $("preview-content").scrollTop = 0;
 }
 export function closePreview(restoreFocus = false) {
   view.previewToken++;
-  $("preview-drawer").hidden = true;
+  $("preview-drawer").close();
   if (restoreFocus) {
     const trigger = [
       ...$("run-detail").querySelectorAll("[data-preview-path]"),
@@ -664,8 +664,20 @@ export async function initRuns() {
     }),
   );
   $("close-preview").addEventListener("click", () => closePreview(true));
-  $("preview-drawer").addEventListener("keydown", (event) => {
-    if (event.key === "Escape") closePreview(true);
+  const drawer = $("preview-drawer");
+  drawer.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    closePreview(true);
+  });
+  const isBackdrop = (event) =>
+    event.target === drawer && event.clientX < drawer.getBoundingClientRect().left;
+  let pressedBackdrop = false;
+  drawer.addEventListener("pointerdown", (event) => {
+    pressedBackdrop = isBackdrop(event);
+  });
+  drawer.addEventListener("click", (event) => {
+    if (pressedBackdrop && isBackdrop(event)) closePreview(true);
+    pressedBackdrop = false;
   });
   try {
     const saved = JSON.parse(

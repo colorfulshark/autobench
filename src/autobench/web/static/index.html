@@ -343,21 +343,33 @@
         </section>
       </main>
     </div>
-    <aside
+    <dialog
       id="preview-drawer"
       class="preview-drawer"
-      aria-label="文件预览"
-      hidden
+      aria-labelledby="preview-title"
     >
       <div class="section-heading">
         <h2 id="preview-title"></h2>
-        <button id="close-preview" class="icon-button" aria-label="关闭预览">
+        <button
+          id="close-preview"
+          class="icon-button"
+          aria-label="关闭预览"
+          autofocus
+        >
           ×
         </button>
       </div>
-      <p id="preview-path" class="secondary mono"></p>
-      <pre id="artifact-preview"></pre>
-    </aside>
+      <div
+        id="preview-content"
+        class="preview-content"
+        tabindex="0"
+        role="region"
+        aria-label="预览内容"
+      >
+        <p id="preview-path" class="secondary mono"></p>
+        <pre id="artifact-preview"></pre>
+      </div>
+    </dialog>
     <dialog
       id="startup-dialog"
       aria-labelledby="startup-title"

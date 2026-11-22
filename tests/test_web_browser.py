@@ -848,7 +848,8 @@ def test_missing_or_invalid_page_defaults_to_config_with_saved_run(
     page.locator("#run-detail").get_by_text(run_id, exact=True).wait_for()
 
 
-def test_readable_run_names_and_nested_downloads(browser_page, ui_server, monkeypatch):
+@pytest.mark.parametrize("width", [1440, 390])
+def test_readable_run_names_and_nested_downloads(browser_page, ui_server, monkeypatch, width):
     from autobench.storage import Store
 
     page, server = browser_page, ui_server
@@ -862,7 +863,8 @@ def test_readable_run_names_and_nested_downloads(browser_page, ui_server, monkey
     relative = "server01/os1/ub/round-001/run.stdout"
     result = server.config.policy.output_dir / run_id / relative
     result.parent.mkdir(parents=True)
-    result.write_text("readable archive result\n")
+    result.write_text("readable archive result\n" * 300)
+    page.set_viewport_size({"width": width, "height": 844})
     ready(page, server)
     page.locator('[data-page="runs"]').click()
     page.locator("#runs-list").get_by_text(name, exact=True).wait_for()
@@ -871,10 +873,37 @@ def test_readable_run_names_and_nested_downloads(browser_page, ui_server, monkey
     row.get_by_role("button", name="查看详情", exact=True).click()
     page.locator("#run-detail").get_by_text(run_id, exact=True).wait_for()
     artifact = page.locator(".artifact-row").filter(has_text="run.stdout")
-    artifact.get_by_role("button", name="预览", exact=True).click()
+    preview = artifact.get_by_role("button", name="预览", exact=True)
+    drawer = page.get_by_role("dialog", name="run.stdout")
+    close = drawer.get_by_role("button", name="关闭预览", exact=True)
+    preview.click()
     page.locator("#preview-path").get_by_text(relative, exact=True).wait_for()
-    assert page.locator("#artifact-preview").text_content() == result.read_text()
-    page.locator("#close-preview").click()
+    log = drawer.locator("#artifact-preview")
+    assert log.text_content() == result.read_text()
+    drawer_position = drawer.bounding_box()
+    close_position = close.bounding_box()
+    inside = (drawer_position["x"] + 48, 200)
+    outside = (drawer_position["x"] / 2, 200)
+    page.mouse.click(*inside)
+    assert drawer.is_visible()
+    page.mouse.wheel(0, 3000)
+    page.wait_for_function("() => document.querySelector('#preview-content').scrollTop > 0")
+    assert close.bounding_box() == close_position
+    page.mouse.down()
+    page.mouse.move(*outside, steps=4)
+    page.mouse.up()
+    assert drawer.is_visible()
+    page.mouse.click(*outside)
+    drawer.wait_for(state="hidden")
+    assert preview.evaluate("button => document.activeElement === button")
+    preview.click()
+    assert drawer.locator("#preview-content").evaluate("element => element.scrollTop") == 0
+    close.click()
+    drawer.wait_for(state="hidden")
+    preview.click()
+    close.wait_for()
+    page.keyboard.press("Escape")
+    drawer.wait_for(state="hidden")
     with page.expect_download() as downloaded_file:
         artifact.get_by_role("link", name="下载", exact=True).click()
     assert downloaded_file.value.suggested_filename == "run.stdout"
@@ -1277,6 +1306,7 @@ def test_wizard_password_connection_test_manual_system_files_save_run_and_cancel
     page.wait_for_function(
         "() => document.querySelector('#artifact-preview').textContent.includes('fixture benchmark finished')"
     )
+    page.get_by_role("button", name="关闭预览", exact=True).click()
     with page.expect_download() as info:
         page.get_by_role("link", name="下载完整归档").click()
     assert info.value.suggested_filename.endswith(".zip")

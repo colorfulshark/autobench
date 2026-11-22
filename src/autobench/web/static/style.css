@@ -1283,21 +1283,39 @@ td .secondary {
 }
 .preview-drawer {
   position: fixed;
-  right: 0;
-  top: 0;
-  bottom: 0;
+  inset: 0 0 0 auto;
+  margin: 0;
   width: min(640px, 94vw);
-  background: var(--panel);
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  border: 0;
   border-left: 1px solid var(--line);
-  box-shadow: var(--overlay-shadow);
-  z-index: 40;
-  padding: 24px;
-  overflow: auto;
+  border-radius: 0;
+  overflow: hidden;
 }
-.preview-drawer > p {
+.preview-drawer[open] {
+  display: flex;
+  flex-direction: column;
+}
+.preview-drawer::backdrop {
+  background: transparent;
+}
+.preview-drawer .section-heading {
+  flex-shrink: 0;
+  flex-wrap: nowrap;
+}
+.preview-drawer .icon-button {
+  flex-shrink: 0;
+}
+.preview-content {
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.preview-content > p {
   overflow-wrap: anywhere;
 }
-.preview-drawer pre {
+.preview-content pre {
   font-size: 12px;
   white-space: pre-wrap;
   word-break: break-word;
