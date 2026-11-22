@@ -28,6 +28,8 @@ import {
   setStepPicker,
   focusError,
   errorLabel,
+  rememberConfigView,
+  restoreConfigView,
 } from "./config-view.js";
 import {
   closePreview,
@@ -132,6 +134,7 @@ function render(layout) {
   } catch {}
   if (layout) renderConfig();
   chrome();
+  rememberConfigView();
   if (layout && focus) {
     const next = $(focus);
     if (next && next !== document.activeElement) {
@@ -498,6 +501,7 @@ async function boot() {
   const rememberedPath = sessionStorage.getItem("autobench-config-path");
   if (restoring) {
     await restoreProject(rememberedPath || state.info.config);
+    restoreConfigView();
   } else {
     const saved = await selectStartupProject(
       state.info.config ||

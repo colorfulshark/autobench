@@ -3,6 +3,8 @@ import { at, own, put, statusLabels, statusTone } from "./model.js";
 export const $ = (id) => document.getElementById(id);
 export function icon(name, cls = "icon") {
   const paths = {
+    arrowDown: "M12 4v16m-6-6 6 6 6-6",
+    arrowUp: "M12 20V4m-6 6 6-6 6 6",
     chain:
       "M10 13a4 4 0 0 0 6 .5l4-4a4 4 0 0 0-5.7-5.7L12 6m2 5a4 4 0 0 0-6-.5l-4 4a4 4 0 0 0 5.7 5.7L12 18",
     check: "M5 12l4 4L19 6",
@@ -19,15 +21,21 @@ export function icon(name, cls = "icon") {
       "M22 12a10 10 0 1 0-20 0 10 10 0 0 0 20 0ZM2 12h20m-10 10c5-5 5-15 0-20-5 5-5 15 0 20Z",
     info: "M21 12a9 9 0 1 0-18 0 9 9 0 0 0 18 0ZM12 11v5m0-8h.01",
     key: "M8 14a7 7 0 1 1 5 3l-3 3H7v2H2v-4l6-6m9-4h.01",
+    layers: "m2 7 10-5 10 5-10 5Zm0 5 10 5 10-5M2 17l10 5 10-5",
     lock: "M7 10V7a5 5 0 1 1 10 0v3M4 10h16v11H4Zm8 4v3",
     network:
       "M15 5a3 3 0 1 0-6 0 3 3 0 0 0 6 0Zm-8 14a3 3 0 1 0-6 0 3 3 0 0 0 6 0Zm16 0a3 3 0 1 0-6 0 3 3 0 0 0 6 0ZM12 8v4m-8 4v-4h16v4",
     pending: "M12 5v7l4 2",
     play: "M6 3l15 9-15 9Z",
+    scan: "M3 8V4h4m10 0h4v4m0 8v4h-4m-10 0H3v-4m4-4h10",
+    settings:
+      "m9 3-.6 2.3-2 .9L4.2 5.6 2.5 8.5l1.7 1.7v2.6l-1.7 1.7 1.7 2.9 2.2-.6 2 .9L9 20h4l.6-2.3 2-.9 2.2.6 1.7-2.9-1.7-1.7v-2.6l1.7-1.7-1.7-2.9-2.2.6-2-.9L13 3Zm5 8.5a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z",
     shield:
       "M12 2c-2 2-6 3-9 4v5c0 5 4 9 9 11 5-2 9-6 9-11V6c-3-1-7-2-9-4Zm-4 10 3 3 5-5",
     tag: "M3 3h8l10 10-8 8L3 11Zm4 4h.01",
+    trash: "M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7",
     user: "M16 7a4 4 0 1 0-8 0 4 4 0 0 0 8 0Zm-4 7c-5 0-9 2-9 7h18c0-5-4-7-9-7Z",
+    warning: "M12 3 2 21h20Zm0 6v5m0 3h.01",
   };
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   svg.setAttribute("class", cls);
@@ -365,9 +373,9 @@ export function listEditor(
   if (help) e.append(hint(help));
   return e;
 }
-export function envEditor(path) {
+export function envEditor(path, { showTitle = true } = {}) {
   const e = node("div", "env-editor");
-  e.append(node("h3", "", "环境变量"));
+  if (showTitle) e.append(node("h3", "", "环境变量"));
   const raw = at(state.document, path);
   const entries =
     raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
@@ -413,7 +421,8 @@ export function envEditor(path) {
     if (typeof val !== "string")
       e.append(hint(`${key} 的原始值不是字符串；修改值后会按字符串保存。`));
   }
-  e.append(
+  const actions = node("div", "env-actions");
+  actions.append(
     button(
       "＋ 添加变量",
       () => {
@@ -426,6 +435,7 @@ export function envEditor(path) {
     ),
     hint("值按字面字符串传入；测试级变量覆盖系统级变量。"),
   );
+  e.append(actions);
   return e;
 }
 export function table(headers, rows) {

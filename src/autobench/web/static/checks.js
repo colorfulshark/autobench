@@ -1,14 +1,6 @@
 import { state, api, waitOperation, emit } from "./state.js";
 import { mergedSSH, connectionTestSignature } from "./model.js";
-import {
-  node,
-  icon,
-  button,
-  hint,
-  pill,
-  statusIndicator,
-  updateStatusIndicator,
-} from "./ui.js";
+import { node, icon, button, statusIndicator, updateStatusIndicator } from "./ui.js";
 const records = new WeakMap();
 const panelTargets = new WeakMap();
 const labels = {
@@ -19,18 +11,15 @@ const labels = {
   dependencies: "基础命令",
   disk: "可用空间",
 };
-function currentRecord(machine, system = null) {
-  return records.get(system || machine);
-}
-function fresh(machine, system = null) {
-  const r = currentRecord(machine, system);
+function fresh(machine) {
+  const r = records.get(machine);
   if (!r || r.invalidated) return false;
   if (
     r.epoch !== state.epoch ||
     r.signature !==
       connectionTestSignature(
         machine,
-        system,
+        null,
         state.target,
         state.document.policy?.connect_timeout ?? 15,
       )
@@ -38,14 +27,13 @@ function fresh(machine, system = null) {
     r.invalidated = true;
   return !r.invalidated;
 }
-async function testConnection(machine, system = null) {
-  const key = system || machine;
-  if (currentRecord(machine, system)?.running && fresh(machine, system)) return;
+async function testConnection(machine) {
+  if (records.get(machine)?.running && fresh(machine)) return;
   const record = {
     running: true,
     signature: connectionTestSignature(
       machine,
-      system,
+      null,
       state.target,
       state.document.policy?.connect_timeout ?? 15,
     ),
@@ -53,60 +41,48 @@ async function testConnection(machine, system = null) {
     result: null,
     error: null,
   };
-  records.set(key, record);
+  records.set(machine, record);
   emit(true);
   try {
     const operation = await api("/api/connections/probe", {
-      ssh: mergedSSH(machine, system),
+      ssh: mergedSSH(machine),
       config_path: state.target || null,
       connect_timeout: state.document.policy?.connect_timeout ?? 15,
     });
     const result = await waitOperation(operation);
-    if (records.get(key) === record && fresh(machine, system))
+    if (records.get(machine) === record && fresh(machine))
       record.result = result;
   } catch (error) {
-    if (records.get(key) === record && fresh(machine, system))
+    if (records.get(machine) === record && fresh(machine))
       record.error = error.message;
   } finally {
     record.running = false;
-    if (records.get(key) === record) emit(true);
+    if (records.get(machine) === record) emit(true);
   }
 }
-export function connectionTestPanel(
-  machine,
-  system = null,
-  { compact = false } = {},
-) {
+export function connectionTestPanel(machine) {
   const panel = node("div", "connection-test-panel");
-  panelTargets.set(panel, { machine, system, compact });
+  panelTargets.set(panel, machine);
   const actions = node("div", "connection-test-actions");
   const connect = button(
     "连接测试",
-    () => testConnection(machine, system),
+    () => testConnection(machine),
     "button secondary",
   );
   connect.classList.add("connection-test-button");
-  const description = "检查连接及运行环境，不提交测试，也不切换操作系统。";
-  if (compact) {
-    connect.prepend(icon("play"));
-    connect.title = description;
-  }
+  connect.prepend(icon("play"));
+  connect.title = "检查连接及运行环境，不提交测试，也不切换操作系统。";
   const status = statusIndicator("connection-test-status");
   actions.append(connect, status);
   panel.append(actions);
-  if (!compact) {
-    panel.append(hint(description));
-    if (mergedSSH(machine, system).verify_host_key === false)
-      panel.append(pill("已忽略主机密钥检查", "warning"));
-  }
   updateConnectionTestPanel(panel);
   return panel;
 }
 function updateConnectionTestPanel(panel) {
-  const { machine, system, compact } = panelTargets.get(panel);
-  const r = currentRecord(machine, system),
-    valid = fresh(machine, system);
-  const ssh = mergedSSH(machine, system);
+  const machine = panelTargets.get(panel);
+  const r = records.get(machine),
+    valid = fresh(machine);
+  const ssh = mergedSSH(machine);
   const running = !!r?.running && valid;
   panel.querySelector(".connection-test-button").disabled =
     running || !ssh.host || !ssh.username;
@@ -140,9 +116,9 @@ function updateConnectionTestPanel(panel) {
     status,
     phase,
     message,
-    compact && phase === "stale" ? "info" : undefined,
+    phase === "stale" ? "info" : undefined,
   );
-  if (compact) status.title = message;
+  status.title = message;
 }
 export function updateConnectionTestPanels() {
   document

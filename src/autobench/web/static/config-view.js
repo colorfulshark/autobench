@@ -54,6 +54,7 @@ const modes = new WeakMap(),
 const asList = (value) => (Array.isArray(value) ? value : []);
 const machines = () => asList(state.document.machines);
 const benchmarks = () => asList(state.document.benchmarks);
+const configViewKey = "autobench-config-view";
 function navigate({
   machine = state.machine,
   system = state.system,
@@ -436,7 +437,7 @@ function machineEditor(machine, index) {
     effective = mergedSSH(machine);
   const connection = connectionFields(ssh, effective, true);
   connection.classList.add("machine-connection-fields");
-  connection.append(connectionTestPanel(machine, null, { compact: true }));
+  connection.append(connectionTestPanel(machine));
   const authentication = node("div", "machine-authentication");
   authentication.append(
     authEditor(ssh, effective, true),
@@ -589,11 +590,9 @@ function objectActions({
   onRemove,
   removeTitle = `删除${label} ${name}`,
 }) {
-  const inline = kind === "machine";
-  const removeStyle = inline
-    ? "machine-tab-action"
-    : "object-corner object-remove";
-  const editStyle = inline ? "machine-tab-action" : "object-corner object-edit";
+  const inlineStyle = kind === "machine" ? "machine-tab-action" : "";
+  const removeStyle = inlineStyle || "object-corner object-remove";
+  const editStyle = inlineStyle || "object-corner object-edit";
   const remove = button("", onRemove, `${removeStyle} ${kind}-remove`);
   remove.setAttribute("aria-label", `删除${label} ${name}`);
   remove.title = removeTitle;
@@ -607,45 +606,53 @@ function objectActions({
   edit.addEventListener("click", () =>
     editObjectId(label, items, item, path, edit),
   );
-  return inline ? [edit, remove] : [remove, edit];
+  return inlineStyle ? [edit, remove] : [remove, edit];
+}
+function systemSection(title, symbol, content) {
+  const section = node("section", "system-editor-section");
+  const label = node("h2", "system-section-title");
+  label.append(icon(symbol), node("span", "", title));
+  section.append(label, content);
+  return section;
 }
 function systemEditor(machine, mi, system, si) {
-  const panel = node("section", "panel");
+  const panel = node("section", "panel system-card system-editor");
   const path = ["machines", mi, "systems", si],
     ssh = [...path, "ssh"];
   const effective = mergedSSH(machine, system),
     raw = system.ssh || {};
-  panel.append(heading("系统详情"));
-  const fields = row(
+  const customConnection = overrides(raw, connectionKeys),
+    customAuth = overrides(raw, authKeys);
+  const basic = node("div", "system-basics");
+  const fields = node("div", "system-basic-fields");
+  fields.append(
     field("系统标识", [...path, "id"], {
       required: true,
       help: "使用字母、数字、下划线或连字符，例如 ubuntu。",
+      leadingIcon: "database",
     }),
     bootEntryField(machine, system, [...path, "boot_entry"]),
   );
-  panel.append(fields);
-  panel.append(
+  const summary = node("div", "inherit-summary");
+  const inherited = mergedSSH(machine);
+  summary.append(
+    icon("info"),
     node(
-      "div",
-      "inherit-summary",
-      `默认沿用 ${machine.id || "机器"} 的连接：${effective.username || "用户名未填"}@${effective.host || "地址未填"}:${effective.port}`,
+      "span",
+      "",
+      `默认沿用 ${machine.id || "机器"} 的连接：${inherited.username || "用户名未填"}@${inherited.host || "地址未填"}:${inherited.port}`,
     ),
   );
-  const customConnection = overrides(raw, connectionKeys),
-    customAuth = overrides(raw, authKeys);
-  panel.append(
+  basic.append(fields, summary);
+
+  const options = node("div", "system-options");
+  const toggles = node("div", "system-option-toggles");
+  toggles.append(
     toggle("单独设置此系统的连接地址或用户名", customConnection, (enabled) =>
       enabled
         ? change([...ssh, "host"], effective.host || "", true)
         : mutateGroup(ssh, connectionKeys),
     ),
-  );
-  if (customConnection)
-    panel.append(
-      connectionFields(ssh, effective),
-      hint("未改动的字段继续沿用机器设置。"),
-    );
-  panel.append(
     toggle("单独设置此系统的认证方式", customAuth, (enabled) => {
       if (!enabled) {
         mutateGroup(ssh, authKeys);
@@ -656,117 +663,143 @@ function systemEditor(machine, mi, system, si) {
       change(ssh, object, true);
     }),
   );
-  if (customAuth) panel.append(authEditor(ssh, effective));
-  panel.append(
+  options.append(toggles);
+  if (customConnection)
+    options.append(
+      connectionFields(ssh, effective),
+      hint("未改动的字段继续沿用机器设置。"),
+    );
+  if (customAuth) options.append(authEditor(ssh, effective));
+  options.append(
     advanced(
       "系统高级设置",
-      [
-        ...trustKeys.map((key) => [...ssh, key]),
-        [...ssh, "proxy"],
-        [...path, "env"],
-      ],
+      [...trustKeys.map((key) => [...ssh, key]), [...ssh, "proxy"]],
       (content) => {
         content.append(
           proxyEditor(ssh, true),
           systemTrustFields(ssh, effective),
-          envEditor([...path, "env"]),
         );
-        const env = system.env || {};
-        if (Object.keys(env).length) {
-          content.append(hint("合并结果预览（测试级变量优先）"));
-          for (const b of benchmarks())
-            content.append(
-              node(
-                "pre",
-                "code-block",
-                `${b.id}\n` + JSON.stringify({ ...env, ...b.env }, null, 2),
-              ),
-            );
-        }
       },
       "system-advanced-" + mi + "-" + si,
     ),
   );
+
+  const env = system.env || {};
+  const environment = envEditor([...path, "env"], { showTitle: false });
+  if (Object.keys(env).length) {
+    environment.append(hint("合并结果预览（测试级变量优先）"));
+    for (const b of benchmarks())
+      environment.append(
+        node(
+          "pre",
+          "code-block",
+          `${b.id}\n` + JSON.stringify({ ...env, ...b.env }, null, 2),
+        ),
+      );
+  }
+  panel.append(
+    systemSection("基本信息", "tag", basic),
+    systemSection("配置选项", "settings", options),
+    systemSection("环境变量", "layers", environment),
+  );
   return panel;
 }
 function systemsBoard(machine, index) {
-  const e = node("section", "systems-board");
-  const actions = node("div", "actions");
-  actions.append(
-    button("＋ 手动添加系统", () => addSystem(machine, index), "text-button"),
+  const board = node("section", "panel system-card systems-board");
+  const header = node("header", "systems-board-heading");
+  const title = node("h2", "system-section-title");
+  title.append(icon("layers"), node("span", "", "参与测试的系统"));
+  header.append(
+    title,
+    button(
+      "＋ 手动添加系统",
+      () => addSystem(machine, index),
+      "button secondary system-action system-add",
+    ),
   );
-  e.append(heading("参与测试的系统", "", actions));
+  board.append(header);
   const systems = asList(machine.systems);
   if (!systems.length)
-    e.append(empty("尚未添加系统", "请手动添加系统并填写对应的 UEFI 启动项。"));
+    board.append(
+      empty("尚未添加系统", "请手动添加系统并填写对应的 UEFI 启动项。"),
+    );
   systems.forEach((system, si) => {
     const r = node("div", "system-item");
     const name = system.id || `系统 ${si + 1}`;
-    r.append(
-      button(
-        name,
-        () => navigate({ machine: index, system: si }),
-        "object-title",
-      ),
-      node(
-        "span",
-        /^[a-f\d]{4}$/i.test(system.boot_entry || "")
-          ? "mono muted"
-          : "mono danger",
-        !system.boot_entry
-          ? "待填写启动项"
-          : /^[a-f\d]{4}$/i.test(system.boot_entry)
-            ? "Boot" + system.boot_entry
-            : "启动项无效：" + system.boot_entry,
-      ),
+    const openEditor = () => navigate({ machine: index, system: si });
+    const validEntry = /^[a-f\d]{4}$/i.test(system.boot_entry || "");
+    const entryLabel = validEntry
+      ? "Boot" + system.boot_entry
+      : system.boot_entry
+        ? "启动项无效：" + system.boot_entry
+        : "待填写启动项";
+    const status = node(
+      "span",
+      validEntry ? "system-boot-tag mono" : "system-boot-tag",
     );
+    status.dataset.valid = String(validEntry);
+    if (!validEntry) status.append(icon("warning"));
+    status.append(node("span", "", entryLabel));
+    const identity = node("div", "system-identity");
+    identity.append(
+      node("span", "system-order mono", String(si + 1).padStart(2, "0")),
+      button(name, openEditor, "object-title"),
+    );
+    const edit = button(
+      "",
+      openEditor,
+      "icon-button system-row-action system-edit",
+    );
+    edit.setAttribute("aria-label", `编辑系统配置 ${name}`);
+    edit.title = "编辑系统配置";
+    edit.append(icon("edit"));
+    const remove = button(
+      "",
+      () => {
+        systems.splice(si, 1);
+        state.system = null;
+        dirty(true);
+        const updatedBoard = $("config-body").querySelector(".systems-board");
+        (
+          updatedBoard.querySelectorAll(".object-title")[Math.max(0, si - 1)] ||
+          updatedBoard.querySelector(".system-add")
+        )?.focus();
+      },
+      "icon-button system-row-action system-remove",
+    );
+    remove.setAttribute("aria-label", `删除系统 ${name}`);
+    remove.title = `删除系统 ${name}`;
+    remove.append(icon("trash"));
     const up = button(
-      "↑",
+      "",
       () => {
         [systems[si - 1], systems[si]] = [systems[si], systems[si - 1]];
         state.system = null;
         dirty(true);
       },
-      "icon-button",
+      "icon-button system-row-action",
     );
     up.disabled = si === 0;
-    up.setAttribute("aria-label", `上移系统 ${system.id}`);
+    up.setAttribute("aria-label", `上移系统 ${name}`);
+    up.append(icon("arrowUp"));
     const down = button(
-      "↓",
+      "",
       () => {
         [systems[si + 1], systems[si]] = [systems[si], systems[si + 1]];
         state.system = null;
         dirty(true);
       },
-      "icon-button",
+      "icon-button system-row-action",
     );
     down.disabled = si === systems.length - 1;
-    down.setAttribute("aria-label", `下移系统 ${system.id}`);
-    r.append(
-      up,
-      down,
-      ...objectActions({
-        kind: "system",
-        label: "系统",
-        name,
-        items: systems,
-        item: system,
-        path: ["machines", index, "systems", si],
-        onRemove: () => {
-          systems.splice(si, 1);
-          state.system = null;
-          dirty(true);
-          const board = $("config-body").querySelector(".systems-board");
-          (
-            board.querySelectorAll(".object-title")[Math.max(0, si - 1)] ||
-            board.querySelector(".text-button")
-          )?.focus();
-        },
-      }),
-    );
-    e.append(r);
+    down.setAttribute("aria-label", `下移系统 ${name}`);
+    down.append(icon("arrowDown"));
+    const actions = node("div", "system-row-actions");
+    actions.append(edit, remove, up, down);
+    r.append(identity, status, actions);
+    board.append(r);
   });
-  return e;
+  return board;
 }
 function benchmarkEditor(b, index) {
   const panel = node("section", "panel");
@@ -1039,7 +1072,10 @@ function objectTabs({
     );
     b.classList.toggle("active", index === selected);
     b.setAttribute("aria-pressed", String(index === selected));
-    if (kind === "machine" && editable) b.prepend(icon("database"));
+    if (kind === "machine") {
+      b.prepend(icon("database"));
+      if (!editable) b.append(icon("lock", "icon system-machine-lock"));
+    }
     tab.append(b);
     if (editable) {
       b.draggable = true;
@@ -1142,6 +1178,7 @@ export function renderConfig() {
   const container = $("config-body");
   container.replaceChildren();
   const sourceMode = state.mode === "yaml";
+  container.classList.toggle("system-step", !sourceMode && state.step === 1);
   const actions = $(sourceMode ? "source-actions" : "wizard-actions");
   const primary = $("primary-action");
   if (primary.parentElement !== actions) actions.append(primary);
@@ -1225,14 +1262,12 @@ export function renderConfig() {
               state.system = null;
               emit(true);
             },
-            "text-button",
+            "text-button system-back",
           ),
           systemEditor(m, state.machine, m.systems[state.system], state.system),
         );
       } else {
-        const p = node("section", "panel");
-        p.append(systemsBoard(m, state.machine), connectionTestPanel(m));
-        container.append(p);
+        container.append(systemsBoard(m, state.machine));
       }
     } else container.append(empty("请先添加机器", "返回上一步填写连接信息。"));
   }
@@ -1261,6 +1296,47 @@ export function stepGate() {
     if (problems.length) return { index, problems };
   }
   return { index: reviewStep, problems: [] };
+}
+
+function objectId(item) {
+  return typeof item?.id === "string" ? item.id : undefined;
+}
+
+export function rememberConfigView() {
+  const machine = machines()[state.machine];
+  const view = JSON.stringify({
+    path: state.path,
+    step: state.step,
+    mode: state.mode,
+    machine: objectId(machine),
+    system: objectId(asList(machine?.systems)[state.system]),
+    benchmark: objectId(benchmarks()[state.benchmark]),
+  });
+  if (sessionStorage.getItem(configViewKey) !== view)
+    sessionStorage.setItem(configViewKey, view);
+}
+
+function objectIndex(items, id) {
+  return typeof id === "string" ? items.findIndex((item) => item?.id === id) : -1;
+}
+
+export function restoreConfigView() {
+  let view;
+  try {
+    view = JSON.parse(sessionStorage.getItem(configViewKey));
+  } catch {
+    return;
+  }
+  if (!state.path || view?.path !== state.path) return;
+  if (Number.isInteger(view.step) && view.step >= 0 && view.step <= reviewStep)
+    state.step = Math.min(view.step, stepGate().index);
+  if (view.mode === "yaml") state.mode = "yaml";
+
+  const machine = objectIndex(machines(), view.machine);
+  const system = objectIndex(asList(machines()[machine]?.systems), view.system);
+  state.machine = Math.max(0, machine);
+  state.system = state.step === 1 && system >= 0 ? system : null;
+  state.benchmark = Math.max(0, objectIndex(benchmarks(), view.benchmark));
 }
 
 export function canGoToStep(index, limit) {

@@ -2,6 +2,7 @@ import { state, api, waitOperation, change, emit } from "./state.js";
 import { mergedSSH, connectionTestSignature } from "./model.js";
 import {
   node,
+  icon,
   button,
   inputField,
   statusIndicator,
@@ -68,6 +69,7 @@ export function bootEntryField(machine, system, path) {
   const field = inputField("启动项", path, {
     placeholder: "例如 0001",
     required: true,
+    leadingIcon: "play",
   });
   field.classList.add("boot-entry-field");
   targets.set(field, { machine, system, path });
@@ -108,14 +110,13 @@ export function bootEntryField(machine, system, path) {
     });
     input.replaceWith(select);
   }
-  controls.append(
-    button(
-      "自动识别",
-      () => identify(machine, system),
-      "button secondary boot-entry-identify",
-    ),
-    statusIndicator("boot-entry-status"),
+  const identifyButton = button(
+    "自动识别",
+    () => identify(machine, system),
+    "button secondary boot-entry-identify system-action",
   );
+  identifyButton.prepend(icon("scan"));
+  controls.append(identifyButton, statusIndicator("boot-entry-status"));
   updateField(field);
   return field;
 }

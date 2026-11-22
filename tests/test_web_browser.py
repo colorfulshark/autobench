@@ -710,6 +710,41 @@ def test_tab_page_survives_reload_without_selected_run(browser_page, ui_server, 
     assert page.evaluate("sessionStorage.getItem('autobench-selection')") is None
 
 
+def test_config_editor_view_survives_reload(browser_page, ui_server):
+    page, server = browser_page, ui_server
+    ready(page, server, startup_path=server.existing)
+    open_system(page, "编辑系统配置 os2")
+    system_id = page.get_by_label("系统标识 *", exact=True)
+    page.reload()
+    system_id.wait_for()
+    assert system_id.input_value() == "os2"
+
+    set_editor_mode(page, "yaml")
+    page.reload()
+    page.locator("#yaml-editor").wait_for()
+    assert page.locator("#yaml-editor").input_value() == server.existing.read_text()
+    set_editor_mode(page, "form")
+    assert system_id.input_value() == "os2"
+
+    load_existing(page, server)
+    page.locator("#input-machines-0-ssh-host").wait_for()
+    assert page.locator(".wizard-step[aria-current=step]").text_content() == "1连接机器"
+
+
+def test_reload_restores_only_reachable_config_step(browser_page, ui_server):
+    page, server = browser_page, ui_server
+    ready(page, server, startup_path=server.existing)
+    open_step(page, "检查运行")
+    document = yaml.safe_load(server.existing.read_text())
+    document["machines"][0]["systems"] = []
+    server.existing.write_text(yaml.safe_dump(document))
+
+    page.reload()
+    page.get_by_role("heading", name="尚未添加系统", exact=True).wait_for()
+    assert page.locator(".wizard-step[aria-current=step]").text_content() == "2选择系统"
+    assert page.locator("#wizard-step-4").is_disabled()
+
+
 def test_run_detail_returns_to_filtered_list(browser_page, ui_server):
     from autobench.storage import Store
 
@@ -1197,6 +1232,8 @@ def test_wizard_password_connection_test_manual_system_files_save_run_and_cancel
     page.get_by_role("button", name="连接测试", exact=True).click()
     page.locator('.connection-test-status[data-phase="success"]').wait_for()
     click_primary(page)
+    assert page.get_by_role("button", name="连接测试", exact=True).count() == 0
+    assert page.get_by_text("检查连接及运行环境，不提交测试，也不切换操作系统。").count() == 0
     page.get_by_role("button", name="＋ 手动添加系统", exact=True).click()
     page.locator("#input-machines-0-systems-0-boot_entry").fill("0001")
     click_primary(page)
@@ -1529,7 +1566,7 @@ def test_warmup_defaults_toggle_save_reload_and_yaml_roundtrip(browser_page, ui_
     page.wait_for_function("() => document.querySelector('#save-state').textContent === '已保存'")
     assert yaml.safe_load(server.existing.read_text())["benchmarks"][0]["warmup"] is False
     page.reload()
-    page.locator("#input-machines-0-ssh-host").wait_for()
+    page.locator("#config-body table").wait_for()
     open_step(page, "设置测试")
     assert not control.is_checked()
     set_editor_mode(page, "yaml")
@@ -1643,9 +1680,9 @@ def test_unixbench_tests_selection_save_reload_and_yaml_roundtrip(browser_page, 
         "hanoi",
     ]
     page.reload()
-    page.locator("#input-machines-0-ssh-host").wait_for()
-    open_step(page, "设置测试")
-    assert page.get_by_role("checkbox", name="shell · shell1、shell8、shell16").is_checked()
+    shell = page.get_by_role("checkbox", name="shell · shell1、shell8、shell16")
+    shell.wait_for()
+    assert shell.is_checked()
     assert page.get_by_role("list", name="已选测试项").text_content() == "execl×shell×hanoi×"
     page.set_viewport_size({"width": 390, "height": 844})
     assert page.evaluate("() => document.documentElement.scrollWidth <= innerWidth")
@@ -2350,8 +2387,8 @@ def test_five_steps_preserve_existing_config_and_fit_viewport(browser_page, ui_s
     )
     assert server.existing.read_text() == original
     page.reload()
-    page.locator("#input-machines-0-ssh-host").wait_for()
-    assert page.locator(".wizard-step[aria-current=step]").text_content() == "1连接机器"
+    page.locator("#config-body table").wait_for()
+    assert page.locator(".wizard-step[aria-current=step]").text_content() == "5检查运行"
     assert page.locator(".wizard-step").count() == 5
 
 
@@ -2468,6 +2505,7 @@ def test_machine_tab_delete_preserves_selection(browser_page, ui_server, selecte
         "() => document.querySelectorAll('.machine-picker .chip-button').length === 2"
     )
     assert tabs.all_text_contents() == remaining
+    assert page.locator(".machine-picker .active").text_content() == expected
 
 
 @pytest.mark.parametrize("width", [1440, 390])
@@ -2578,7 +2616,19 @@ def test_system_step_only_selects_existing_machines(browser_page, ui_server):
     save_draft(page)
     page.wait_for_function("() => document.querySelector('#save-state').textContent === '已保存'")
     original = server.existing.read_text()
+    database_icon = tabs.first.locator(".icon").first
+    icon_size = "icon => [icon.clientWidth, icon.clientHeight]"
+    connection_size = database_icon.evaluate(icon_size)
+    machine_tiles = page.locator(".machine-picker .machine-tab")
+    tile_frames = """tiles => tiles.map(tile => {
+        const { width, height } = tile.getBoundingClientRect();
+        const { borderRadius, borderWidth } = getComputedStyle(tile);
+        return [width, height, borderRadius, borderWidth];
+    })"""
+    connection_frames = machine_tiles.evaluate_all(tile_frames)
     open_step(page, "选择系统")
+    assert database_icon.evaluate(icon_size) == connection_size
+    assert machine_tiles.evaluate_all(tile_frames) == connection_frames
     assert tabs.all_text_contents() == ["server01", "server03", "server02"]
     assert page.get_by_role("button", name="＋ 添加机器", exact=True).count() == 0
     assert page.get_by_role("button", name="上移机器", exact=True).count() == 0
@@ -2679,8 +2729,7 @@ def test_benchmark_drag_and_keyboard_sort_preserve_config(browser_page, ui_serve
     saved = yaml.safe_load(server.existing.read_text())
     assert saved["benchmarks"] == [original[2], original[0], original[1]]
     page.reload()
-    page.locator("#input-machines-0-ssh-host").wait_for()
-    open_step(page, "设置测试")
+    tabs.first.wait_for()
     assert tabs.all_text_contents() == ["unixbench03", "unixbench01", "unixbench02"]
     set_editor_mode(page, "yaml")
     assert yaml.safe_load(page.locator("#yaml-editor").input_value()) == saved
@@ -2746,9 +2795,9 @@ def test_benchmark_corner_delete_preserves_selection(browser_page, ui_server, se
     saved = yaml.safe_load(server.existing.read_text())
     assert saved["benchmarks"] == remaining
     page.reload()
-    page.locator("#input-machines-0-ssh-host").wait_for()
-    open_step(page, "设置测试")
+    tabs.first.wait_for()
     assert tabs.all_text_contents() == [b["id"] for b in remaining]
+    assert page.locator(".benchmark-picker .active").text_content() == expected["id"]
 
 
 def test_benchmark_corner_keyboard_delete_and_empty_state(browser_page, ui_server):
@@ -2845,34 +2894,56 @@ def test_imported_yaml_enters_guided_steps_without_changing_content(browser_page
     assert (server.root / "autobench.yaml").read_text() == text
 
 
-def test_guided_system_order_delete_and_readd(browser_page, ui_server):
+@pytest.mark.parametrize("width", [1440, 390, 320])
+def test_guided_system_order_delete_and_readd(browser_page, ui_server, width):
     page, server = browser_page, ui_server
+    page.set_viewport_size({"width": width, "height": 1000})
     ready(page, server)
     load_existing(page, server)
     open_step(page, "选择系统")
+    second_row = page.locator(".system-item").nth(1)
+    actions = second_row.locator(".system-row-actions button")
+    assert actions.evaluate_all("buttons => buttons.map(b => b.getAttribute('aria-label'))") == [
+        "编辑系统配置 os2", "删除系统 os2", "上移系统 os2", "下移系统 os2"
+    ]
+    assert actions.evaluate_all("""buttons => buttons.every((button, index) =>
+        index === 0 || buttons[index - 1].getBoundingClientRect().right <= button.getBoundingClientRect().left
+    )""")
+    second_row.get_by_role("button", name="编辑系统配置 os2", exact=True).click()
+    assert page.get_by_label("系统标识 *", exact=True).input_value() == "os2"
+    page.get_by_role("button", name="← 返回系统列表", exact=True).click()
     page.get_by_role("button", name="下移系统 os1", exact=True).click()
     assert page.locator(".system-item .object-title").all_text_contents() == ["os2", "os1"]
     page.get_by_role("button", name="上移系统 os1", exact=True).click()
     assert page.locator(".system-item .object-title").all_text_contents() == ["os1", "os2"]
     for _ in range(2):
         item = page.locator(".system-item").first
-        item.hover()
         item.get_by_role("button", name="删除系统", exact=False).click()
     assert page.get_by_role("heading", name="尚未添加系统", exact=True).is_visible()
     page.get_by_role("button", name="＋ 手动添加系统", exact=True).click()
+    editor = page.locator(".system-editor")
+    assert editor.get_by_role("heading").all_text_contents() == ["基本信息", "配置选项", "环境变量"]
+    editor.get_by_role("button", name="＋ 添加变量", exact=True).click()
+    editor.get_by_role("textbox", name="NEW_VAR的值", exact=True).fill("value")
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.get_by_role("button", name="← 返回系统列表", exact=True).click()
+    assert page.get_by_text("待填写启动项", exact=True).is_visible()
+    page.locator(".systems-board").get_by_role("button", name="linux01", exact=True).click()
     page.locator("#input-machines-0-systems-0-boot_entry").fill("00AB")
     page.get_by_role("button", name="← 返回系统列表", exact=True).click()
     assert page.locator(".system-item .object-title").all_text_contents() == ["linux01"]
-    page.locator(".system-item").first.hover()
-    page.get_by_role("button", name="修改系统标识 linux01", exact=True).click()
-    dialog = page.get_by_role("dialog", name="修改系统标识")
-    dialog.get_by_label("系统标识", exact=True).fill("linux-new")
-    dialog.get_by_role("button", name="确定", exact=True).click()
+    assert page.get_by_text("Boot00AB", exact=True).is_visible()
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.get_by_role("button", name="编辑系统配置 linux01", exact=True).click()
+    page.get_by_label("系统标识 *", exact=True).fill("linux-new")
+    page.get_by_role("button", name="← 返回系统列表", exact=True).click()
     assert page.locator(".system-item .object-title").all_text_contents() == ["linux-new"]
     set_editor_mode(page, "yaml")
     page.locator("#yaml-panel").wait_for()
     data = yaml.safe_load(page.locator("#yaml-editor").input_value())
-    assert data["machines"][0]["systems"] == [{"id": "linux-new", "boot_entry": "00AB"}]
+    assert data["machines"][0]["systems"] == [
+        {"id": "linux-new", "boot_entry": "00AB", "env": {"NEW_VAR": "value"}}
+    ]
 
 
 def report_history(server, *, empty=False):
