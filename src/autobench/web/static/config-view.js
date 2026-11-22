@@ -88,10 +88,11 @@ function field(label, path, options = {}) {
       : null,
   });
 }
-function authEditor(path, effective) {
+function authEditor(path, effective, machineLayout = false) {
   const raw = at(state.document, path) || {};
   const mode = modes.get(raw) || authMode(effective);
   const box = node("section", "auth-editor");
+  box.dataset.mode = mode;
   const switchAuth = (selected) => {
     const existing = at(state.document, path) || {};
     if (selected === "custom") {
@@ -146,10 +147,12 @@ function authEditor(path, effective) {
       field("登录密码", [...path, "password"], {
         type: "password",
         fallback: effective.password ?? "",
+        placeholder: machineLayout ? "请输入密码" : "",
+        leadingIcon: machineLayout ? "lock" : "",
         required: true,
         help:
-          effective.password === "" && !!state.path
-            ? "当前值是空密码；如非预期，请填写密码。"
+          !machineLayout && effective.password === "" && !!state.path
+            ? "当前值为空密码；如非预期，请填写密码。"
             : "",
       }),
     );
@@ -159,7 +162,9 @@ function authEditor(path, effective) {
       fallback: keys[0] || "",
       file: true,
       required: true,
-      help: "选择 Web 服务器上的私钥文件。加密私钥可改用 SSH Agent。",
+      help: machineLayout
+        ? ""
+        : "选择 Web 服务器上的私钥文件。加密私钥可改用 SSH Agent。",
     });
     keyField.classList.add("span-full");
     box.append(keyField);
@@ -171,28 +176,30 @@ function authEditor(path, effective) {
           content.append(
             listEditor("密钥列表", [...path, "client_keys"], {
               browse: (current) => chooseFile(fileStart(current)),
-              help: "支持多个密钥文件，顺序保持不变。",
+              help: machineLayout ? "" : "支持多个密钥文件，顺序保持不变。",
             }),
           ),
         "keys-" + path.join("-"),
       ),
     );
-  } else if (mode === "agent")
-    box.append(
-      node(
-        "p",
-        "callout",
-        "使用 Web 服务所在服务器的 ssh-agent。请先在该服务器加载私钥。",
-      ),
-    );
-  else {
-    box.append(
-      node(
-        "p",
-        "callout",
-        "保留当前认证组合。修改下面的选项，或切换到一种单独的认证方式。",
-      ),
-    );
+  } else if (mode === "agent") {
+    if (!machineLayout)
+      box.append(
+        node(
+          "p",
+          "callout",
+          "使用 Web 服务所在服务器的 ssh-agent。请先在该服务器加载私钥。",
+        ),
+      );
+  } else {
+    if (!machineLayout)
+      box.append(
+        node(
+          "p",
+          "callout",
+          "保留当前认证组合。修改下面的选项，或切换到一种单独的认证方式。",
+        ),
+      );
     box.append(
       field("密码（可选）", [...path, "password"], {
         fallback: effective.password ?? "",
@@ -204,7 +211,7 @@ function authEditor(path, effective) {
     box.append(
       listEditor("密钥列表", [...path, "client_keys"], {
         browse: (current) => chooseFile(fileStart(current)),
-        help: "空列表表示不使用密钥文件。",
+        help: machineLayout ? "" : "空列表表示不使用密钥文件。",
       }),
     );
     box.append(
@@ -215,13 +222,14 @@ function authEditor(path, effective) {
   }
   return box;
 }
-function connectionFields(path, effective) {
+function connectionFields(path, effective, machineLayout = false) {
   return row(
     field("主机地址", [...path, "host"], {
       fallback: effective.host || "",
       placeholder: "IP 地址或域名",
       required: true,
       width: "host-field",
+      leadingIcon: machineLayout ? "globe" : "",
     }),
     field("端口", [...path, "port"], {
       fallback: effective.port ?? 22,
@@ -233,6 +241,7 @@ function connectionFields(path, effective) {
       placeholder: "例如 bench",
       required: true,
       width: "user-field",
+      leadingIcon: machineLayout ? "user" : "",
     }),
   );
 }
@@ -257,8 +266,11 @@ function proxyEditor(path, inherited = false) {
         ["proxy", "使用 SOCKS5 代理"],
       ];
   const e = node("section", "proxy-editor");
-  e.append(
-    select("连接代理", options, mode, (selected) =>
+  const modeField = select(
+    "连接代理",
+    options,
+    mode,
+    (selected) =>
       change(
         [...path, "proxy"],
         selected === "inherit"
@@ -268,8 +280,17 @@ function proxyEditor(path, inherited = false) {
             : { host: "", port: 1080 },
         true,
       ),
-    ),
+    "proxy-" + path.join("-"),
   );
+  if (!inherited) {
+    const controls = node("div", "input-controls with-input-icon");
+    controls.append(
+      icon("chain", "icon input-icon"),
+      modeField.querySelector("select"),
+    );
+    modeField.append(controls);
+  }
+  e.append(modeField);
   if (mode === "proxy") {
     e.append(
       row(
@@ -307,45 +328,32 @@ function proxyEditor(path, inherited = false) {
   }
   return e;
 }
-function trustFields(path, effective, inherited = false) {
+function systemTrustFields(path, effective) {
   const e = node("div");
-  if (inherited) {
-    const raw = at(state.document, path) || {};
-    e.append(
-      select(
-        "主机密钥检查",
-        [
-          ["inherit", "沿用机器设置"],
-          ["verify", "启用校验"],
-          ["ignore", "忽略校验"],
-        ],
-        own(raw, "verify_host_key")
-          ? raw.verify_host_key
-            ? "verify"
-            : "ignore"
-          : "inherit",
-        (mode) =>
-          change(
-            [...path, "verify_host_key"],
-            mode === "inherit" ? undefined : mode === "verify",
-            true,
-          ),
-        "trust-" + path.join("-"),
+  const raw = at(state.document, path) || {};
+  const checkPath = [...path, "verify_host_key"];
+  const check = select(
+    "主机密钥检查",
+    [
+      ["inherit", "沿用机器设置"],
+      ["verify", "启用校验"],
+      ["ignore", "忽略校验"],
+    ],
+    own(raw, "verify_host_key")
+      ? raw.verify_host_key
+        ? "verify"
+        : "ignore"
+      : "inherit",
+    (mode) =>
+      change(
+        checkPath,
+        mode === "inherit" ? undefined : mode === "verify",
+        true,
       ),
-    );
-  } else {
-    e.append(
-      toggle(
-        "忽略主机密钥检查",
-        effective.verify_host_key === false,
-        (ignore) => change([...path, "verify_host_key"], !ignore, true),
-      ),
-    );
-  }
-  e.firstElementChild.dataset.fieldPath = JSON.stringify([
-    ...path,
-    "verify_host_key",
-  ]);
+    "trust-" + path.join("-"),
+  );
+  check.dataset.fieldPath = JSON.stringify(checkPath);
+  e.append(check);
   if (effective.verify_host_key === false) {
     e.append(
       hint(
@@ -365,48 +373,89 @@ function trustFields(path, effective, inherited = false) {
       field("主机别名", [...path, "host_key_alias"], {
         fallback: effective.host_key_alias ?? "",
         reset: true,
-        nullable: inherited,
-        help: inherited
-          ? "清除会写入 null；恢复默认会重新继承。"
-          : "同一地址对应多个系统时，可使用主机别名。",
+        nullable: true,
+        help: "清除会写入 null；恢复默认会重新继承。",
       }),
     ),
   );
   return e;
 }
+function machineSection(title, symbol, content) {
+  const section = node("section", "machine-connection-section");
+  const label = node("h2", "machine-connection-title");
+  label.append(icon(symbol), node("span", "", title));
+  section.append(label, content);
+  return section;
+}
+function machineTrustCheck(ssh, effective) {
+  const box = node("div", "machine-trust-check");
+  const path = [...ssh, "verify_host_key"];
+  box.dataset.fieldPath = JSON.stringify(path);
+  const check = toggle(
+    "忽略主机密钥检查",
+    effective.verify_host_key === false,
+    (ignore) => change(path, !ignore, true),
+  );
+  check.querySelector("input").id = "trust-" + ssh.join("-");
+  box.append(check);
+  return box;
+}
+function machineHostKeys(ssh, effective) {
+  const knownHosts = field("主机密钥文件", [...ssh, "known_hosts"], {
+    fallback: effective.known_hosts ?? "~/.ssh/known_hosts",
+    file: true,
+    reset: true,
+    leadingIcon: "file",
+    width: "machine-known-hosts",
+  });
+  const alias = field("主机别名", [...ssh, "host_key_alias"], {
+    fallback: effective.host_key_alias ?? "",
+    placeholder: "可选",
+    reset: true,
+    leadingIcon: "tag",
+    width: "machine-host-alias",
+  });
+  const info = node("span", "machine-alias-info");
+  info.title = "可选，用于区分同一地址的多个系统";
+  info.setAttribute("aria-hidden", "true");
+  info.append(icon("info"));
+  alias.querySelector("label").append(info);
+  const trust = node("fieldset", "machine-host-keys");
+  trust.disabled = effective.verify_host_key === false;
+  if (trust.disabled) {
+    // Keep caret browsing from placing a caret in the disabled fields.
+    trust.addEventListener("pointerdown", (event) => event.preventDefault());
+  }
+  trust.append(knownHosts, alias);
+  return trust;
+}
 function machineEditor(machine, index) {
-  const panel = node("section", "panel");
+  const panel = node("div", "panel machine-connection");
   const path = ["machines", index],
     ssh = [...path, "ssh"],
     effective = mergedSSH(machine);
-  panel.append(
-    heading("连接服务器"),
-    connectionFields(ssh, effective),
-    authEditor(ssh, effective),
+  const connection = connectionFields(ssh, effective, true);
+  connection.classList.add("machine-connection-fields");
+  connection.append(connectionTestPanel(machine, null, { compact: true }));
+  const authentication = node("div", "machine-authentication");
+  authentication.append(
+    authEditor(ssh, effective, true),
+    machineTrustCheck(ssh, effective),
   );
-  panel.append(connectionTestPanel(machine));
   panel.append(
-    advanced(
-      "高级连接设置",
-      [
-        ...trustKeys.map((key) => [...ssh, key]),
-        [...ssh, "proxy"],
-        [...path, "remote_dir"],
-      ],
-      (content) => {
-        content.append(
-          field("机器标识", [...path, "id"], {
-            help: "运行记录使用此标识关联机器；仅允许字母、数字、下划线和连字符。",
-          }),
-          trustFields(ssh, effective),
-          proxyEditor(ssh),
-          field("远端工作目录", [...path, "remote_dir"], {
-            fallback: ".local/state/autobench",
-            reset: true,
-          }),
-        );
-      },
-      "machine-advanced-" + index,
+    machineSection("连接信息", "chain", connection),
+    machineSection("身份认证", "shield", authentication),
+    machineSection("主机密钥校验", "key", machineHostKeys(ssh, effective)),
+    machineSection("代理设置", "network", proxyEditor(ssh)),
+    machineSection(
+      "远端环境",
+      "folder",
+      field("远端工作目录", [...path, "remote_dir"], {
+        fallback: ".local/state/autobench",
+        reset: true,
+        leadingIcon: "folder",
+        width: "machine-remote-directory",
+      }),
     ),
   );
   return panel;
@@ -530,7 +579,7 @@ function editObjectId(label, items, item, path, trigger) {
   dialog.showModal();
   input.select();
 }
-function objectCornerActions({
+function objectActions({
   kind,
   label,
   name,
@@ -540,15 +589,16 @@ function objectCornerActions({
   onRemove,
   removeTitle = `删除${label} ${name}`,
 }) {
-  const remove = button(
-    "",
-    onRemove,
-    `object-corner object-remove ${kind}-remove`,
-  );
+  const inline = kind === "machine";
+  const removeStyle = inline
+    ? "machine-tab-action"
+    : "object-corner object-remove";
+  const editStyle = inline ? "machine-tab-action" : "object-corner object-edit";
+  const remove = button("", onRemove, `${removeStyle} ${kind}-remove`);
   remove.setAttribute("aria-label", `删除${label} ${name}`);
   remove.title = removeTitle;
   remove.append(icon("error"));
-  const edit = button("", null, `object-corner object-edit ${kind}-edit`);
+  const edit = button("", null, `${editStyle} ${kind}-edit`);
   edit.id = "edit-id-" + path.join("-");
   edit.setAttribute("aria-label", `修改${label}标识 ${name}`);
   edit.setAttribute("aria-haspopup", "dialog");
@@ -557,7 +607,7 @@ function objectCornerActions({
   edit.addEventListener("click", () =>
     editObjectId(label, items, item, path, edit),
   );
-  return [remove, edit];
+  return inline ? [edit, remove] : [remove, edit];
 }
 function systemEditor(machine, mi, system, si) {
   const panel = node("section", "panel");
@@ -618,7 +668,7 @@ function systemEditor(machine, mi, system, si) {
       (content) => {
         content.append(
           proxyEditor(ssh, true),
-          trustFields(ssh, effective, true),
+          systemTrustFields(ssh, effective),
           envEditor([...path, "env"]),
         );
         const env = system.env || {};
@@ -695,7 +745,7 @@ function systemsBoard(machine, index) {
     r.append(
       up,
       down,
-      ...objectCornerActions({
+      ...objectActions({
         kind: "system",
         label: "系统",
         name,
@@ -989,6 +1039,7 @@ function objectTabs({
     );
     b.classList.toggle("active", index === selected);
     b.setAttribute("aria-pressed", String(index === selected));
+    if (kind === "machine" && editable) b.prepend(icon("database"));
     tab.append(b);
     if (editable) {
       b.draggable = true;
@@ -1034,7 +1085,7 @@ function objectTabs({
         onMove(source, items.indexOf(item));
       });
       tab.append(
-        ...objectCornerActions({
+        ...objectActions({
           kind,
           label,
           name,
@@ -1052,7 +1103,7 @@ function objectTabs({
   return e;
 }
 function machineTabs() {
-  return objectTabs({
+  const tabs = objectTabs({
     kind: "machine",
     label: "机器",
     collection: "machines",
@@ -1068,6 +1119,8 @@ function machineTabs() {
     onAdd: addMachine,
     removeTitle: (name) => `删除机器 ${name} 及其系统配置`,
   });
+  if (state.step === 0) tabs.classList.add("machine-connection-tabs");
+  return tabs;
 }
 function benchmarkTabs() {
   return objectTabs({
@@ -1370,6 +1423,12 @@ export async function focusError(error) {
         if (p.tagName === "DETAILS") p.open = true;
       field.scrollIntoView({ block: "center", behavior: "smooth" });
       field.querySelector("input,textarea,select")?.focus();
+    } else if (
+      path[0] === "machines" &&
+      path.length === 3 &&
+      path[2] === "id"
+    ) {
+      $(`edit-id-machines-${state.machine}`)?.focus();
     }
   });
 }

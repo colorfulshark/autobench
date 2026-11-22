@@ -624,15 +624,19 @@ pre {
   margin-top: 18px;
   padding-top: 15px;
 }
+.advanced > summary,
+.machine-connection-title {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: inherit;
+}
 .advanced > summary {
   list-style: none;
   cursor: pointer;
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 13px;
-  color: var(--ink);
-  font-weight: 500;
   min-height: 24px;
 }
 .advanced > summary:before {
@@ -729,7 +733,8 @@ pre {
 .object-tab.dragging .chip-button {
   cursor: grabbing;
 }
-.object-tab.drop-target .chip-button {
+.object-tab:not(.machine-tab).drop-target .chip-button,
+.machine-tab.drop-target {
   outline: 2px solid var(--ink);
   outline-offset: 2px;
 }
@@ -1491,6 +1496,7 @@ dialog input {
 #config-body {
   min-width: 0;
 }
+
 .plan-section {
   border-top: 1px solid var(--line);
   padding-top: 16px;
@@ -2647,5 +2653,391 @@ main {
   }
   .topbar:has(#header-config:not([hidden])) .brand {
     display: none;
+  }
+}
+
+/* The machine editor uses the available width inside the configuration wizard. */
+:is(.machine-connection, .machine-connection-tabs) {
+  --machine-blue: #064de3;
+  --machine-tint: #e9f1ff;
+  --machine-line: #d5e0f4;
+  --machine-control: #a3b8da;
+}
+body:has(#page-config:not([hidden]) .machine-connection) {
+  background: linear-gradient(155deg, #f4f7fc, #edf2fc);
+}
+.machine-connection-tabs {
+  gap: 10px clamp(8px, 2.5vw, 18px);
+  margin: 0 0 12px;
+  padding-inline: 8px;
+}
+.machine-connection-tabs .machine-tab {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-inline-end: 3px;
+  border: 1px solid var(--machine-line);
+  border-radius: 10px;
+  background: #f8faff;
+}
+.machine-connection-tabs .machine-tab:has(> .chip-button.active) {
+  background: var(--machine-tint);
+  border-color: #b6cefa;
+  color: var(--machine-blue);
+}
+.machine-connection-tabs .chip-button[draggable="true"] {
+  min-width: 0;
+  min-height: 42px;
+  justify-content: flex-start;
+  padding: 6px 5px 6px 12px;
+  border: 0;
+  border-radius: 9px 6px 6px 9px;
+  background: transparent;
+  color: inherit;
+}
+.machine-connection-tabs .chip-button .icon {
+  width: 21px;
+  height: 21px;
+}
+.machine-tab-action {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+}
+.machine-tab-action:hover {
+  background: #dce8fc;
+  color: var(--machine-blue);
+}
+.machine-tab-action .icon {
+  width: 16px;
+  height: 16px;
+}
+.machine-connection-tabs :is(.chip-button, .machine-tab-action):focus-visible {
+  outline-offset: -2px;
+}
+@media (pointer: coarse) {
+  .machine-tab-action {
+    width: 44px;
+    height: 44px;
+  }
+}
+.machine-connection-tabs > .text-button {
+  min-height: 44px;
+}
+.machine-connection {
+  container-type: inline-size;
+  --accent: var(--machine-blue);
+  --connection-gap: clamp(12px, 2.25cqw, 36px);
+  --connection-control-height: clamp(44px, 5.1cqw, 52px);
+  --connection-label-space: 28px;
+  --connection-right-column: calc((100% - var(--connection-gap)) * 0.44);
+  --connection-action-width: clamp(112px, 14cqw, 144px);
+  padding: 12px clamp(14px, 2vw, 32px);
+  border-color: #cddbf2;
+  border-radius: 16px;
+  background: linear-gradient(150deg, #fff, #f7f9fd);
+  box-shadow: 0 14px 30px -19px #345c9c64;
+}
+.machine-connection-section {
+  display: grid;
+  grid-template-columns: clamp(126px, 15.5cqw, 218px) minmax(0, 1fr);
+  align-items: start;
+  gap: var(--connection-gap);
+  padding: clamp(19px, 2.4cqw, 36px) 0;
+}
+.machine-connection-section + .machine-connection-section {
+  border-top: 1px solid var(--machine-line);
+}
+.machine-connection-title {
+  display: flex;
+  align-items: center;
+  gap: clamp(8px, 1.2cqw, 16px);
+  min-height: 24px;
+  margin: 0;
+}
+.machine-connection-title .icon {
+  width: clamp(22px, 2.5cqw, 32px);
+  height: clamp(22px, 2.5cqw, 32px);
+  color: var(--machine-blue);
+}
+.machine-connection .field {
+  margin-bottom: 0;
+}
+.machine-connection .field-label {
+  min-height: 22px;
+  margin-bottom: 6px;
+}
+.machine-connection :is(input:not([type="checkbox"]), select, .browse-button) {
+  min-width: 0;
+  min-height: var(--connection-control-height);
+  border-color: var(--machine-control);
+  border-radius: 9px;
+  background-color: #fcfdff;
+  color: var(--ink);
+}
+.machine-connection .field.invalid input {
+  border-color: var(--danger);
+}
+.machine-connection .browse-button:enabled:hover {
+  background-color: var(--machine-tint);
+  border-color: var(--machine-blue);
+}
+.machine-connection .hint {
+  margin: 7px 0 0;
+  overflow-wrap: anywhere;
+}
+.machine-connection .with-input-icon {
+  position: relative;
+}
+.machine-connection .with-input-icon > :is(input, select) {
+  padding-inline-start: clamp(36px, 4.9cqw, 64px);
+}
+.machine-connection .with-input-icon > select {
+  width: 100%;
+}
+.machine-connection .input-icon {
+  position: absolute;
+  inset-inline-start: clamp(11px, 1.45cqw, 19px);
+  top: calc(var(--connection-control-height) / 2);
+  transform: translateY(-50%);
+  width: clamp(18px, 2.1cqw, 27px);
+  height: clamp(18px, 2.1cqw, 27px);
+  color: #60738f;
+  pointer-events: none;
+}
+.machine-connection .with-input-icon:has(.reveal) > input {
+  padding-inline-end: 44px;
+}
+.machine-connection .with-input-icon .reveal {
+  position: absolute;
+  inset-inline-end: 2px;
+  top: 0;
+  min-height: var(--connection-control-height);
+  width: 42px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #60738f;
+}
+.machine-connection .with-input-icon .reveal:hover {
+  color: var(--machine-blue);
+}
+.machine-connection select {
+  appearance: none;
+  padding-inline-end: 34px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 18 18'%3E%3Cpath d='m4 7 5 5 5-5' fill='none' stroke='%23101d37' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-position: right 10px center;
+  background-repeat: no-repeat;
+}
+.machine-connection-fields {
+  display: grid;
+  grid-template-columns:
+    minmax(0, 1fr) clamp(68px, 8cqw, 96px)
+    minmax(
+      0,
+      calc(
+        var(--connection-right-column) - var(--connection-gap) -
+          var(--connection-action-width)
+      )
+    )
+    var(--connection-action-width);
+  gap: 10px var(--connection-gap);
+}
+.machine-connection .connection-test-panel,
+.machine-connection
+  .connection-test-actions:has(.connection-test-status[data-phase="error"]) {
+  display: contents;
+}
+.machine-connection .connection-test-actions {
+  position: relative;
+}
+.machine-connection .connection-test-button {
+  width: 100%;
+  min-height: var(--connection-control-height);
+  margin-top: var(--connection-label-space);
+  padding-inline: clamp(10px, 1.4cqw, 23px);
+  border-color: #81a7ff;
+  border-radius: 10px;
+  background: linear-gradient(#f0f5ff, #e5eeff);
+  color: var(--machine-blue);
+}
+.machine-connection .connection-test-button:enabled:hover {
+  border-color: var(--machine-blue);
+  background: #dae8ff;
+}
+.machine-connection .connection-test-button:disabled {
+  opacity: 0.72;
+}
+.machine-connection .connection-test-status[data-phase="idle"] {
+  display: none;
+}
+.machine-connection
+  .connection-test-status:not([data-phase="idle"], [data-phase="error"]) {
+  position: absolute;
+  inset-inline-start: calc(100% + 3px);
+  top: calc(
+    var(--connection-label-space) + var(--connection-control-height) / 2
+  );
+  padding: 0;
+  transform: translateY(-50%);
+}
+.machine-connection .connection-test-status[data-phase="error"] {
+  grid-column: 1 / -1;
+  padding-top: 0;
+}
+.machine-authentication {
+  display: grid;
+  gap: var(--connection-gap);
+}
+.machine-connection .auth-editor {
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1fr);
+  gap: 12px var(--connection-gap);
+  margin: 0;
+}
+.machine-connection .auth-editor[data-mode="password"] {
+  grid-template-columns: minmax(120px, 0.65fr) minmax(0, 1.35fr);
+}
+.machine-connection .auth-editor > .toggle {
+  margin: 0;
+}
+.machine-connection .auth-editor > .span-full,
+.machine-connection
+  .auth-editor[data-mode="custom"]
+  > .field:not(:first-child) {
+  grid-column: 1 / -1;
+}
+.machine-trust-check .toggle {
+  gap: 9px;
+  margin: 0;
+  min-height: var(--connection-control-height);
+}
+.machine-trust-check input {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  min-height: 0;
+  margin: 0;
+  accent-color: var(--machine-blue);
+}
+.machine-host-keys {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--connection-right-column);
+  gap: var(--connection-gap);
+  min-inline-size: 0;
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+.machine-host-keys:disabled {
+  caret-color: transparent;
+  user-select: none;
+}
+.machine-host-keys:disabled > .field {
+  pointer-events: none;
+}
+.machine-connection .machine-host-keys:disabled :is(input, .browse-button) {
+  background-color: #edf1f7;
+  color: var(--muted);
+}
+.machine-host-keys:disabled :is(.reset-field, .machine-alias-info) {
+  visibility: hidden;
+}
+.machine-alias-info {
+  display: inline-flex;
+  margin-inline-start: 7px;
+  color: var(--muted);
+}
+.machine-alias-info .icon {
+  width: 16px;
+  height: 16px;
+}
+.machine-connection
+  :is(.machine-known-hosts, .machine-host-alias, .machine-remote-directory):not(
+    :hover,
+    :focus-within
+  )
+  .reset-field {
+  opacity: 0;
+}
+.machine-connection .proxy-editor {
+  display: grid;
+  gap: 12px;
+  padding: 0;
+  border: 0;
+}
+.machine-connection .proxy-editor > .field:first-child {
+  width: 100%;
+  max-width: calc(
+    100% - var(--connection-gap) - var(--connection-right-column)
+  );
+}
+.machine-connection .proxy-editor .toggle {
+  margin: 0;
+}
+@container (width >= 720px) {
+  .machine-connection-title {
+    min-height: var(--connection-control-height);
+    margin-top: var(--connection-label-space);
+  }
+  .machine-authentication:has(.auth-editor[data-mode="password"]) {
+    grid-template-columns: minmax(0, 1fr) var(--connection-right-column);
+  }
+  .machine-authentication:has(.auth-editor[data-mode="password"])
+    .machine-trust-check {
+    align-self: start;
+    margin-top: var(--connection-label-space);
+  }
+}
+@container (width < 720px) {
+  .machine-connection-section {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+}
+@container (max-width: 600px) {
+  .machine-connection-fields {
+    grid-template-columns: minmax(0, 1fr) 112px;
+    row-gap: 12px;
+  }
+  .machine-host-keys {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .machine-connection .proxy-editor > .field:first-child {
+    max-width: none;
+  }
+}
+@container (max-width: 500px) {
+  .machine-connection .auth-editor,
+  .machine-connection .auth-editor[data-mode="password"] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@container (max-width: 409px) {
+  .machine-connection-fields {
+    grid-template-columns: minmax(0, 1fr) 68px;
+  }
+  .machine-connection-fields > .user-field {
+    grid-column: 1 / -1;
+  }
+  .machine-connection .connection-test-actions,
+  .machine-connection .connection-test-button {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
+  .machine-connection .connection-test-button {
+    width: auto;
+    margin-top: 0;
+  }
+  .machine-connection
+    .connection-test-status:not([data-phase="idle"], [data-phase="error"]) {
+    top: 50%;
+    inset-inline-start: calc(100% + 7px);
   }
 }

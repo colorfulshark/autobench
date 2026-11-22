@@ -2,6 +2,7 @@ import { state, api, waitOperation, emit } from "./state.js";
 import { mergedSSH, connectionTestSignature } from "./model.js";
 import {
   node,
+  icon,
   button,
   hint,
   pill,
@@ -71,9 +72,13 @@ async function testConnection(machine, system = null) {
     if (records.get(key) === record) emit(true);
   }
 }
-export function connectionTestPanel(machine, system = null) {
+export function connectionTestPanel(
+  machine,
+  system = null,
+  { compact = false } = {},
+) {
   const panel = node("div", "connection-test-panel");
-  panelTargets.set(panel, { machine, system });
+  panelTargets.set(panel, { machine, system, compact });
   const actions = node("div", "connection-test-actions");
   const connect = button(
     "连接测试",
@@ -81,20 +86,24 @@ export function connectionTestPanel(machine, system = null) {
     "button secondary",
   );
   connect.classList.add("connection-test-button");
+  const description = "检查连接及运行环境，不提交测试，也不切换操作系统。";
+  if (compact) {
+    connect.prepend(icon("play"));
+    connect.title = description;
+  }
   const status = statusIndicator("connection-test-status");
   actions.append(connect, status);
-  panel.append(
-    actions,
-    hint("检查连接及运行环境，不提交测试，也不切换操作系统。"),
-  );
-  const ssh = mergedSSH(machine, system);
-  if (ssh.verify_host_key === false)
-    panel.append(pill("已忽略主机密钥检查", "warning"));
+  panel.append(actions);
+  if (!compact) {
+    panel.append(hint(description));
+    if (mergedSSH(machine, system).verify_host_key === false)
+      panel.append(pill("已忽略主机密钥检查", "warning"));
+  }
   updateConnectionTestPanel(panel);
   return panel;
 }
 function updateConnectionTestPanel(panel) {
-  const { machine, system } = panelTargets.get(panel);
+  const { machine, system, compact } = panelTargets.get(panel);
   const r = currentRecord(machine, system),
     valid = fresh(machine, system);
   const ssh = mergedSSH(machine, system);
@@ -127,7 +136,13 @@ function updateConnectionTestPanel(panel) {
             )
             .join("；") || "未获取到检查结果，请重试。";
   }
-  updateStatusIndicator(status, phase, message);
+  updateStatusIndicator(
+    status,
+    phase,
+    message,
+    compact && phase === "stale" ? "info" : undefined,
+  );
+  if (compact) status.title = message;
 }
 export function updateConnectionTestPanels() {
   document

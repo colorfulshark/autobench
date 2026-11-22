@@ -447,7 +447,6 @@ def fill_connection(page, server):
     page.locator("#input-machines-0-ssh-host").fill("localhost")
     page.locator("#input-machines-0-ssh-username").fill("bench")
     page.locator("#input-machines-0-ssh-password").fill("browser-secret")
-    page.get_by_text("高级连接设置", exact=True).click()
     page.locator("#input-machines-0-ssh-known_hosts").fill(str(server.root / "known_hosts"))
 
 
@@ -594,7 +593,6 @@ def test_long_notice_stays_in_viewport_when_scrolling(browser_page, ui_server, w
     page.set_viewport_size({"width": width, "height": 600})
     page.emulate_media(reduced_motion="reduce")
     ready(page, ui_server)
-    page.get_by_text("高级连接设置", exact=True).click()
     page.clock.install(time=0)
     page.clock.pause_at(1000)
     page.evaluate(
@@ -1160,15 +1158,41 @@ def test_wizard_password_connection_test_manual_system_files_save_run_and_cancel
 ):
     page, server = browser_page, ui_server
     ready(page, server)
-    assert page.locator("input:visible").count() == 4
+    assert page.locator(".machine-connection h2").all_text_contents() == [
+        "连接信息", "身份认证", "主机密钥校验", "代理设置", "远端环境"
+    ]
+    assert page.locator(".machine-connection .hint").count() == 0
+    labels = page.locator(".machine-connection :is(.field-label label, label.field-label)")
+    assert labels.count() == 9
+    assert labels.evaluate_all(
+        """labels => labels.every(label => {
+            const style = getComputedStyle(label);
+            return style.visibility === 'visible' && style.clipPath === 'none' &&
+                label.getBoundingClientRect().bottom <= label.control.getBoundingClientRect().top;
+        })"""
+    )
+    assert page.locator(".machine-connection input:visible").count() == 8
     host = page.locator("#input-machines-0-ssh-host").bounding_box()
     port = page.locator("#input-machines-0-ssh-port").bounding_box()
     assert host["y"] == port["y"] and port["width"] < 120
+    username = page.locator("#input-machines-0-ssh-username").bounding_box()
+    connect = page.get_by_role("button", name="连接测试", exact=True).bounding_box()
+    assert connect["x"] > username["x"] + username["width"]
+    assert username["y"] == host["y"] == connect["y"]
+    assert username["height"] == host["height"] == connect["height"]
+    alias = page.get_by_label("主机别名", exact=True).bounding_box()
+    ignore = page.get_by_label("忽略主机密钥检查", exact=True).bounding_box()
+    assert alias["x"] == pytest.approx(username["x"], abs=1)
+    assert ignore["x"] == pytest.approx(username["x"], abs=1)
+    password = page.get_by_label("登录密码 *", exact=True).bounding_box()
+    assert ignore["y"] + ignore["height"] / 2 == password["y"] + password["height"] / 2
+    known_hosts = page.get_by_label("主机密钥文件", exact=True).bounding_box()
+    browse = page.locator(".machine-known-hosts .browse-button").bounding_box()
+    assert known_hosts["y"] == alias["y"] == browse["y"]
     assert page.locator(".field-mode").count() == 0
     click_primary(page)
     page.locator(".error-link").first.click()
     assert page.locator("#wizard-steps").is_visible()
-    assert page.locator("details.advanced").first.evaluate("(e) => e.open") is False
     fill_connection(page, server)
     page.get_by_role("button", name="连接测试", exact=True).click()
     page.locator('.connection-test-status[data-phase="success"]').wait_for()
@@ -1228,12 +1252,15 @@ def test_wizard_password_connection_test_manual_system_files_save_run_and_cancel
 def test_auth_switches_are_exclusive_and_show_only_selected_controls(browser_page, ui_server):
     page = browser_page
     ready(page, ui_server)
+    help_text = page.locator(".machine-connection .auth-editor :is(.hint, .callout)")
     page.locator("#input-machines-0-ssh-password").fill("remember-me")
     page.get_by_label("认证方式", exact=True).select_option("key")
     assert page.locator("#input-machines-0-ssh-password").count() == 0
+    assert help_text.count() == 0
     page.locator("#input-machines-0-ssh-client_keys-0").fill("./id_key")
     page.get_by_label("密钥来源", exact=True).select_option("agent")
     assert page.locator("#input-machines-0-ssh-client_keys-0").count() == 0
+    assert help_text.count() == 0
     page.get_by_label("认证方式", exact=True).select_option("password")
     assert page.locator("#input-machines-0-ssh-password").input_value() == "remember-me"
     set_editor_mode(page, "yaml")
@@ -1264,7 +1291,7 @@ def test_existing_advanced_values_and_comments_survive_viewing_and_editing(brows
     ready(page, server)
     load_existing(page, server)
     assert page.get_by_label("认证方式", exact=True).input_value() == "custom"
-    page.get_by_text("高级连接设置", exact=True).click()
+    assert page.locator(".machine-connection .auth-editor :is(.hint, .callout)").count() == 0
     save_draft(page)
     page.wait_for_function(
         "() => !document.querySelector('#secondary-action').classList.contains('busy')"
@@ -1314,10 +1341,15 @@ def test_connection_test_spinner_success_and_configuration_invalidation(browser_
     assert status.evaluate("e => getComputedStyle(e).color") == "rgb(32, 101, 76)"
     assert not connect.is_disabled()
     assert page.locator(".connection-test-panel button").count() == 1
-    assert page.locator(".connection-test-panel > *").count() == 2
+    assert page.locator(".connection-test-panel > *").count() == 1
+    card = page.locator(".machine-connection")
+    before = card.bounding_box()
     page.locator("#input-machines-0-ssh-host").fill("different-host")
-    page.locator('.connection-test-status[data-phase="stale"]').wait_for()
-    assert page.locator(".status-icon").count() == 0
+    stale = page.locator('.connection-test-status[data-phase="stale"]')
+    stale.wait_for()
+    assert stale.get_attribute("aria-label") == "连接信息或配置位置已改变，请重新测试。"
+    assert stale.locator(".status-icon").count() == 1
+    assert card.bounding_box() == before
     page.locator("#input-machines-0-ssh-host").fill("localhost")
     assert page.locator('.connection-test-status[data-phase="stale"]').count() == 1
     set_editor_mode(page, "yaml")
@@ -1365,10 +1397,8 @@ def test_connection_test_failure_summary_and_retry(browser_page, ui_server, widt
         f"{labels[item['id']]}：{item['message']}" for item in checks
     )
     button_box, status_box = connect.bounding_box(), status.bounding_box()
-    assert status_box["x"] > button_box["x"]
-    assert abs(status_box["y"] - button_box["y"]) < 1
-    assert status_box["y"] < button_box["y"] + button_box["height"]
-    assert button_box["y"] < status_box["y"] + status_box["height"]
+    assert status_box["y"] >= button_box["y"] + button_box["height"]
+    assert status_box["width"] >= button_box["width"]
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     connect.click()
     page.locator('.connection-test-status[data-phase="running"]').wait_for()
@@ -1899,23 +1929,50 @@ def test_pending_cancel_has_explicit_completion_action(browser_page, ui_server):
     assert not server.world.starts
 
 
-def test_host_key_switch_preserves_values_and_system_override(browser_page, ui_server):
+@pytest.mark.parametrize("width", [1440, 390])
+def test_host_key_switch_preserves_layout_values_and_system_override(browser_page, ui_server, width):
     page, server = browser_page, ui_server
+    page.set_viewport_size({"width": width, "height": 1000})
     raw = server.config.model_dump(mode="json")
     raw["machines"][0]["ssh"]["host_key_alias"] = "saved-alias"
     server.existing.write_text(yaml.safe_dump(raw))
     ready(page, server)
     load_existing(page, server)
-    page.get_by_text("高级连接设置", exact=True).click()
-    original = page.locator("#input-machines-0-ssh-known_hosts").input_value()
-    page.get_by_label("忽略主机密钥检查", exact=True).check()
-    assert page.locator("#input-machines-0-ssh-known_hosts").count() == 0
-    assert page.locator("#input-machines-0-ssh-host_key_alias").count() == 0
-    assert page.get_by_text("已忽略主机密钥检查", exact=True).count() == 1
-    page.get_by_label("忽略主机密钥检查", exact=True).uncheck()
-    assert page.locator("#input-machines-0-ssh-known_hosts").input_value() == original
-    assert page.locator("#input-machines-0-ssh-host_key_alias").input_value() == "saved-alias"
-    page.get_by_label("忽略主机密钥检查", exact=True).check()
+    known_hosts = page.locator("#input-machines-0-ssh-known_hosts")
+    alias = page.locator("#input-machines-0-ssh-host_key_alias")
+    ignore = page.get_by_label("忽略主机密钥检查", exact=True)
+    original = known_hosts.input_value()
+    page.evaluate("document.fonts.ready")
+    sections = page.locator(".machine-connection-section")
+    measure = "elements => elements.map(e => [e.offsetTop, e.offsetWidth, e.offsetHeight])"
+    before = sections.evaluate_all(measure)
+    ignore.check()
+    assert known_hosts.is_visible() and known_hosts.is_disabled()
+    assert alias.is_visible() and alias.is_disabled()
+    browse = page.locator(".machine-known-hosts .browse-button")
+    assert browse.is_disabled()
+    assert page.locator(".machine-alias-info").is_hidden()
+    assert page.get_by_text("已忽略主机密钥检查", exact=True).count() == 0
+    assert sections.evaluate_all(measure) == before
+    page.evaluate("getSelection().removeAllRanges()")
+    for control in (known_hosts, alias, browse):
+        control.scroll_into_view_if_needed()
+        box = control.bounding_box()
+        x = box["x"] + box["width"] / 2
+        y = box["y"] + box["height"] / 2
+        assert page.evaluate(
+            "([x, y]) => document.elementFromPoint(x, y).matches('.machine-host-keys:disabled')",
+            [x, y],
+        )
+        page.mouse.click(x, y)
+        assert page.evaluate("getSelection().rangeCount === 0")
+    assert page.locator(".machine-host-keys :focus, dialog[open]").count() == 0
+    ignore.uncheck()
+    assert known_hosts.is_enabled() and known_hosts.input_value() == original
+    assert alias.is_enabled() and alias.input_value() == "saved-alias"
+    assert page.locator(".machine-alias-info").is_visible()
+    assert sections.evaluate_all(measure) == before
+    ignore.check()
     open_system(page, "os1")
     page.get_by_text("系统高级设置", exact=True).click()
     page.get_by_label("主机密钥检查", exact=True).select_option("verify")
@@ -1948,7 +2005,6 @@ def test_ignore_host_key_allows_connection_test_and_validation_without_hosts(
     page.locator("#input-machines-0-ssh-host").fill("localhost")
     page.locator("#input-machines-0-ssh-username").fill("bench")
     page.locator("#input-machines-0-ssh-password").fill("test-secret")
-    page.get_by_text("高级连接设置", exact=True).click()
     page.locator("#input-machines-0-ssh-known_hosts").fill(str(server.root / "absent-hosts"))
     page.get_by_label("忽略主机密钥检查", exact=True).check()
     page.get_by_role("button", name="连接测试", exact=True).click()
@@ -2379,7 +2435,7 @@ def test_machine_drag_across_rows_and_cancel(browser_page, ui_server, width):
 
 
 @pytest.mark.parametrize("selected,removed", [(2, 0), (0, 2), (1, 1), (0, 0), (2, 2)])
-def test_machine_corner_delete_preserves_selection(browser_page, ui_server, selected, removed):
+def test_machine_tab_delete_preserves_selection(browser_page, ui_server, selected, removed):
     page, server = browser_page, ui_server
     ready(page, server)
     load_existing(page, server)
@@ -2414,17 +2470,31 @@ def test_machine_corner_delete_preserves_selection(browser_page, ui_server, sele
     assert tabs.all_text_contents() == remaining
 
 
-def test_machine_corner_visibility_keyboard_delete_and_empty_state(browser_page, ui_server):
+@pytest.mark.parametrize("width", [1440, 390])
+def test_machine_tab_inline_keyboard_delete_and_empty_state(browser_page, ui_server, width):
     page, server = browser_page, ui_server
+    page.set_viewport_size({"width": width, "height": 1000})
     ready(page, server)
     page.get_by_role("button", name="＋ 添加机器", exact=True).click()
     corner = page.get_by_role("button", name="删除机器 server01", exact=True)
     page.mouse.move(0, 0)
-    assert corner.evaluate("e => getComputedStyle(e).opacity") == "0"
     first = page.locator(".machine-picker .chip-button").nth(0)
+    edit = page.get_by_role("button", name="修改机器标识 server01", exact=True)
+    chip_box, edit_box, remove_box = first.bounding_box(), edit.bounding_box(), corner.bounding_box()
+    assert chip_box["x"] + chip_box["width"] <= edit_box["x"]
+    assert edit_box["x"] + edit_box["width"] <= remove_box["x"]
+    assert edit_box["y"] == remove_box["y"]
+    assert edit_box["width"] == remove_box["width"]
+    assert edit_box["height"] == remove_box["height"]
+    corner.hover()
+    page.wait_for_function(
+        "() => getComputedStyle(document.querySelector('.machine-remove')).backgroundColor === "
+        "'rgb(220, 232, 252)'"
+    )
     first.focus()
-    assert corner.evaluate("e => getComputedStyle(e).opacity") == "1"
     first.press("Tab")
+    assert edit.evaluate("e => e === document.activeElement")
+    page.keyboard.press("Tab")
     assert corner.evaluate("e => e === document.activeElement")
     corner.press("Enter")
     assert page.locator(".machine-picker .active").text_content() == "server02"
@@ -2447,20 +2517,15 @@ def test_machine_corner_visibility_keyboard_delete_and_empty_state(browser_page,
     assert all(m["systems"] == [] for m in result["machines"])
 
 
-def test_machine_corner_renames_only_target_and_preserves_selection(browser_page, ui_server):
+def test_machine_tab_renames_only_target_and_preserves_selection(browser_page, ui_server):
     page, server = browser_page, ui_server
     ready(page, server)
     load_existing(page, server)
     page.get_by_role("button", name="＋ 添加机器", exact=True).click()
     tabs = page.locator(".machine-picker .chip-button")
-    remove = page.get_by_role("button", name="删除机器 server01", exact=True)
     edit = page.get_by_role("button", name="修改机器标识 server01", exact=True)
     page.mouse.move(0, 0)
-    assert edit.evaluate("e => getComputedStyle(e).opacity") == "0"
-    tabs.first.hover()
     assert edit.evaluate("e => getComputedStyle(e).opacity") == "1"
-    assert remove.bounding_box()["y"] + remove.bounding_box()["height"] < edit.bounding_box()["y"]
-    assert remove.bounding_box()["x"] == edit.bounding_box()["x"]
     edit.click()
     dialog = page.get_by_role("dialog", name="修改机器标识")
     value = dialog.get_by_label("机器标识", exact=True)
@@ -2477,7 +2542,6 @@ def test_machine_corner_renames_only_target_and_preserves_selection(browser_page
     assert dialog.is_hidden()
     assert tabs.all_text_contents() == ["server01", "server02"]
     tabs.first.focus()
-    page.keyboard.press("Tab")
     page.keyboard.press("Tab")
     assert edit.evaluate("e => e === document.activeElement")
     edit.press("Enter")
@@ -2520,7 +2584,7 @@ def test_system_step_only_selects_existing_machines(browser_page, ui_server):
     assert page.get_by_role("button", name="上移机器", exact=True).count() == 0
     assert page.get_by_role("button", name="下移机器", exact=True).count() == 0
     assert page.get_by_role("button", name="移除此机器", exact=True).count() == 0
-    assert page.locator(".machine-picker :is(.object-corner, [draggable=true])").count() == 0
+    assert page.locator(".machine-picker :is(.machine-tab-action, [draggable=true])").count() == 0
     tabs.nth(0).hover()
     tabs.nth(0).click()
     assert page.locator(".machine-picker .active").text_content() == "server01"

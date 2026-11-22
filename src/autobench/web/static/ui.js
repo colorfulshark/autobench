@@ -3,10 +3,31 @@ import { at, own, put, statusLabels, statusTone } from "./model.js";
 export const $ = (id) => document.getElementById(id);
 export function icon(name, cls = "icon") {
   const paths = {
+    chain:
+      "M10 13a4 4 0 0 0 6 .5l4-4a4 4 0 0 0-5.7-5.7L12 6m2 5a4 4 0 0 0-6-.5l-4 4a4 4 0 0 0 5.7 5.7L12 18",
     check: "M5 12l4 4L19 6",
+    database:
+      "M21 5c0 2.2-4 4-9 4S3 7.2 3 5s4-4 9-4 9 1.8 9 4ZM3 5v14c0 2.2 4 4 9 4s9-1.8 9-4V5M3 12c0 2.2 4 4 9 4s9-1.8 9-4",
     edit: "M4 16l-1 5 5-1L20 8a2.8 2.8 0 0 0-4-4L4 16Zm10-10 4 4",
     error: "M6 6l12 12M6 18L18 6",
+    eye: "M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6S2 12 2 12Zm13 0a3 3 0 1 0-6 0 3 3 0 0 0 6 0Z",
+    eyeOff:
+      "M3 3l18 18M10 6.2c.6-.1 1.3-.2 2-.2 6.4 0 10 6 10 6a17 17 0 0 1-3.1 3.2M6.1 7.8A17 17 0 0 0 2 12s3.6 6 10 6c1.5 0 2.9-.3 4.1-.9M10 10a2.8 2.8 0 0 0 4 4",
+    file: "M13 3H5v18h14V9Zm0 0v6h6",
+    folder: "M3 5h6l3 3h9v12H3a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1Z",
+    globe:
+      "M22 12a10 10 0 1 0-20 0 10 10 0 0 0 20 0ZM2 12h20m-10 10c5-5 5-15 0-20-5 5-5 15 0 20Z",
+    info: "M21 12a9 9 0 1 0-18 0 9 9 0 0 0 18 0ZM12 11v5m0-8h.01",
+    key: "M8 14a7 7 0 1 1 5 3l-3 3H7v2H2v-4l6-6m9-4h.01",
+    lock: "M7 10V7a5 5 0 1 1 10 0v3M4 10h16v11H4Zm8 4v3",
+    network:
+      "M15 5a3 3 0 1 0-6 0 3 3 0 0 0 6 0Zm-8 14a3 3 0 1 0-6 0 3 3 0 0 0 6 0Zm16 0a3 3 0 1 0-6 0 3 3 0 0 0 6 0ZM12 8v4m-8 4v-4h16v4",
     pending: "M12 5v7l4 2",
+    play: "M6 3l15 9-15 9Z",
+    shield:
+      "M12 2c-2 2-6 3-9 4v5c0 5 4 9 9 11 5-2 9-6 9-11V6c-3-1-7-2-9-4Zm-4 10 3 3 5-5",
+    tag: "M3 3h8l10 10-8 8L3 11Zm4 4h.01",
+    user: "M16 7a4 4 0 1 0-8 0 4 4 0 0 0 8 0Zm-4 7c-5 0-9 2-9 7h18c0-5-4-7-9-7Z",
   };
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   svg.setAttribute("class", cls);
@@ -53,7 +74,12 @@ export function statusIndicator(className) {
   status.setAttribute("aria-atomic", "true");
   return status;
 }
-export function updateStatusIndicator(status, phase, message) {
+export function updateStatusIndicator(
+  status,
+  phase,
+  message,
+  symbol = { success: "check", error: "error" }[phase],
+) {
   if (
     status.dataset.phase === phase &&
     status.getAttribute("aria-label") === message
@@ -62,14 +88,13 @@ export function updateStatusIndicator(status, phase, message) {
   status.dataset.phase = phase;
   status.setAttribute("aria-label", message);
   status.replaceChildren();
-  if (["running", "success", "error"].includes(phase)) {
+  if (phase === "running" || symbol) {
     const mark = node("span", "status-icon");
     mark.setAttribute("aria-hidden", "true");
-    if (phase !== "running")
-      mark.append(icon(phase === "success" ? "check" : "error"));
+    if (symbol) mark.append(icon(symbol));
     status.append(mark);
   }
-  if (phase === "error" || phase === "stale")
+  if (phase === "error" || (phase === "stale" && !symbol))
     status.append(node("span", "status-message", message));
 }
 export function pill(text, tone = "neutral") {
@@ -128,6 +153,7 @@ export function inputField(
     browse = null,
     width = "",
     required = false,
+    leadingIcon = "",
   } = {},
 ) {
   const wrap = node("div", "field" + (width ? " " + width : ""));
@@ -167,17 +193,27 @@ export function inputField(
     input.removeAttribute("aria-invalid");
     wrap.querySelector(".field-error")?.remove();
   });
+  if (leadingIcon) {
+    controls.classList.add("with-input-icon");
+    controls.append(icon(leadingIcon, "icon input-icon"));
+  }
   controls.append(input);
   if (type === "password") {
     const reveal = button(
-      "显示",
+      leadingIcon ? "" : "显示",
       () => {
-        input.type = input.type === "password" ? "text" : "password";
-        reveal.textContent = input.type === "password" ? "显示" : "隐藏";
+        const visible = input.type === "password";
+        input.type = visible ? "text" : "password";
+        if (leadingIcon)
+          reveal.replaceChildren(icon(visible ? "eyeOff" : "eye"));
+        else reveal.textContent = visible ? "隐藏" : "显示";
+        reveal.setAttribute("aria-pressed", String(visible));
       },
       "icon-button reveal",
     );
+    if (leadingIcon) reveal.append(icon("eye"));
     reveal.setAttribute("aria-label", "显示或隐藏" + label);
+    reveal.setAttribute("aria-pressed", "false");
     controls.append(reveal);
   }
   if (browse)
@@ -325,8 +361,8 @@ export function listEditor(
       () => change(path, [...items, ""], true),
       "text-button",
     ),
-    hint(help),
   );
+  if (help) e.append(hint(help));
   return e;
 }
 export function envEditor(path) {
