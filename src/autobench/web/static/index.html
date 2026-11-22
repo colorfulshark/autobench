@@ -438,6 +438,27 @@
         </div>
       </form>
     </dialog>
+    <dialog id="id-dialog" aria-labelledby="id-title">
+      <form id="id-form">
+        <h2 id="id-title"></h2>
+        <label id="id-label" for="id-value" class="field-label"></label>
+        <input
+          id="id-value"
+          required
+          pattern="[A-Za-z0-9][A-Za-z0-9_\-]{0,63}"
+          autocomplete="off"
+          spellcheck="false"
+          aria-describedby="id-help"
+        />
+        <p id="id-help" class="hint">
+          使用 1–64 位字母、数字、下划线或连字符，以字母或数字开头。
+        </p>
+        <div class="dialog-actions">
+          <button id="id-cancel" class="button secondary" type="button">取消</button>
+          <button class="button primary" type="submit">确定</button>
+        </div>
+      </form>
+    </dialog>
     <dialog id="file-dialog" class="file-dialog" aria-labelledby="file-title">
       <h2 id="file-title">选择服务器文件</h2>
       <p id="file-help" class="hint"></p>

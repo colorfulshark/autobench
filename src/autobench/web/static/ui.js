@@ -4,6 +4,7 @@ export const $ = (id) => document.getElementById(id);
 export function icon(name, cls = "icon") {
   const paths = {
     check: "M5 12l4 4L19 6",
+    edit: "M4 16l-1 5 5-1L20 8a2.8 2.8 0 0 0-4-4L4 16Zm10-10 4 4",
     error: "M6 6l12 12M6 18L18 6",
     pending: "M12 5v7l4 2",
   };

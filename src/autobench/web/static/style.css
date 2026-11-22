@@ -693,6 +693,7 @@ pre {
   display: flex;
   align-items: center;
   gap: 12px;
+  row-gap: 16px;
   margin-bottom: 10px;
   flex-wrap: wrap;
 }
@@ -709,18 +710,17 @@ pre {
 .object-tab {
   position: relative;
   flex: none;
-}
-.benchmark-tab {
   min-width: 0;
   max-width: 100%;
 }
-.benchmark-tab .chip-button {
+.object-tab .chip-button {
   max-width: 100%;
   white-space: normal;
   overflow-wrap: anywhere;
   text-align: left;
 }
 .object-tab .chip-button[draggable="true"] {
+  padding-left: 18px;
   cursor: grab;
 }
 .object-tab.dragging {
@@ -733,9 +733,8 @@ pre {
   outline: 2px solid var(--ink);
   outline-offset: 2px;
 }
-.object-remove {
+.object-corner {
   position: absolute;
-  top: -8px;
   left: -8px;
   z-index: 1;
   display: inline-flex;
@@ -751,12 +750,17 @@ pre {
   opacity: 0;
   pointer-events: none;
 }
-.object-remove .icon {
+.object-remove {
+  top: -8px;
+}
+.object-edit {
+  bottom: -6px;
+}
+.object-corner .icon {
   width: 12px;
   height: 12px;
 }
-.object-tab:hover .object-remove,
-.object-tab:focus-within .object-remove {
+:is(.object-tab, .system-item):is(:hover, :focus-within) > .object-corner {
   opacity: 1;
   pointer-events: auto;
 }
@@ -764,8 +768,12 @@ pre {
   color: var(--danger);
   border-color: var(--danger);
 }
+.object-edit:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
 @media (hover: none), (pointer: coarse) {
-  .object-remove {
+  .object-corner {
     opacity: 1;
     pointer-events: auto;
   }
@@ -785,16 +793,30 @@ pre {
   margin-bottom: 10px;
 }
 .system-item {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 12px 0;
+  padding: 12px 0 12px 34px;
   border-bottom: 1px solid var(--line);
 }
+.system-item .object-corner {
+  left: 0;
+}
+.system-item .object-remove {
+  top: 2px;
+}
+.system-item .object-edit {
+  bottom: 2px;
+}
 .object-title {
+  min-width: 0;
   font-size: 12px;
   font-weight: 600;
   margin-right: auto;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: left;
 }
 .inherit-summary {
   background: var(--raised);
@@ -1783,7 +1805,7 @@ textarea:focus-visible {
     padding-top: 8px;
   }
   .machine-tabs {
-    gap: 8px;
+    column-gap: 8px;
   }
   .chip-button {
     font-size: 13px;

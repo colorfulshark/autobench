@@ -2447,6 +2447,58 @@ def test_machine_corner_visibility_keyboard_delete_and_empty_state(browser_page,
     assert all(m["systems"] == [] for m in result["machines"])
 
 
+def test_machine_corner_renames_only_target_and_preserves_selection(browser_page, ui_server):
+    page, server = browser_page, ui_server
+    ready(page, server)
+    load_existing(page, server)
+    page.get_by_role("button", name="＋ 添加机器", exact=True).click()
+    tabs = page.locator(".machine-picker .chip-button")
+    remove = page.get_by_role("button", name="删除机器 server01", exact=True)
+    edit = page.get_by_role("button", name="修改机器标识 server01", exact=True)
+    page.mouse.move(0, 0)
+    assert edit.evaluate("e => getComputedStyle(e).opacity") == "0"
+    tabs.first.hover()
+    assert edit.evaluate("e => getComputedStyle(e).opacity") == "1"
+    assert remove.bounding_box()["y"] + remove.bounding_box()["height"] < edit.bounding_box()["y"]
+    assert remove.bounding_box()["x"] == edit.bounding_box()["x"]
+    edit.click()
+    dialog = page.get_by_role("dialog", name="修改机器标识")
+    value = dialog.get_by_label("机器标识", exact=True)
+    assert value.input_value() == "server01"
+    assert value.evaluate("e => e === document.activeElement && e.selectionEnd === e.value.length")
+    value.fill("server02")
+    value.press("Enter")
+    assert value.evaluate("e => e.validity.customError")
+    value.fill("无效标识")
+    value.press("Enter")
+    assert value.evaluate("e => e.validity.patternMismatch")
+    value.fill("discarded")
+    value.press("Escape")
+    assert dialog.is_hidden()
+    assert tabs.all_text_contents() == ["server01", "server02"]
+    tabs.first.focus()
+    page.keyboard.press("Tab")
+    page.keyboard.press("Tab")
+    assert edit.evaluate("e => e === document.activeElement")
+    edit.press("Enter")
+    value.fill("bench-host_01")
+    value.press("Enter")
+    assert dialog.is_hidden()
+    assert tabs.all_text_contents() == ["bench-host_01", "server02"]
+    assert page.locator(".machine-picker .active").text_content() == "server02"
+    assert page.get_by_role("button", name="修改机器标识 bench-host_01").evaluate(
+        "e => e === document.activeElement"
+    )
+    save_draft(page)
+    page.wait_for_function("() => document.querySelector('#save-state').textContent === '已保存'")
+    original = server.config.machines[0].model_dump(mode="json")
+    saved = yaml.safe_load(server.existing.read_text())
+    assert saved["machines"][0] == {**original, "id": "bench-host_01"}
+    page.reload()
+    tabs.first.wait_for()
+    assert tabs.all_text_contents() == ["bench-host_01", "server02"]
+
+
 def test_system_step_only_selects_existing_machines(browser_page, ui_server):
     page, server = browser_page, ui_server
     ready(page, server)
@@ -2468,7 +2520,7 @@ def test_system_step_only_selects_existing_machines(browser_page, ui_server):
     assert page.get_by_role("button", name="上移机器", exact=True).count() == 0
     assert page.get_by_role("button", name="下移机器", exact=True).count() == 0
     assert page.get_by_role("button", name="移除此机器", exact=True).count() == 0
-    assert page.locator(".machine-remove, .machine-picker [draggable=true]").count() == 0
+    assert page.locator(".machine-picker :is(.object-corner, [draggable=true])").count() == 0
     tabs.nth(0).hover()
     tabs.nth(0).click()
     assert page.locator(".machine-picker .active").text_content() == "server01"
@@ -2510,6 +2562,26 @@ def load_benchmark_picker(page, server, count=3):
     set_editor_mode(page, "form")
     open_step(page, "设置测试")
     return items
+
+
+def test_benchmark_corner_renames_without_changing_selection(browser_page, ui_server):
+    page, server = browser_page, ui_server
+    original = load_benchmark_picker(page, server)
+    page.locator(".benchmark-tab").first.hover()
+    page.get_by_role("button", name="修改测试标识 unixbench01", exact=True).click()
+    dialog = page.get_by_role("dialog", name="修改测试标识")
+    value = dialog.get_by_label("测试标识", exact=True)
+    value.fill("unixbench-new")
+    dialog.get_by_role("button", name="取消", exact=True).click()
+    assert page.locator(".benchmark-picker .chip-button").first.text_content() == "unixbench01"
+    page.locator(".benchmark-tab").last.hover()
+    page.get_by_role("button", name="修改测试标识 unixbench03", exact=True).click()
+    value.fill("unixbench-new")
+    dialog.get_by_role("button", name="确定", exact=True).click()
+    assert page.locator(".benchmark-picker .active").text_content() == "unixbench01"
+    set_editor_mode(page, "yaml")
+    saved = yaml.safe_load(page.locator("#yaml-editor").input_value())
+    assert saved["benchmarks"] == [*original[:2], {**original[2], "id": "unixbench-new"}]
 
 
 @pytest.mark.parametrize("width", [1440, 768, 390])
@@ -2719,16 +2791,24 @@ def test_guided_system_order_delete_and_readd(browser_page, ui_server):
     page.get_by_role("button", name="上移系统 os1", exact=True).click()
     assert page.locator(".system-item .object-title").all_text_contents() == ["os1", "os2"]
     for _ in range(2):
-        page.locator(".system-item").first.get_by_role("button", name="移除", exact=True).click()
+        item = page.locator(".system-item").first
+        item.hover()
+        item.get_by_role("button", name="删除系统", exact=False).click()
     assert page.get_by_role("heading", name="尚未添加系统", exact=True).is_visible()
     page.get_by_role("button", name="＋ 手动添加系统", exact=True).click()
     page.locator("#input-machines-0-systems-0-boot_entry").fill("00AB")
     page.get_by_role("button", name="← 返回系统列表", exact=True).click()
     assert page.locator(".system-item .object-title").all_text_contents() == ["linux01"]
+    page.locator(".system-item").first.hover()
+    page.get_by_role("button", name="修改系统标识 linux01", exact=True).click()
+    dialog = page.get_by_role("dialog", name="修改系统标识")
+    dialog.get_by_label("系统标识", exact=True).fill("linux-new")
+    dialog.get_by_role("button", name="确定", exact=True).click()
+    assert page.locator(".system-item .object-title").all_text_contents() == ["linux-new"]
     set_editor_mode(page, "yaml")
     page.locator("#yaml-panel").wait_for()
     data = yaml.safe_load(page.locator("#yaml-editor").input_value())
-    assert data["machines"][0]["systems"] == [{"id": "linux01", "boot_entry": "00AB"}]
+    assert data["machines"][0]["systems"] == [{"id": "linux-new", "boot_entry": "00AB"}]
 
 
 def report_history(server, *, empty=False):

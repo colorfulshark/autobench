@@ -494,6 +494,71 @@ function addSystem(machine, index) {
   state.machine = index;
   emit(true);
 }
+function editObjectId(label, items, item, path, trigger) {
+  const dialog = $("id-dialog"),
+    form = $("id-form"),
+    input = $("id-value");
+  $("id-title").textContent = `修改${label}标识`;
+  $("id-label").textContent = `${label}标识`;
+  input.value = item.id ?? "";
+  input.setCustomValidity("");
+  input.oninput = () => input.setCustomValidity("");
+  $("id-cancel").onclick = () => dialog.close();
+  dialog.addEventListener(
+    "close",
+    () => {
+      if (!dialog.open) form.onsubmit = null;
+    },
+    { once: true },
+  );
+  form.onsubmit = (event) => {
+    event.preventDefault();
+    const id = input.value;
+    if (id === item.id || at(state.document, path) !== item) {
+      dialog.close();
+      return;
+    }
+    if (items.some((other) => other !== item && other.id === id)) {
+      input.setCustomValidity(`此${label}标识已存在。`);
+      input.reportValidity();
+      return;
+    }
+    dialog.close();
+    change([...path, "id"], id, true);
+    $(trigger.id)?.focus({ preventScroll: true });
+  };
+  dialog.showModal();
+  input.select();
+}
+function objectCornerActions({
+  kind,
+  label,
+  name,
+  items,
+  item,
+  path,
+  onRemove,
+  removeTitle = `删除${label} ${name}`,
+}) {
+  const remove = button(
+    "",
+    onRemove,
+    `object-corner object-remove ${kind}-remove`,
+  );
+  remove.setAttribute("aria-label", `删除${label} ${name}`);
+  remove.title = removeTitle;
+  remove.append(icon("error"));
+  const edit = button("", null, `object-corner object-edit ${kind}-edit`);
+  edit.id = "edit-id-" + path.join("-");
+  edit.setAttribute("aria-label", `修改${label}标识 ${name}`);
+  edit.setAttribute("aria-haspopup", "dialog");
+  edit.title = `修改${label}标识`;
+  edit.append(icon("edit"));
+  edit.addEventListener("click", () =>
+    editObjectId(label, items, item, path, edit),
+  );
+  return [remove, edit];
+}
 function systemEditor(machine, mi, system, si) {
   const panel = node("section", "panel");
   const path = ["machines", mi, "systems", si],
@@ -586,9 +651,10 @@ function systemsBoard(machine, index) {
     e.append(empty("尚未添加系统", "请手动添加系统并填写对应的 UEFI 启动项。"));
   systems.forEach((system, si) => {
     const r = node("div", "system-item");
+    const name = system.id || `系统 ${si + 1}`;
     r.append(
       button(
-        system.id || `系统 ${si + 1}`,
+        name,
         () => navigate({ machine: index, system: si }),
         "object-title",
       ),
@@ -629,15 +695,24 @@ function systemsBoard(machine, index) {
     r.append(
       up,
       down,
-      button(
-        "移除",
-        () => {
+      ...objectCornerActions({
+        kind: "system",
+        label: "系统",
+        name,
+        items: systems,
+        item: system,
+        path: ["machines", index, "systems", si],
+        onRemove: () => {
           systems.splice(si, 1);
           state.system = null;
           dirty(true);
+          const board = $("config-body").querySelector(".systems-board");
+          (
+            board.querySelectorAll(".object-title")[Math.max(0, si - 1)] ||
+            board.querySelector(".text-button")
+          )?.focus();
         },
-        "link-button danger",
-      ),
+      }),
     );
     e.append(r);
   });
@@ -884,6 +959,7 @@ export function review() {
 function objectTabs({
   kind,
   label,
+  collection,
   items,
   selected,
   editable,
@@ -957,15 +1033,18 @@ function objectTabs({
         clearDropTargets();
         onMove(source, items.indexOf(item));
       });
-      const remove = button(
-        "",
-        () => onRemove(item),
-        `object-remove ${kind}-remove`,
+      tab.append(
+        ...objectCornerActions({
+          kind,
+          label,
+          name,
+          items,
+          item,
+          path: [collection, index],
+          onRemove: () => onRemove(item),
+          removeTitle: removeTitle(name),
+        }),
       );
-      remove.setAttribute("aria-label", `删除${label} ${name}`);
-      remove.title = removeTitle(name);
-      remove.append(icon("error"));
-      tab.append(remove);
     }
     e.append(tab);
   });
@@ -976,6 +1055,7 @@ function machineTabs() {
   return objectTabs({
     kind: "machine",
     label: "机器",
+    collection: "machines",
     items: machines(),
     selected: state.machine,
     editable: state.step === 0,
@@ -993,6 +1073,7 @@ function benchmarkTabs() {
   return objectTabs({
     kind: "benchmark",
     label: "测试",
+    collection: "benchmarks",
     items: benchmarks(),
     selected: state.benchmark,
     editable: state.step === 2,
