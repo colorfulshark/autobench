@@ -5,7 +5,6 @@ import {
   change,
   dirty,
   emit,
-  show,
   switchMode,
 } from "./state.js";
 import {
@@ -73,7 +72,9 @@ function mutateGroup(path, keys) {
 function fileStart(current) {
   return current?.startsWith("/") || current?.startsWith("~")
     ? current
-    : (pathParent(state.target) || state.info.base_dir) + "/" + (current || "");
+    : (state.target ? pathParent(state.target) : state.info.base_dir) +
+        "/" +
+        (current || "");
 }
 async function browse(path, current, kind = "file") {
   const chosen = await chooseFile(fileStart(current), { kind });
@@ -593,7 +594,9 @@ function systemsBoard(machine, index) {
       ),
       node(
         "span",
-        /^[a-f\d]{4}$/i.test(system.boot_entry || "") ? "mono muted" : "mono danger",
+        /^[a-f\d]{4}$/i.test(system.boot_entry || "")
+          ? "mono muted"
+          : "mono danger",
         !system.boot_entry
           ? "待填写启动项"
           : /^[a-f\d]{4}$/i.test(system.boot_entry)
@@ -684,7 +687,9 @@ function benchmarkEditor(b, index) {
   if (errors.length) {
     warmup.classList.add("invalid");
     input.setAttribute("aria-invalid", "true");
-    warmup.append(node("p", "field-error", errors.map(friendlyError).join("；")));
+    warmup.append(
+      node("p", "field-error", errors.map(friendlyError).join("；")),
+    );
   }
   rounds.append(
     field("正式轮数", [...path, "repetitions"], {
@@ -824,9 +829,14 @@ function policyEditor() {
   return panel;
 }
 export function review() {
-  const panel = node("section", "panel");
+  const panel = node("section", "panel review-panel");
   const n = counts(state.document);
-  panel.append(heading("检查测试计划"));
+  panel.append(
+    heading(
+      "检查测试计划",
+      "检查配置时不会连接或重启机器。开始测试后，调度器会按计划切换系统。",
+    ),
+  );
   const stats = node("div", "stat-grid");
   for (const [label, count] of [
     ["机器", n.machines],
@@ -844,7 +854,10 @@ export function review() {
     for (const s of asList(m.systems))
       for (const b of benchmarks()) {
         const scope = node("span", "review-scope");
-        scope.append(node("span", "mono", m.id), node("span", "secondary", s.id));
+        scope.append(
+          node("span", "mono", m.id),
+          node("span", "secondary", s.id),
+        );
         rows.push([
           scope,
           b.id,
@@ -856,30 +869,16 @@ export function review() {
   const plan = table(["机器 / 系统", "测试", "正式轮数", "预热"], rows);
   plan.classList.add("review-plan-table");
   wrap.append(plan);
-  panel.append(wrap);
+  panel.append(
+    rows.length ? wrap : hint("配置机器、系统和测试后，此处会列出测试任务。"),
+  );
   panel.append(
     node(
       "div",
       "review-paths",
-      `保存到 ${state.target}\n结果目录 ${state.document.policy?.output_dir ?? "results"}`,
+      `结果目录 ${state.document.policy?.output_dir ?? "results"}`,
     ),
   );
-  if (state.validation?.version === state.version)
-    panel.append(
-      node(
-        "p",
-        "callout success",
-        "配置、源码包及本地 SSH 文件检查通过，可以开始测试。",
-      ),
-    );
-  else
-    panel.append(
-      node(
-        "p",
-        "callout",
-        "尚未完成本次配置检查。保存并检查不会启动测试或切换系统。",
-      ),
-    );
   return panel;
 }
 function objectTabs({
@@ -1008,29 +1007,32 @@ function benchmarkTabs() {
 export function renderConfig() {
   const container = $("config-body");
   container.replaceChildren();
-  $("wizard-steps").hidden = state.mode === "yaml";
-  $("wizard-steps").replaceChildren(
+  const sourceMode = state.mode === "yaml";
+  const actions = $(sourceMode ? "source-actions" : "wizard-actions");
+  const primary = $("primary-action");
+  if (primary.parentElement !== actions) actions.append(primary);
+  const picker = $("step-picker");
+  const stepName = configSteps[state.step];
+  const progress = `${state.step + 1}/${configSteps.length}`;
+  $("wizard-steps").hidden = sourceMode;
+  picker.hidden = sourceMode;
+  picker.setAttribute("aria-label", `配置步骤 ${progress} · ${stepName}`);
+  $("step-picker-label").textContent = stepName;
+  $("step-picker-count").textContent = progress;
+  if (sourceMode) setStepPicker(false);
+  $("wizard-options").replaceChildren(
     ...configSteps.map((text, index) => {
-      const b = button(
-        "",
-        () => {
-          state.step = index;
-          state.system = null;
-          emit(true);
-        },
-        "wizard-step",
-      );
+      const b = button("", () => goToStep(index), "wizard-step");
       b.id = `wizard-step-${index}`;
-      b.dataset.active = String(index === state.step);
       if (index === state.step) b.setAttribute("aria-current", "step");
       const number = node("span", "step-number", index + 1);
       b.append(number, node("span", "", text));
       return b;
     }),
   );
-  $("yaml-panel").hidden = state.mode !== "yaml";
-  container.hidden = state.mode !== "form";
-  if (state.mode !== "form") return;
+  $("yaml-panel").hidden = !sourceMode;
+  container.hidden = sourceMode;
+  if (sourceMode) return;
   if (
     !state.document ||
     typeof state.document !== "object" ||
@@ -1095,10 +1097,7 @@ export function renderConfig() {
         );
       } else {
         const p = node("section", "panel");
-        p.append(
-          systemsBoard(m, state.machine),
-          connectionTestPanel(m),
-        );
+        p.append(systemsBoard(m, state.machine), connectionTestPanel(m));
         container.append(p);
       }
     } else container.append(empty("请先添加机器", "返回上一步填写连接信息。"));
@@ -1114,25 +1113,78 @@ export function renderConfig() {
   if (state.step === reviewStep) container.append(review());
 }
 
+export function setStepPicker(open, restoreFocus = false) {
+  const picker = $("step-picker");
+  if (picker.getAttribute("aria-expanded") === String(open)) return;
+  picker.setAttribute("aria-expanded", String(open));
+  if (open) $("wizard-steps").querySelector("[aria-current=step]")?.focus();
+  if (restoreFocus) picker.focus({ preventScroll: true });
+}
+
+export function stepGate() {
+  for (let index = 0; index < reviewStep; index++) {
+    const problems = stepProblems(index);
+    if (problems.length) return { index, problems };
+  }
+  return { index: reviewStep, problems: [] };
+}
+
+export function canGoToStep(index, limit) {
+  return index <= state.step || index <= (limit ?? stepGate().index);
+}
+
+export function goToStep(index, focusContent = false) {
+  if (!canGoToStep(index)) return;
+  if (index !== state.step || state.system !== null) {
+    state.step = index;
+    state.system = null;
+    emit(true);
+  }
+  window.scrollTo(0, 0);
+  setStepPicker(false, !focusContent);
+  if (focusContent) {
+    const title = $("config-body").querySelector("h2, h3");
+    if (title) {
+      title.tabIndex = -1;
+      title.focus({ preventScroll: true });
+    }
+  }
+}
+
 export function nextStep() {
+  const { index, problems } = stepGate();
+  if (canGoToStep(state.step + 1, index)) {
+    goToStep(state.step + 1, true);
+    return;
+  }
+  if (index !== state.step) state.system = null;
+  state.step = index;
+  state.errors = problems;
+  emit(true);
+  setStepPicker(false);
+  window.scrollTo(0, 0);
+  $("config-errors").querySelector("button")?.focus();
+}
+
+function stepProblems(step) {
   const problems = [];
-  if (state.step === 0) {
+  if (step === 0) {
     if (!machines().length)
       problems.push({ path: ["machines"], message: "请添加至少一台机器。" });
     machines().forEach((m, i) => {
-      if (!m.ssh?.host)
+      if (!m?.ssh?.host)
         problems.push({
           path: ["machines", i, "ssh", "host"],
           message: "请填写主机地址。",
         });
-      if (!m.ssh?.username)
+      if (!m?.ssh?.username)
         problems.push({
           path: ["machines", i, "ssh", "username"],
           message: "请填写登录用户名。",
         });
     });
   }
-  if (state.step === 1)
+  if (step === 1)
     machines().forEach((m, i) => {
       if (!asList(m.systems).length)
         problems.push({
@@ -1140,34 +1192,25 @@ export function nextStep() {
           message: `请为 ${m.id} 添加至少一个系统。`,
         });
       asList(m.systems).forEach((s, j) => {
-        if (!/^[a-f\d]{4}$/i.test(s.boot_entry || ""))
+        if (!/^[a-f\d]{4}$/i.test(s?.boot_entry || ""))
           problems.push({
             path: ["machines", i, "systems", j, "boot_entry"],
             message: "启动项应为四位十六进制字符串。",
           });
       });
     });
-  if (state.step === 2) {
+  if (step === 2) {
     if (!benchmarks().length)
       problems.push({ path: ["benchmarks"], message: "请添加至少一项测试。" });
     benchmarks().forEach((b, i) => {
-      if (!b.source_archive)
+      if (!b?.source_archive)
         problems.push({
           path: ["benchmarks", i, "source_archive"],
           message: "请选择服务器上的源码包。",
         });
     });
   }
-  if (problems.length) {
-    state.errors = problems;
-    emit(true);
-    show(problems[0].message, "error");
-    return;
-  }
-  state.step = Math.min(reviewStep, state.step + 1);
-  state.system = null;
-  state.errors = [];
-  emit(true);
+  return problems;
 }
 const fieldNames = {
   machines: "机器",
@@ -1249,7 +1292,12 @@ export async function focusError(error) {
     }
   });
 }
-export function updateConfig() {
+export function updateConfig(limit) {
+  configSteps.forEach((_, index) => {
+    const control = $(`wizard-step-${index}`);
+    control.disabled = !canGoToStep(index, limit);
+    control.title = control.disabled ? `请先完成「${configSteps[limit]}」` : "";
+  });
   updateConnectionTestPanels();
   updateBootEntryFields();
 }

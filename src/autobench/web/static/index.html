@@ -1,8 +1,15 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-type="software">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="配置 Linux 性能测试，查看运行进度和 UnixBench 报告。"
+    />
+    <meta name="theme-color" content="#142637" />
+    <meta name="page-type" content="software" />
+    <meta name="site-kind" content="software" />
     <title>AutoBench · 测试工作台</title>
     <link rel="stylesheet" href="/static/style.css" />
     <script type="module" src="/static/app.js"></script>
@@ -81,92 +88,106 @@
             运行记录
           </button>
         </nav>
-        <div class="header-files">
-          <div id="header-config" class="project-bar" aria-label="配置文件" hidden>
-            <div class="project-file">
+        <div
+          id="header-config"
+          class="project-bar"
+          role="group"
+          aria-label="配置操作"
+          hidden
+        >
+          <button
+            id="step-picker"
+            type="button"
+            aria-controls="wizard-steps"
+            aria-expanded="false"
+            hidden
+          >
+            <span id="step-picker-label"></span>
+            <span id="step-picker-count"></span>
+            <svg
+              class="menu-chevron"
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.5"
+              aria-hidden="true"
+            >
+              <path d="m4 6 4 4 4-4" />
+            </svg>
+          </button>
+          <details id="file-menu" class="menu">
+            <summary
+              aria-label="文件操作"
+              aria-describedby="file-name save-state"
+            >
+              <span id="active-config"></span>
               <svg
-                class="icon project-icon"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.6"
-                stroke-linecap="round"
-                stroke-linejoin="round"
+                class="file-menu-icon"
+                viewBox="0 0 16 16"
+                fill="currentColor"
                 aria-hidden="true"
               >
-                <path d="M14 3H6v18h12V7zM14 3v5h4M9 12h6M9 16h6" />
+                <circle cx="3" cy="8" r="1.25" />
+                <circle cx="8" cy="8" r="1.25" />
+                <circle cx="13" cy="8" r="1.25" />
               </svg>
-              <div>
-                <h1 class="file-title">
-                  <button id="file-name" class="file-name">正在加载…</button
-                  ><span id="save-state" class="pill" data-tone="warning"
+              <span class="file-state-mark" aria-hidden="true"></span>
+              <svg
+                class="menu-chevron"
+                viewBox="0 0 16 16"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+                aria-hidden="true"
+              >
+                <path d="m4 6 4 4 4-4" />
+              </svg>
+            </summary>
+            <div class="menu-items">
+              <div class="file-menu-info">
+                <div class="file-title">
+                  <strong id="file-name"></strong>
+                  <span id="save-state" class="pill" data-tone="warning"
                     >未保存</span
                   >
-                </h1>
-                <span id="file-location" class="secondary mono"></span>
+                </div>
+                <div id="file-location" class="secondary mono"></div>
               </div>
-            </div>
-            <div class="project-tools">
-              <span id="matrix-summary" class="secondary"></span>
+              <button
+                id="secondary-action"
+                class="menu-command"
+                type="button"
+                aria-keyshortcuts="Control+S Meta+S"
+              >
+                <span>保存草稿</span><kbd aria-hidden="true">Ctrl/⌘+S</kbd>
+              </button>
               <button
                 id="mode-toggle"
-                class="mode-toggle"
+                class="menu-command"
                 type="button"
                 role="switch"
                 aria-checked="false"
                 aria-label="YAML 源码模式"
-                title="关闭：引导配置；开启：YAML 源码"
               >
-                <span class="full-label">YAML 源码</span
-                ><span class="compact-label">YAML</span>
-                <span class="mode-track" aria-hidden="true"></span>
+                <span>YAML 源码</span
+                ><span class="menu-switch" aria-hidden="true"></span>
               </button>
-              <details id="file-menu" class="menu">
-                <summary aria-label="文件操作">
-                  <span class="full-label">文件操作</span
-                  ><span class="compact-label">文件</span> ⌄
-                </summary>
-                <div class="menu-items">
-                  <button id="new-config">新建配置</button
-                  ><button id="open-config">打开服务器配置…</button
-                  ><label
-                    >导入 YAML<input
-                      id="import"
-                      type="file"
-                      accept=".yaml,.yml,.json,text/plain,text/yaml"
-                      hidden /></label
-                  ><button id="save-draft">保存草稿</button
-                  ><button id="save-as">另存为…</button
-                  ><button id="export">下载 YAML</button>
-                </div>
-              </details>
-            </div>
-          </div>
-          <div id="header-runs" class="history-location" aria-label="历史记录位置" hidden>
-            <div>
-              <h1 class="secondary">历史记录位置</h1>
-              <code id="state-location"></code>
-            </div>
-            <div class="actions">
-              <button
-                id="use-config-location"
-                class="text-button"
-                aria-label="使用当前配置位置"
-                title="使用当前配置位置"
-              >
-                <span class="full-label">使用当前配置位置</span
-                ><span class="compact-label">配置位置</span></button
-              ><button
-                id="change-location"
-                class="button secondary"
-                aria-label="更改位置…"
-                title="更改历史记录位置"
-              >
-                <span class="full-label">更改位置…</span
-                ><span class="compact-label">更改…</span>
+              <button id="change-config-path" type="button">
+                更改保存位置…
               </button>
+              <button id="new-config" type="button">新建配置</button>
+              <button id="open-config" type="button">打开服务器配置…</button>
+              <button id="import-config" type="button">导入本地 YAML…</button>
+              <button id="save-as" type="button">另存为…</button>
+              <button id="export" type="button">下载 YAML</button>
+              <input
+                id="import"
+                type="file"
+                accept=".yaml,.yml,.json,text/plain,text/yaml"
+                hidden
+              />
             </div>
-          </div>
+          </details>
         </div>
         <div class="service-info">
           <span class="service-meta"
@@ -184,47 +205,72 @@
           tabindex="0"
           hidden
         >
-          <div
-            id="config-errors"
-            class="error-summary"
-            role="alert"
-            hidden
-          ></div>
-          <div id="config-layout" class="config-layout">
-            <div id="config-body"></div>
-            <aside
-              id="config-plan"
-              class="config-plan"
-              aria-label="测试计划预览"
-            ></aside>
-          </div>
-          <section id="yaml-panel" class="panel yaml-panel" hidden>
-            <div class="yaml-help">
-              完整 YAML 编辑。只修改源码会保留注释；修改可视化配置后将重新生成
-              YAML。
-            </div>
-            <textarea
-              id="yaml-editor"
-              aria-label="YAML 配置源码"
-              spellcheck="false"
-            ></textarea>
-            <div id="yaml-meta" class="yaml-meta"></div>
-          </section>
-          <div id="validation-result" class="callout success" hidden></div>
-          <div class="action-bar">
-            <nav
-              id="wizard-steps"
-              class="wizard-steps"
-              aria-label="配置步骤"
-            ></nav>
-            <div class="actions">
-              <button id="prev-step" class="button secondary" hidden>
-                ← 上一步</button
-              ><button id="secondary-action" class="text-button">
-                保存草稿</button
-              ><button id="primary-action" class="button primary">
-                下一步 →
-              </button>
+          <div class="config-workspace">
+            <nav id="wizard-steps" class="wizard-steps" aria-label="配置步骤">
+              <div id="wizard-options"></div>
+              <div
+                id="wizard-actions"
+                class="wizard-actions"
+                role="group"
+                aria-label="步骤操作"
+              >
+                <button
+                  id="prev-step"
+                  class="button secondary"
+                  type="button"
+                  aria-label="上一步"
+                  hidden
+                >
+                  <span aria-hidden="true">←</span> 上一步
+                </button>
+                <button
+                  id="primary-action"
+                  class="button primary"
+                  type="button"
+                >
+                  下一步 →
+                </button>
+              </div>
+            </nav>
+            <div class="config-content">
+              <div
+                id="config-errors"
+                class="error-summary"
+                role="alert"
+                hidden
+              ></div>
+              <div
+                id="validation-result"
+                class="callout success"
+                role="status"
+                hidden
+              ></div>
+              <div id="config-layout" class="config-layout">
+                <div id="config-body"></div>
+                <aside
+                  id="config-plan"
+                  class="config-plan"
+                  aria-label="测试计划预览"
+                ></aside>
+              </div>
+              <section id="yaml-panel" class="panel yaml-panel" hidden>
+                <div class="yaml-help">
+                  <div>
+                    <h2>YAML 源码</h2>
+                    <p>
+                      源码编辑会保留注释。修改表单字段会重新生成 YAML。按 Ctrl
+                      或 ⌘ + ] 可缩进。
+                    </p>
+                  </div>
+                  <div id="source-actions"></div>
+                </div>
+                <textarea
+                  id="yaml-editor"
+                  aria-label="YAML 配置源码"
+                  spellcheck="false"
+                ></textarea>
+                <div id="yaml-meta" class="yaml-meta"></div>
+              </section>
             </div>
           </div>
         </section>
@@ -236,16 +282,44 @@
           tabindex="0"
           hidden
         >
-          <section class="panel">
+          <div
+            id="header-runs"
+            class="history-location"
+            aria-label="历史记录位置"
+            hidden
+          >
+            <div>
+              <span class="history-label">历史记录位置</span>
+              <code id="state-location"></code>
+            </div>
+            <div class="actions">
+              <button
+                id="use-config-location"
+                class="text-button"
+                type="button"
+                aria-label="使用当前配置位置"
+              >
+                <span class="full-label">使用当前配置位置</span
+                ><span class="compact-label">用配置目录</span>
+              </button>
+              <button
+                id="change-location"
+                class="button secondary"
+                type="button"
+              >
+                更改位置…
+              </button>
+            </div>
+          </div>
+          <div id="runs-overview" class="panel">
             <div class="section-heading">
-              <div>
-                <h2>历史运行 <span id="run-count" class="secondary"></span></h2>
-              </div>
+              <span id="run-count" class="secondary"></span>
               <div class="run-filters">
                 <input
                   id="run-search"
                   aria-label="搜索运行"
-                  placeholder="搜索运行 ID 或日期"
+                  placeholder="搜索运行"
+                  title="按运行 ID 或日期搜索"
                 /><select id="run-filter" aria-label="筛选运行状态">
                   <option value="">全部状态</option>
                   <option value="running">运行中</option>
@@ -258,8 +332,14 @@
               </div>
             </div>
             <div id="runs-list" class="table-scroll"></div>
-          </section>
-          <div id="run-detail" hidden></div>
+          </div>
+          <div id="run-selection" hidden>
+            <button id="back-to-runs" class="text-button" type="button">
+              ← 返回运行列表
+            </button>
+            <p id="run-detail-status" class="callout" role="status" hidden></p>
+            <div id="run-detail" hidden></div>
+          </div>
         </section>
       </main>
     </div>
@@ -285,7 +365,8 @@
     >
       <h2 id="startup-title">选择配置文件</h2>
       <p id="startup-help" class="hint">
-        配置文件保存在运行 Web 服务的服务器上。新文件会写入默认草稿。
+        选择已有 YAML，或指定文件名创建默认配置。文件保存在 Web
+        服务所在的服务器。
       </p>
       <form id="startup-form">
         <fieldset id="startup-fields" disabled>
@@ -311,6 +392,9 @@
             placeholder="autobench.yaml"
           />
           <div class="dialog-actions">
+            <button id="startup-open" class="button secondary" type="button">
+              打开已有 YAML…
+            </button>
             <button id="startup-save" class="button primary" type="submit">
               保存并进入
             </button>
@@ -333,9 +417,8 @@
             选择目录…
           </button>
         </div>
-        <p class="hint">
-          相对路径以新 YAML 所在目录解释。已有目标文件不会被自动覆盖。
-        </p>
+        <p class="hint">配置中的相对路径以 YAML 所在目录为基准。</p>
+        <p id="path-error" class="callout error" role="alert" hidden></p>
         <div class="dialog-actions">
           <button
             value="cancel"

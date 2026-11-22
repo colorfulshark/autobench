@@ -1,10 +1,11 @@
-import { state, emit } from "./state.js";
+import { configSteps, state } from "./state.js";
 import { counts } from "./model.js";
 import { $, node, button } from "./ui.js";
+import { canGoToStep, goToStep } from "./config-view.js";
 
 // The preview and the review screen use the same configuration and task count.
 // Nothing in this view is written back to the YAML document.
-export function renderPlan() {
+export function renderPlan(stepLimit) {
   const root = $("config-plan");
   root.replaceChildren();
   if (!state.document || typeof state.document !== "object") return;
@@ -23,18 +24,18 @@ export function renderPlan() {
     node("strong", "", totals.jobs.toLocaleString("zh-CN")),
     node("span", "", "个测试任务"),
   );
-  root.append(header, figure);
   const scope = node(
     "p",
     "plan-scope",
     `${totals.machines} 台机器 · ${totals.systems} 个系统 · ${totals.benchmarks} 项测试`,
   );
-  root.append(scope);
-
-  const goTo = (step) => {
-    state.step = step;
-    state.system = null;
-    emit(true);
+  header.append(figure, scope);
+  root.append(header);
+  const editStep = (label, index) => {
+    const edit = button(label, () => goToStep(index, true), "text-button");
+    edit.disabled = !canGoToStep(index, stepLimit);
+    if (edit.disabled) edit.title = `请先完成「${configSteps[stepLimit]}」`;
+    return edit;
   };
   const sequence = node("section", "plan-section");
   sequence.append(node("h3", "", "系统执行顺序"));
@@ -71,7 +72,7 @@ export function renderPlan() {
     sequence.append(
       node("p", "secondary", `另有 ${machines.length - 3} 台机器`),
     );
-  sequence.append(button("编辑系统 →", () => goTo(1), "text-button"));
+  sequence.append(editStep("编辑系统 →", 1));
   root.append(sequence);
 
   const tests = node("section", "plan-section");
@@ -99,6 +100,6 @@ export function renderPlan() {
     tests.append(
       node("p", "secondary", `另有 ${benchmarks.length - 3} 项测试`),
     );
-  tests.append(button("编辑测试 →", () => goTo(2), "text-button"));
+  tests.append(editStep("编辑测试 →", 2));
   root.append(tests);
 }

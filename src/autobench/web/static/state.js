@@ -65,22 +65,25 @@ export function show(message, tone = "success") {
   notice.dataset.tone = tone;
   notice.dataset.phase = "visible";
   notice.hidden = false;
-  noticeTimer = setTimeout(() => {
-    noticeTimer = undefined;
-    notice.dataset.phase = "closing";
-    const hide = () => {
-      notice.hidden = true;
-      notice.textContent = "";
-      delete notice.dataset.phase;
-      noticeHideTimer = undefined;
-    };
-    const duration =
-      parseFloat(
-        getComputedStyle(notice).getPropertyValue("--notice-exit-duration"),
-      ) || 0;
-    if (duration) noticeHideTimer = setTimeout(hide, duration);
-    else hide();
-  }, ["warning", "error"].includes(tone) ? 5000 : 3000);
+  noticeTimer = setTimeout(
+    () => {
+      noticeTimer = undefined;
+      notice.dataset.phase = "closing";
+      const hide = () => {
+        notice.hidden = true;
+        notice.textContent = "";
+        delete notice.dataset.phase;
+        noticeHideTimer = undefined;
+      };
+      const duration =
+        parseFloat(
+          getComputedStyle(notice).getPropertyValue("--notice-exit-duration"),
+        ) || 0;
+      if (duration) noticeHideTimer = setTimeout(hide, duration);
+      else hide();
+    },
+    ["warning", "error"].includes(tone) ? 5000 : 3000,
+  );
 }
 export async function api(url, body) {
   let response;
@@ -119,7 +122,7 @@ export function accept(saved, { draft = false } = {}) {
   state.document = saved.document || {};
   state.text = saved.text || "";
   state.path = saved.path || null;
-  state.target = saved.path || state.info.base_dir + "/autobench.yaml";
+  state.target = saved.path || "";
   state.revision = saved.revision || null;
   state.dirty = draft;
   state.touched = draft;
@@ -151,12 +154,12 @@ export async function createProject() {
   accept(await renderNewProject(), { draft: true });
   state.touched = false;
 }
-export async function saveStartupProject(path) {
+export async function saveStartupProject(path, { existing = false } = {}) {
   let project;
   try {
     project = await api("/api/config/load", { path });
   } catch (error) {
-    if (error.status !== 404) throw error;
+    if (error.status !== 404 || existing) throw error;
     project = await renderNewProject();
   }
   if (project.parse_error) throw new Error(project.parse_error);
@@ -199,6 +202,8 @@ export async function save(target = state.target) {
     return false;
   }
   sessionStorage.setItem("autobench-config-path", result.path);
+  if (result.path !== state.path || result.revision !== state.revision)
+    state.validation = null;
   state.path = result.path;
   state.target = result.path;
   state.revision = result.revision;

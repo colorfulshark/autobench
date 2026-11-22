@@ -3,7 +3,6 @@ import {
   reviewStep,
   api,
   subscribe,
-  emit,
   show,
   createProject,
   saveStartupProject,
@@ -17,17 +16,26 @@ import {
   currentText,
   accept,
 } from "./state.js";
-import { counts, pathParent } from "./model.js";
+import { pathParent } from "./model.js";
 import { $, node, button, perform, friendlyError, jsonDetails } from "./ui.js";
 import { initFiles, chooseFile } from "./files.js";
 import {
   renderConfig,
   updateConfig,
+  stepGate,
   nextStep,
+  goToStep,
+  setStepPicker,
   focusError,
   errorLabel,
 } from "./config-view.js";
-import { initRuns, renderRuns, refreshRuns, startRun } from "./runs.js";
+import {
+  closePreview,
+  initRuns,
+  renderRuns,
+  refreshRuns,
+  startRun,
+} from "./runs.js";
 import { renderPlan } from "./config-plan.js";
 let ready = false,
   pathAction = "save";
@@ -39,9 +47,13 @@ function setPage(page) {
   sessionStorage.setItem("autobench-page", page);
   for (const key of Object.keys(titles)) {
     $("page-" + key).hidden = key !== page;
-    $("header-" + key).hidden = key !== page;
   }
-  if (changed) $("file-menu").open = false;
+  $("header-config").hidden = page !== "config";
+  if (changed) {
+    $("file-menu").open = false;
+    setStepPicker(false);
+    closePreview();
+  }
   document.querySelectorAll("[data-page]").forEach((e) => {
     const selected = e.dataset.page === page;
     e.classList.toggle("active", selected);
@@ -56,28 +68,35 @@ function setPage(page) {
   }
 }
 function chrome() {
-  const c = counts(state.document),
-    saved = !!state.path && !state.dirty && state.target === state.path;
-  $("file-name").textContent = state.target?.split("/").at(-1) || "未命名配置";
+  const saved = isSaved();
+  const name = state.target?.split("/").at(-1) || "未命名配置";
+  $("file-name").textContent = name;
+  $("active-config").textContent = name;
   $("file-location").textContent = state.target || "尚未选择保存位置";
   $("file-name").title = $("file-location").textContent;
   $("file-location").title = $("file-location").textContent;
   $("save-state").textContent = saved ? "已保存" : "未保存";
   $("save-state").title = $("save-state").textContent;
   $("save-state").dataset.tone = saved ? "success" : "warning";
-  $("matrix-summary").textContent =
-    `${c.machines} 台机器 · ${c.systems} 个系统 · ${c.benchmarks} 项测试`;
+  $("file-menu").dataset.saved = String(saved);
+  $("active-config").title = $("file-location").textContent;
   $("mode-toggle").setAttribute("aria-checked", String(state.mode === "yaml"));
   $("config-layout").hidden = state.mode !== "form";
-  renderPlan();
+  const reviewing = state.mode === "yaml" || state.step === reviewStep;
+  const { index: stepLimit } = stepGate();
+  $("config-plan").hidden = reviewing;
+  $("config-layout").classList.toggle("review-layout", reviewing);
+  if (!reviewing) renderPlan(stepLimit);
   $("prev-step").hidden = state.step === 0 || state.mode === "yaml";
-  const checked = state.validation?.version === state.version && saved;
+  const checked = isChecked();
   $("primary-action").textContent =
     state.step < reviewStep && state.mode === "form"
       ? "下一步 →"
       : checked
         ? "开始测试 →"
-        : "保存并检查";
+        : saved
+          ? "检查配置"
+          : "保存并检查";
   $("yaml-meta").textContent =
     `${$("yaml-editor").value.split("\n").length} 行 · UTF-8`;
   $("config-errors").hidden = !state.errors.length;
@@ -97,11 +116,11 @@ function chrome() {
   }
   if (state.errors.length)
     $("config-errors").append(jsonDetails("原始错误详情", state.errors));
-  $("validation-result").hidden = !checked;
+  $("validation-result").hidden = !checked || !reviewing;
   if (checked)
     $("validation-result").textContent =
-      `检查通过 · ${state.validation.machines} 台机器 · 源码包已校验`;
-  updateConfig();
+      "配置、源码包及本地 SSH 文件检查通过，可以开始测试。";
+  updateConfig(stepLimit);
 }
 function render(layout) {
   if (!ready) return;
@@ -126,12 +145,37 @@ function render(layout) {
 }
 function openPath(action = "save") {
   pathAction = action;
-  $("save-path").value = action === "save-as" ? "" : state.target;
+  const source = state.path || state.target;
+  $("save-path").value =
+    action === "save-as"
+      ? (source ? pathParent(source) : state.info.base_dir) + "/"
+      : state.target || state.info.base_dir + "/autobench.yaml";
   $("path-title").textContent =
-    action === "save-as" ? "另存为 YAML" : "保存配置";
+    action === "save-as"
+      ? "另存为 YAML"
+      : action === "location"
+        ? "更改配置保存位置"
+        : "保存配置";
+  $("path-confirm").textContent =
+    action === "location"
+      ? "使用此位置"
+      : action === "check"
+        ? "保存并检查"
+        : "保存配置";
+  $("path-error").hidden = true;
   $("path-dialog").showModal();
 }
+function isSaved() {
+  return Boolean(state.path && !state.dirty && state.target === state.path);
+}
+function isChecked() {
+  return isSaved() && state.validation?.version === state.version;
+}
 async function saveDraft() {
+  if (isSaved()) {
+    show("草稿已保存，可稍后继续完善。");
+    return;
+  }
   if (!state.target) {
     openPath();
     return;
@@ -143,20 +187,21 @@ async function saveAndCheck() {
     openPath("check");
     return;
   }
-  if (await save()) await validate();
+  try {
+    if (isSaved() || (await save())) await validate();
+  } finally {
+    $("config-errors").querySelector("button")?.focus();
+  }
 }
 async function primary() {
   if (state.step < reviewStep && state.mode === "form") {
     nextStep();
     return;
   }
-  if (
-    state.validation?.version === state.version &&
-    !state.dirty &&
-    state.path === state.target
-  ) {
+  if (isChecked()) {
     const run = await startRun();
     setPage("runs");
+    $("back-to-runs").focus({ preventScroll: true });
     show(`测试已启动：${run.run_id}`);
   } else await saveAndCheck();
 }
@@ -193,6 +238,30 @@ function selectStartupProject(initialPath) {
     filename.focus();
   });
   return new Promise((resolve) => {
+    const saveSelection = async (path, existing = false) => {
+      showStartupError("");
+      fields.disabled = true;
+      form.setAttribute("aria-busy", "true");
+      submit.textContent = "正在保存…";
+      try {
+        resolve(await saveStartupProject(path, { existing }));
+      } catch (error) {
+        fields.disabled = false;
+        form.removeAttribute("aria-busy");
+        submit.textContent = "保存并进入";
+        showStartupError(error.message);
+        filename.focus();
+      }
+    };
+    $("startup-open").addEventListener("click", async () => {
+      const path = await chooseFile(directory.value, {
+        title: "打开已有 YAML",
+      });
+      if (!path) return;
+      directory.value = pathParent(path);
+      filename.value = path.split("/").at(-1);
+      await saveSelection(path, true);
+    });
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       if (fields.disabled) return;
@@ -208,20 +277,7 @@ function selectStartupProject(initialPath) {
         filename.focus();
         return;
       }
-      const path = `${folder.replace(/\/+$/, "")}/${name}`;
-      showStartupError("");
-      fields.disabled = true;
-      form.setAttribute("aria-busy", "true");
-      submit.textContent = "正在保存…";
-      try {
-        resolve(await saveStartupProject(path));
-      } catch (error) {
-        fields.disabled = false;
-        form.removeAttribute("aria-busy");
-        submit.textContent = "保存并进入";
-        showStartupError(error.message);
-        filename.focus();
-      }
+      await saveSelection(`${folder.replace(/\/+$/, "")}/${name}`);
     });
   });
 }
@@ -265,9 +321,47 @@ function initWorkspace() {
   document.addEventListener("click", (event) => {
     if (!$("file-menu").contains(event.target)) $("file-menu").open = false;
   });
-  bind("save-draft", saveDraft);
+  const picker = $("step-picker");
+  picker.addEventListener("click", () => {
+    setStepPicker(picker.getAttribute("aria-expanded") !== "true");
+  });
+  const dismissStepPicker = (event) => {
+    if (
+      !picker.contains(event.target) &&
+      !$("wizard-steps").contains(event.target)
+    )
+      setStepPicker(false);
+  };
+  document.addEventListener("click", dismissStepPicker);
+  document.addEventListener("focusin", dismissStepPicker);
+  document.addEventListener("keydown", (event) => {
+    if (
+      ready &&
+      state.page === "config" &&
+      (event.ctrlKey || event.metaKey) &&
+      !event.altKey &&
+      !event.shiftKey &&
+      event.key.toLowerCase() === "s" &&
+      !document.querySelector("dialog[open]")
+    ) {
+      event.preventDefault();
+      if (!event.repeat && !$("primary-action").disabled)
+        $("secondary-action").click();
+      return;
+    }
+    if (event.key !== "Escape") return;
+    if (picker.getAttribute("aria-expanded") === "true") {
+      event.preventDefault();
+      setStepPicker(false, true);
+    } else if ($("file-menu").open) {
+      event.preventDefault();
+      $("file-menu").open = false;
+      $("file-menu").querySelector("summary").focus();
+    }
+  });
+  $("import-config").addEventListener("click", () => $("import").click());
   bind("save-as", () => openPath("save-as"));
-  bind("file-name", () => openPath("location"));
+  bind("change-config-path", () => openPath("location"));
   bind("export", async () => {
     const text = await currentText(),
       url = URL.createObjectURL(
@@ -308,23 +402,21 @@ function initWorkspace() {
       $("file-menu").open = false;
     }
   });
-  bind("mode-toggle", () => switchMode(state.mode === "yaml" ? "form" : "yaml"));
+  bind("mode-toggle", () =>
+    switchMode(state.mode === "yaml" ? "form" : "yaml"),
+  );
   $("yaml-editor").addEventListener("input", () =>
     sourceChanged($("yaml-editor").value),
   );
   $("yaml-editor").addEventListener("keydown", (event) => {
-    if (event.key === "Tab") {
+    if (event.key === "]" && (event.ctrlKey || event.metaKey)) {
       event.preventDefault();
       const e = event.target;
       e.setRangeText("  ", e.selectionStart, e.selectionEnd, "end");
       e.dispatchEvent(new Event("input"));
     }
   });
-  bind("prev-step", () => {
-    state.step = Math.max(0, state.step - 1);
-    state.system = null;
-    emit(true);
-  });
+  bind("prev-step", () => goToStep(state.step - 1, true));
   bind("primary-action", primary);
   bind("secondary-action", saveDraft);
   bind("path-browse", async () => {
@@ -332,11 +424,16 @@ function initWorkspace() {
       pathParent($("save-path").value) || state.info.base_dir,
       { kind: "directory", title: "选择 YAML 保存目录" },
     );
-    if (folder)
+    if (folder) {
       $("save-path").value =
         folder +
         "/" +
         ($("save-path").value.split("/").at(-1) || "autobench.yaml");
+      $("path-error").hidden = true;
+    }
+  });
+  $("save-path").addEventListener("input", () => {
+    $("path-error").hidden = true;
   });
   $("path-form").addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -347,14 +444,22 @@ function initWorkspace() {
     await perform($("path-confirm"), async () => {
       const path = $("save-path").value.trim();
       if (!path) throw new Error("请输入服务器上的文件路径。");
-      targetChanged(path);
       if (pathAction === "location") {
+        targetChanged(path);
         $("path-dialog").close();
         return;
       }
-      if (await save(path)) {
+      let saved;
+      try {
+        saved = await save(path);
+      } catch (error) {
+        $("path-error").textContent = error.message;
+        $("path-error").hidden = false;
+        return;
+      }
+      if (saved) {
         $("path-dialog").close();
-        if (pathAction === "check") await validate();
+        if (pathAction === "check") await saveAndCheck();
       }
     });
   });
@@ -395,10 +500,15 @@ async function boot() {
     await restoreProject(rememberedPath || state.info.config);
   } else {
     const saved = await selectStartupProject(
-      state.info.config || rememberedPath || state.info.base_dir + "/autobench.yaml",
+      state.info.config ||
+        rememberedPath ||
+        state.info.base_dir + "/autobench.yaml",
     );
     accept(saved);
-    history.replaceState({ ...history.state, autobenchConfigConfirmed: true }, "");
+    history.replaceState(
+      { ...history.state, autobenchConfigConfirmed: true },
+      "",
+    );
   }
   initWorkspace();
   await initRuns();

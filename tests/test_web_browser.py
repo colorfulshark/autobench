@@ -205,6 +205,21 @@ def test_startup_saves_existing_text_in_selected_directory(browser_page, ui_serv
     assert page.locator("#file-location").text_content() == str(server.existing)
 
 
+def test_startup_opens_existing_yaml_from_file_picker(browser_page, ui_server):
+    page, server = browser_page, ui_server
+    original = server.existing.read_bytes()
+    page.goto(server.url)
+    page.locator("#startup-open").click()
+    page.get_by_role("button", name="▤ existing.yaml 文件").click()
+    with page.expect_request("**/api/config/save") as save:
+        page.locator("#file-confirm").click()
+    assert save.value.post_data_json["path"] == str(server.existing)
+    assert save.value.post_data_json["revision"]
+    assert_current_page(page, "config")
+    assert page.locator("#file-location").text_content() == str(server.existing)
+    assert server.existing.read_bytes() == original
+
+
 def test_startup_save_errors_keep_config_locked_and_allow_retry(browser_page, ui_server):
     page, server = browser_page, ui_server
     broken = server.root / "broken.yaml"
@@ -379,10 +394,17 @@ def test_file_navigation_blocks_old_entries_and_ignores_stale_responses(
     page.wait_for_function("() => document.querySelector('#save-state').textContent === '已保存'")
 
 
+def reveal_file_menu(page):
+    menu = page.locator("#file-menu")
+    if not menu.evaluate("e => e.open"):
+        menu.locator("summary").click()
+
+
 def set_editor_mode(page, mode, *, succeeds=True):
-    toggle = page.get_by_role("switch", name="YAML 源码模式", exact=True)
+    toggle = page.locator("#mode-toggle")
     checked = str(mode == "yaml").lower()
     if toggle.get_attribute("aria-checked") != checked:
+        reveal_file_menu(page)
         toggle.click()
     if not succeeds:
         page.wait_for_function("() => !document.querySelector('#mode-toggle').disabled")
@@ -395,7 +417,24 @@ def set_editor_mode(page, mode, *, succeeds=True):
     )
 
 
+def save_draft(page):
+    reveal_file_menu(page)
+    page.locator("#secondary-action").click()
+
+
+def reveal_steps(page):
+    picker = page.locator("#step-picker")
+    if picker.is_visible() and picker.get_attribute("aria-expanded") == "false":
+        picker.click()
+
+
+def click_primary(page):
+    reveal_steps(page)
+    page.locator("#primary-action").click()
+
+
 def open_step(page, name):
+    reveal_steps(page)
     page.locator("#wizard-steps").get_by_role("button", name=name).click()
 
 
@@ -555,6 +594,7 @@ def test_long_notice_stays_in_viewport_when_scrolling(browser_page, ui_server, w
     page.set_viewport_size({"width": width, "height": 600})
     page.emulate_media(reduced_motion="reduce")
     ready(page, ui_server)
+    page.get_by_text("高级连接设置", exact=True).click()
     page.clock.install(time=0)
     page.clock.pause_at(1000)
     page.evaluate(
@@ -584,7 +624,7 @@ def test_save_draft_notice_dismisses_and_keeps_saved_state(browser_page, ui_serv
     load_existing(page, server)
     page.clock.install(time=0)
     page.clock.pause_at(1000)
-    page.locator("#secondary-action").click()
+    save_draft(page)
     page.get_by_text("草稿已保存，可稍后继续完善。", exact=True).wait_for()
     assert page.locator("#notice").is_visible()
     page.clock.run_for(2999)
@@ -615,7 +655,10 @@ def assert_current_page(page, key):
         "id"
     )
     assert page.get_by_role("tabpanel").count() == 1
-    assert page.locator(f".topbar #header-{key}").is_visible()
+    assert (
+        page.get_by_role("tabpanel").get_by_role("heading", name=titles[key], exact=True).count()
+        == 0
+    )
     assert page.get_by_role("tab", selected=False).get_attribute("tabindex") == "-1"
     for other in titles.keys() - {key}:
         assert page.locator(f"#page-{other}").is_hidden()
@@ -662,11 +705,38 @@ def test_tab_page_survives_reload_without_selected_run(browser_page, ui_server, 
     page.reload()
     assert_current_page(page, key)
     if key == "runs":
-        page.get_by_text("没有匹配的运行记录", exact=True).wait_for()
+        page.get_by_text("此目录暂无运行记录", exact=True).wait_for()
         assert page.locator("#state-location").text_content() == str(
             ui_server.config.policy.state_dir
         )
     assert page.evaluate("sessionStorage.getItem('autobench-selection')") is None
+
+
+def test_run_detail_returns_to_filtered_list(browser_page, ui_server):
+    from autobench.storage import Store
+
+    page, server = browser_page, ui_server
+    store = Store(server.config.policy.state_dir)
+    run_id = store.create(server.config)
+    store.set_run_status(run_id, "failed")
+    store.close()
+    ready(page, server)
+    page.locator("#tab-runs").click()
+    page.locator("#run-search").fill(run_id)
+    page.locator("#run-filter").select_option("failed")
+    row_action = page.get_by_role("button", name="查看详情", exact=True)
+    row_action.click()
+    assert page.locator("#runs-overview").is_hidden()
+    assert page.evaluate("document.activeElement.id") == "back-to-runs"
+    page.locator("#run-detail").get_by_text(run_id, exact=True).wait_for()
+    page.locator("#back-to-runs").click()
+    assert page.locator("#run-search").input_value() == run_id
+    assert page.locator("#run-filter").input_value() == "failed"
+    assert row_action.evaluate("e => e === document.activeElement")
+    page.locator("#run-search").fill("no-match")
+    page.get_by_role("button", name="清除筛选", exact=True).click()
+    assert page.locator("#run-filter").input_value() == ""
+    assert row_action.is_visible()
 
 
 @pytest.mark.parametrize("key", ["config", "runs"])
@@ -703,9 +773,14 @@ def test_selected_run_does_not_override_page_after_reload(browser_page, ui_serve
         assert_current_page(page, key)
     page.locator('[data-page="runs"]').click()
     page.locator("#run-detail").get_by_text(run_id, exact=True).wait_for()
+    assert page.locator("#runs-overview").is_hidden()
+    page.locator("#back-to-runs").click()
     assert page.locator("#state-location").text_content() == str(history)
-    page.get_by_role("button", name="当前查看", exact=True).wait_for()
-    assert page.get_by_role("button", name="当前查看", exact=True).count() == 1
+    assert page.get_by_role("button", name="查看详情", exact=True).count() == 1
+    page.reload()
+    assert_current_page(page, "runs")
+    assert page.locator("#state-location").text_content() == str(history)
+    assert page.locator("#run-detail").is_hidden()
 
 
 @pytest.mark.parametrize("saved_page", [None, "unknown", "__proto__"])
@@ -806,6 +881,8 @@ def test_tabs_support_keyboard_navigation(browser_page, ui_server):
         assert_current_page(page, selected)
         assert target.evaluate("element => element === document.activeElement")
     page.keyboard.press("Tab")
+    assert page.locator("#page-runs").evaluate("element => element === document.activeElement")
+    page.keyboard.press("Tab")
     assert page.locator("#use-config-location").evaluate(
         "element => element === document.activeElement"
     )
@@ -814,10 +891,10 @@ def test_tabs_support_keyboard_navigation(browser_page, ui_server):
         "element => element === document.activeElement"
     )
     page.keyboard.press("Tab")
-    assert page.locator("#page-runs").evaluate("element => element === document.activeElement")
+    assert page.locator("#run-search").evaluate("element => element === document.activeElement")
 
 
-@pytest.mark.parametrize("width", [1920, 1440, 1200, 1101, 1100, 768, 700, 640, 390])
+@pytest.mark.parametrize("width", [1920, 1440, 1200, 1101, 1100, 768, 700, 640, 390, 320])
 def test_header_files_layout_and_independent_locations(browser_page, ui_server, width):
     page, server = browser_page, ui_server
     page.set_viewport_size({"width": width, "height": 900})
@@ -836,7 +913,7 @@ def test_header_files_layout_and_independent_locations(browser_page, ui_server, 
     )
     assert saved_path.is_file()
     page.locator("#input-machines-0-ssh-host").fill("unsaved.example")
-    page.locator(".wizard-step").nth(3).click()
+    open_step(page, "运行设置")
     page.locator("#file-menu summary").click()
     assert page.locator(".menu-items").is_visible()
     page.locator("#tab-runs").click()
@@ -865,39 +942,36 @@ def test_header_files_layout_and_independent_locations(browser_page, ui_server, 
                 document.querySelector('.topbar').getBoundingClientRect().height) < 1"""
         )
         header = page.locator(f"#header-{key}").bounding_box()
-        tabs = page.locator(".page-tabs").bounding_box()
-        assert header["x"] >= tabs["x"] + tabs["width"]
-        assert page.locator(".topbar").bounding_box()["height"] == 44
-        selectors = [".brand", "#tab-config", "#tab-runs", f"#header-{key}", ".service-info"]
-        selectors += (
-            [
-                "#file-name",
-                "#save-state",
-                "#mode-toggle",
-                "#file-menu summary",
-                "#file-location",
-                "#matrix-summary",
-            ]
-            if key == "config"
-            else ["#state-location", "#use-config-location", "#change-location"]
-        )
-        for selector in selectors:
-            element = page.locator(selector)
-            if element.is_visible():
-                box = element.bounding_box()
-                assert abs(box["y"] + box["height"] / 2 - 22) <= 1, (selector, box)
-        assert page.locator(".service-info").is_visible() == (width > 1200)
+        top = page.locator(".topbar").bounding_box()
+        assert page.locator(".service-info").is_visible() == (width > 850)
         if key == "config":
-            assert page.locator("#matrix-summary").is_visible() == (width > 1600)
-            toggle = page.locator("#mode-toggle").bounding_box()
             menu = page.locator("#file-menu summary").bounding_box()
-            assert toggle["x"] + toggle["width"] <= menu["x"]
+            assert page.locator(".topbar #header-config").is_visible()
+            assert header["y"] >= top["y"]
+            assert header["y"] + header["height"] <= top["y"] + top["height"]
+            assert menu["x"] + menu["width"] <= top["x"] + top["width"]
+            page.locator("#file-menu summary").click()
+            assert page.locator("#file-location").is_visible()
+            menu_panel = page.locator("#file-menu .menu-items").bounding_box()
+            assert menu_panel["x"] >= 0 and menu_panel["x"] + menu_panel["width"] <= width
+            assert page.locator("#file-location").inner_text() == str(saved_path)
+            page.locator("#change-config-path").click()
+            assert page.locator("#save-path").input_value() == str(saved_path)
+            page.get_by_role("button", name="取消", exact=True).click()
+        else:
+            assert header["y"] - top["y"] - top["height"] == pytest.approx(12, abs=1)
+            assert header["height"] <= 60
+            count = page.locator("#run-count").bounding_box()
+            search = page.locator("#run-search").bounding_box()
+            assert count["y"] + count["height"] / 2 == pytest.approx(
+                search["y"] + search["height"] / 2, abs=1
+            )
         assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
         page.evaluate("window.scrollTo(0, 400)")
         assert page.locator(".topbar").bounding_box()["y"] == 0
     page.locator("#tab-config").click()
-    assert "运行设置" in page.locator('.wizard-step[aria-current="step"]').inner_text()
-    page.locator(".wizard-step").nth(0).click()
+    assert "运行设置" in page.locator('.wizard-step[aria-current="step"]').text_content()
+    open_step(page, "连接机器")
     assert page.locator("#input-machines-0-ssh-host").input_value() == "unsaved.example"
     assert page.locator("#file-location").get_attribute("title") == str(saved_path)
     assert page.locator("#file-name").get_attribute("title") == str(saved_path)
@@ -919,8 +993,9 @@ def test_header_mode_switch_supports_keyboard_and_keeps_source(browser_page, ui_
     ready(page, ui_server)
     load_existing(page, ui_server)
     open_step(page, "运行设置")
-    toggle = page.get_by_role("switch", name="YAML 源码模式", exact=True)
-    assert page.locator(".topbar #mode-toggle").is_visible()
+    toggle = page.locator("#mode-toggle")
+    reveal_file_menu(page)
+    assert page.locator("#header-config #mode-toggle").is_visible()
     assert page.locator(".editor-toolbar, #mode-form, #mode-yaml").count() == 0
     assert toggle.get_attribute("aria-checked") == "false"
     toggle.focus()
@@ -935,14 +1010,15 @@ def test_header_mode_switch_supports_keyboard_and_keeps_source(browser_page, ui_
     page.locator("#tab-config").click()
     assert toggle.get_attribute("aria-checked") == "true"
     assert page.locator("#yaml-editor").input_value() == text
+    reveal_file_menu(page)
     toggle.focus()
     page.keyboard.press("Enter")
     page.locator("#config-layout").wait_for()
     assert toggle.get_attribute("aria-checked") == "false"
-    assert "运行设置" in page.locator('.wizard-step[aria-current="step"]').inner_text()
+    assert "运行设置" in page.locator('.wizard-step[aria-current="step"]').text_content()
     set_editor_mode(page, "yaml")
     assert page.locator("#yaml-editor").input_value() == text
-    assert page.locator(".topbar").bounding_box()["height"] == 44
+    assert page.locator(".topbar").bounding_box()["height"] == 48
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
 
@@ -952,7 +1028,8 @@ def test_header_mode_switch_waits_for_parse_before_updating(browser_page, ui_ser
     set_editor_mode(page, "yaml")
     pending = []
     page.route("**/api/config/parse", lambda route: pending.append(route))
-    toggle = page.get_by_role("switch", name="YAML 源码模式", exact=True)
+    toggle = page.locator("#mode-toggle")
+    reveal_file_menu(page)
     toggle.click()
     page.wait_for_function("() => document.querySelector('#mode-toggle').disabled")
     assert len(pending) == 1
@@ -973,17 +1050,17 @@ def test_header_mode_switch_waits_for_parse_before_updating(browser_page, ui_ser
 def test_tabs_keep_configuration_draft_and_step(browser_page, ui_server, width):
     page = browser_page
     page.set_viewport_size({"width": width, "height": 900})
-    ready(page, ui_server)
-    saved_path = ui_server.root / "autobench.yaml"
+    saved_path = ui_server.existing
+    ready(page, ui_server, startup_path=saved_path)
     saved_text = saved_path.read_bytes()
     page.locator("#input-machines-0-ssh-host").fill("unsaved.example")
-    page.locator(".wizard-step").nth(3).click()
+    open_step(page, "运行设置")
     page.get_by_role("tab", name="运行记录", exact=True).click()
     assert_current_page(page, "runs")
     page.get_by_role("tab", name="测试配置", exact=True).click()
     assert page.locator('.wizard-step[aria-current="step"]').count() == 1
-    assert "运行设置" in page.locator('.wizard-step[aria-current="step"]').inner_text()
-    page.locator(".wizard-step").nth(0).click()
+    assert "运行设置" in page.locator('.wizard-step[aria-current="step"]').text_content()
+    open_step(page, "连接机器")
     assert page.locator("#input-machines-0-ssh-host").input_value() == "unsaved.example"
     set_editor_mode(page, "yaml")
     text = page.locator("#yaml-editor").input_value() + "\n# unsaved tab draft\n"
@@ -998,6 +1075,86 @@ def test_tabs_keep_configuration_draft_and_step(browser_page, ui_server, width):
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
 
+@pytest.mark.parametrize("width", [1440, 390])
+def test_incomplete_prerequisites_disable_steps_before_and_after_reload(
+    browser_page, ui_server, width
+):
+    page, server = browser_page, ui_server
+    page.set_viewport_size({"width": width, "height": 900})
+    ready(page, server)
+    errors = page.locator("#config-errors")
+    active_step = page.locator(".wizard-step[aria-current=step]")
+    steps = page.locator(".wizard-step")
+    edit_tests = page.get_by_role("button", name="编辑测试 →", exact=True)
+
+    reveal_steps(page)
+    assert steps.nth(1).is_disabled()
+    assert steps.nth(1).evaluate("e => getComputedStyle(e).cursor") == "not-allowed"
+    assert steps.nth(1).evaluate("e => getComputedStyle(e).color") != steps.nth(0).evaluate(
+        "e => getComputedStyle(e).color"
+    )
+    assert edit_tests.is_disabled()
+    steps.nth(1).evaluate("e => e.click()")
+    assert active_step.get_attribute("id") == "wizard-step-0"
+    assert errors.is_hidden()
+
+    click_primary(page)
+    assert "请填写主机地址。" in errors.inner_text()
+    assert errors.locator(".error-link").first.evaluate("e => e === document.activeElement")
+
+    page.locator("#input-machines-0-ssh-host").fill("localhost")
+    page.locator("#input-machines-0-ssh-username").fill("bench")
+    assert steps.nth(1).is_enabled()
+    assert steps.nth(2).is_disabled()
+    save_draft(page)
+    page.wait_for_function("() => document.querySelector('#save-state').textContent === '已保存'")
+
+    for _ in range(2):
+        page.reload()
+        page.locator("#input-machines-0-ssh-host").wait_for()
+        reveal_steps(page)
+        assert steps.nth(1).is_enabled()
+        assert all(step.is_disabled() for step in steps.all()[2:])
+        target = steps.nth(4).bounding_box()
+        page.mouse.click(target["x"] + target["width"] / 2, target["y"] + target["height"] / 2)
+        assert active_step.get_attribute("id") == "wizard-step-0"
+        assert errors.is_hidden()
+
+    page.evaluate("async () => (await import('/static/config-view.js')).goToStep(4)")
+    assert active_step.get_attribute("id") == "wizard-step-0"
+    open_step(page, "选择系统")
+    assert active_step.get_attribute("id") == "wizard-step-1"
+    click_primary(page)
+    assert "添加至少一个系统" in errors.inner_text()
+
+    page.get_by_role("button", name="＋ 手动添加系统", exact=True).click()
+    page.locator("#input-machines-0-systems-0-boot_entry").fill("0001")
+    assert steps.nth(2).is_enabled()
+    assert steps.nth(3).is_disabled()
+    assert edit_tests.is_enabled()
+    edit_tests.click()
+    assert active_step.get_attribute("id") == "wizard-step-2"
+    click_primary(page)
+    assert "请选择服务器上的源码包。" in errors.inner_text()
+
+    open_step(page, "连接机器")
+    assert active_step.get_attribute("id") == "wizard-step-0"
+    open_step(page, "设置测试")
+    assert active_step.get_attribute("id") == "wizard-step-2"
+    page.locator("#input-benchmarks-0-source_archive").fill(
+        str(server.config.benchmarks[0].source_archive)
+    )
+    open_step(page, "检查运行")
+    assert active_step.get_attribute("id") == "wizard-step-4"
+    assert errors.is_hidden()
+    open_step(page, "连接机器")
+    page.locator("#input-machines-0-ssh-host").clear()
+    assert steps.nth(4).is_disabled()
+    click_primary(page)
+    assert active_step.get_attribute("id") == "wizard-step-0"
+    assert "请填写主机地址。" in errors.inner_text()
+
+
 def test_wizard_password_connection_test_manual_system_files_save_run_and_cancel(
     browser_page, ui_server
 ):
@@ -1008,31 +1165,31 @@ def test_wizard_password_connection_test_manual_system_files_save_run_and_cancel
     port = page.locator("#input-machines-0-ssh-port").bounding_box()
     assert host["y"] == port["y"] and port["width"] < 120
     assert page.locator(".field-mode").count() == 0
-    page.locator("#primary-action").click()
+    click_primary(page)
     page.locator(".error-link").first.click()
     assert page.locator("#wizard-steps").is_visible()
     assert page.locator("details.advanced").first.evaluate("(e) => e.open") is False
     fill_connection(page, server)
     page.get_by_role("button", name="连接测试", exact=True).click()
     page.locator('.connection-test-status[data-phase="success"]').wait_for()
-    page.locator("#primary-action").click()
+    click_primary(page)
     page.get_by_role("button", name="＋ 手动添加系统", exact=True).click()
     page.locator("#input-machines-0-systems-0-boot_entry").fill("0001")
-    page.locator("#primary-action").click()
+    click_primary(page)
     page.locator('[data-field-path=\'["benchmarks",0,"source_archive"]\']').get_by_role(
         "button", name="选择…"
     ).click()
     page.get_by_role("button", name="▤ source.tar.gz 文件").click()
     page.locator("#file-confirm").click()
-    page.locator("#primary-action").click()
+    click_primary(page)
     # The fourth step contains the full scheduling controls.
     assert page.locator("#wizard-steps [aria-current=step]").text_content() == "4运行设置"
     page.get_by_text("高级调度设置", exact=True).click()
     page.locator("#input-policy-state_dir").fill(str(server.config.policy.state_dir))
     page.locator("#input-policy-poll_interval").fill("0.02")
     page.locator("#input-policy-settle_seconds").fill("0")
-    page.locator("#primary-action").click()
-    page.locator("#primary-action").click()
+    click_primary(page)
+    click_primary(page)
     page.wait_for_function(
         "() => document.querySelector('#primary-action').textContent.includes('开始测试')"
     )
@@ -1043,7 +1200,7 @@ def test_wizard_password_connection_test_manual_system_files_save_run_and_cancel
         and saved["machines"][0]["ssh"]["client_keys"] == []
     )
     assert saved["machines"][0]["systems"][0]["boot_entry"] == "0001"
-    page.locator("#primary-action").click()
+    click_primary(page)
     page.get_by_role("button", name="取消运行", exact=True).wait_for()
     assert_current_page(page, "runs")
     page.reload()
@@ -1108,19 +1265,19 @@ def test_existing_advanced_values_and_comments_survive_viewing_and_editing(brows
     load_existing(page, server)
     assert page.get_by_label("认证方式", exact=True).input_value() == "custom"
     page.get_by_text("高级连接设置", exact=True).click()
-    page.locator("#secondary-action").click()
+    save_draft(page)
     page.wait_for_function(
         "() => !document.querySelector('#secondary-action').classList.contains('busy')"
     )
     assert server.existing.read_text() == text
     page.locator("#input-machines-0-ssh-host").fill("edited.local")
-    page.locator("#secondary-action").click()
+    save_draft(page)
     page.wait_for_function("() => document.querySelector('#save-state').textContent === '已保存'")
     expected = json.loads(json.dumps(raw))
     expected["machines"][0]["ssh"]["host"] = "edited.local"
     assert yaml.safe_load(server.existing.read_text()) == expected
     open_step(page, "检查运行")
-    page.locator("#primary-action").click()
+    click_primary(page)
     page.locator(".error-link").filter(has_text="future_data").click()
     page.locator("#yaml-panel").wait_for()
     assert yaml.safe_load(page.locator("#yaml-editor").input_value()) == expected
@@ -1338,7 +1495,7 @@ def test_warmup_defaults_toggle_save_reload_and_yaml_roundtrip(browser_page, ui_
     assert "正式轮数" in table.text_content() and "预热" in table.text_content()
     assert all("关闭" in row.text_content() for row in table.locator("tbody tr").all())
     assert table.evaluate("table => table.scrollWidth <= table.clientWidth")
-    page.locator("#secondary-action").click()
+    save_draft(page)
     page.wait_for_function("() => document.querySelector('#save-state').textContent === '已保存'")
     assert yaml.safe_load(server.existing.read_text())["benchmarks"][0]["warmup"] is False
     page.reload()
@@ -1448,7 +1605,7 @@ def test_unixbench_tests_selection_save_reload_and_yaml_roundtrip(browser_page, 
     set_editor_mode(page, "form")
     page.get_by_role("checkbox", name="execl · 程序替换吞吐量", exact=True).wait_for()
     assert page.get_by_role("checkbox", name="execl · 程序替换吞吐量").is_checked()
-    page.locator("#secondary-action").click()
+    save_draft(page)
     page.wait_for_function("() => document.querySelector('#save-state').textContent === '已保存'")
     assert yaml.safe_load(server.existing.read_text())["benchmarks"][0]["tests"] == [
         "execl",
@@ -1502,7 +1659,7 @@ def test_saved_response_does_not_clear_newer_edits(browser_page, ui_server):
     pending = []
     page.route("**/api/config/save", lambda route: pending.append(route))
     page.locator("#input-machines-0-ssh-username").fill("first-edit")
-    page.locator("#secondary-action").click()
+    save_draft(page)
     deadline = time.monotonic() + 5
     while not pending and time.monotonic() < deadline:
         page.wait_for_timeout(20)
@@ -1516,7 +1673,7 @@ def test_saved_response_does_not_clear_newer_edits(browser_page, ui_server):
     assert page.locator("#save-state").text_content() == "未保存"
     assert page.locator("#input-machines-0-ssh-username").input_value() == "later-edit"
     page.unroute("**/api/config/save")
-    page.locator("#secondary-action").click()
+    save_draft(page)
     page.wait_for_function("() => document.querySelector('#save-state').textContent === '已保存'")
     assert (
         yaml.safe_load(server.existing.read_text())["machines"][0]["ssh"]["username"]
@@ -1532,7 +1689,7 @@ def test_mobile_and_validation_field_navigation(browser_page, ui_server):
     open_step(page, "检查运行")
     page.clock.install(time=0)
     page.clock.pause_at(1000)
-    page.locator("#primary-action").click()
+    click_primary(page)
     page.locator("#config-errors").wait_for()
     page.locator(".error-link").first.click()
     assert page.locator("#input-machines-0-ssh-port").get_attribute("aria-invalid") == "true"
@@ -1665,6 +1822,45 @@ def test_yaml_import_save_as_and_export_preserve_text(browser_page, ui_server):
     assert Path(info.value.path()).read_text() == text
 
 
+def test_checking_saved_yaml_skips_rewriting_and_tab_leaves_editor(browser_page, ui_server):
+    page, server = browser_page, ui_server
+    ready(page, server, startup_path=server.existing)
+    requests = []
+    page.on("request", lambda request: requests.append(request.url))
+    set_editor_mode(page, "yaml")
+    editor = page.locator("#yaml-editor")
+    editor.press("Tab")
+    assert page.evaluate("document.activeElement.id") != "yaml-editor"
+    assert page.locator("#primary-action").text_content() == "检查配置"
+    click_primary(page)
+    page.get_by_text("配置、源码包及本地 SSH 文件检查通过，可以开始测试。", exact=True).wait_for()
+    assert not any(url.endswith("/api/config/save") for url in requests)
+    assert not server.world.starts
+
+
+def test_save_as_conflict_preserves_original_target(browser_page, ui_server):
+    page, server = browser_page, ui_server
+    ready(page, server)
+    original = server.existing.read_bytes()
+    page.locator("#input-machines-0-ssh-host").fill("changed.example")
+    page.locator("#file-menu summary").click()
+    page.locator("#save-as").click()
+    page.locator("#save-path").fill(str(server.existing))
+    page.locator("#path-confirm").click()
+    page.locator("#path-error").wait_for()
+    assert "目标文件已存在" in page.locator("#path-error").inner_text()
+    assert server.existing.read_bytes() == original
+    page.get_by_role("button", name="取消", exact=True).click()
+    assert page.locator("#file-location").text_content() == str(server.root / "autobench.yaml")
+    assert page.locator("#input-machines-0-ssh-host").input_value() == "changed.example"
+    save_draft(page)
+    page.wait_for_function("() => document.querySelector('#save-state').textContent === '已保存'")
+    assert (
+        yaml.safe_load((server.root / "autobench.yaml").read_text())["machines"][0]["ssh"]["host"]
+        == "changed.example"
+    )
+
+
 def test_invalid_nested_document_keeps_source_accessible(browser_page, ui_server):
     page = browser_page
     ready(page, ui_server)
@@ -1763,7 +1959,7 @@ def test_ignore_host_key_allows_connection_test_and_validation_without_hosts(
     set_editor_mode(page, "yaml")
     page.locator("#yaml-panel").wait_for()
     page.locator("#yaml-editor").fill(yaml.safe_dump(data))
-    page.locator("#primary-action").click()
+    click_primary(page)
     page.wait_for_function(
         "() => document.querySelector('#primary-action').textContent.includes('开始测试')"
     )
@@ -1933,121 +2129,98 @@ def test_boot_entry_identification_uses_overrides_and_ignores_outdated_results(
     assert entry.evaluate("e => e.tagName") == "INPUT" and entry.input_value() == "00AB"
 
 
-@pytest.mark.parametrize("width", [1440, 1101, 1100, 768, 390])
-def test_bottom_bar_geometry_stays_fixed_across_steps_and_scroll(browser_page, ui_server, width):
+@pytest.mark.parametrize("width", [1440, 768, 390, 320])
+def test_step_actions_share_navigation_through_review(browser_page, ui_server, width):
     page = browser_page
-    page.set_viewport_size({"width": width, "height": 900})
+    page.set_viewport_size({"width": width, "height": 640})
     ready(page, ui_server)
     load_existing(page, ui_server)
-    page.evaluate("document.fonts.ready")
+    nav = page.locator("#wizard-steps")
+    group = nav.get_by_role("group", name="步骤操作")
+    assert page.locator(".topbar #primary-action, .action-bar").count() == 0
 
-    def geometry():
-        return page.locator(".action-bar").evaluate(
-            """bar => [bar, bar.querySelector('#wizard-steps'),
-                ...bar.querySelectorAll('.wizard-step'),
-                ...bar.querySelectorAll('.step-number'),
-                bar.querySelector('#secondary-action'),
-                bar.querySelector('#primary-action')].map(el => {
-                    const r = el.getBoundingClientRect();
-                    return [r.x, r.y, r.width, r.height];
-                })"""
-        )
-
-    for height in (900, 640):
-        page.set_viewport_size({"width": width, "height": height})
-        baseline = geometry()
-        assert abs(baseline[0][1] + baseline[0][3] - height) <= 1
-        for index in (0, 1, 2, 3, 4, 0, 4, 2):
-            page.locator(".wizard-step").nth(index).click()
-            for offset in ("0", "300", "document.documentElement.scrollHeight"):
-                page.evaluate(f"window.scrollTo(0, {offset})")
-                actual = geometry()
-                for reference, current in zip(baseline, actual, strict=True):
-                    assert all(abs(a - b) <= 1 for a, b in zip(reference, current, strict=True)), (
-                        width,
-                        height,
-                        index,
-                        reference,
-                        current,
-                    )
-                assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    open_step(page, "选择系统")
+    page.evaluate("window.scrollTo(0, document.documentElement.scrollHeight)")
+    reveal_steps(page)
+    back = group.get_by_role("button", name="上一步", exact=True).bounding_box()
+    next_step = group.get_by_role("button", name="下一步 →", exact=True).bounding_box()
+    nav_box = nav.bounding_box()
+    assert back["y"] == next_step["y"]
+    assert back["x"] + back["width"] <= next_step["x"]
+    assert next_step["x"] + next_step["width"] <= nav_box["x"] + nav_box["width"]
+    assert next_step["height"] >= 44
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
     open_step(page, "检查运行")
-    page.locator("#primary-action").click()
+    click_primary(page)
     page.wait_for_function(
         "() => document.querySelector('#primary-action').textContent.includes('开始测试')"
     )
-    for reference, current in zip(baseline, geometry(), strict=True):
-        assert all(abs(a - b) <= 1 for a, b in zip(reference, current, strict=True))
+    reveal_steps(page)
+    assert group.get_by_role("button", name="开始测试 →", exact=True).is_visible()
 
 
-@pytest.mark.parametrize("width", [1440, 1101, 1100, 768, 390])
-def test_bottom_bar_combines_steps_and_actions(browser_page, ui_server, width):
+@pytest.mark.parametrize("width", [1440, 1101, 1100, 768, 700, 390, 320])
+def test_steps_beside_form_or_in_mobile_picker(browser_page, ui_server, width):
     page = browser_page
     page.set_viewport_size({"width": width, "height": 900})
-    ready(page, ui_server)
-    bar = page.locator(".action-bar")
-    assert bar.locator("#wizard-steps").count() == 1
+    ready(page, ui_server, startup_path=ui_server.existing)
+    picker = page.locator(".topbar #step-picker")
+    navigation = page.locator("#wizard-steps")
+    assert picker.is_visible() == (width <= 700)
     for index in range(5):
-        page.locator(".wizard-step").nth(index).click()
-        page.evaluate("window.scrollTo(0, 0)")
-        navigation = page.locator("#wizard-steps").bounding_box()
-        actions = bar.locator(".actions").bounding_box()
-        footer = bar.bounding_box()
-        assert page.locator(".wizard-step[aria-current=step]").count() == 1
-        assert footer["y"] >= 44
-        assert footer["y"] + footer["height"] <= 901
-        if width > 1100:
-            assert navigation["x"] + navigation["width"] <= actions["x"]
+        reveal_steps(page)
+        nav_box = navigation.bounding_box()
+        nav_step = navigation.locator(".wizard-step").nth(index)
+        assert nav_step.bounding_box()["height"] >= 44
+        if width <= 700:
+            picker_box = picker.bounding_box()
+            assert nav_box["y"] > picker_box["y"] + picker_box["height"]
             assert (
-                abs(
-                    navigation["y"]
-                    + navigation["height"] / 2
-                    - actions["y"]
-                    - actions["height"] / 2
-                )
-                <= 1
+                picker_box["x"] + picker_box["width"]
+                <= page.locator("#file-menu summary").bounding_box()["x"]
             )
+            assert nav_box["x"] >= 0 and nav_box["x"] + nav_box["width"] <= width
         else:
-            assert navigation["y"] + navigation["height"] <= actions["y"]
-            assert abs(navigation["x"] + navigation["width"] - actions["x"] - actions["width"]) <= 1
-        previous_right = navigation["x"]
-        for step in page.locator(".wizard-step").all():
-            box = step.bounding_box()
-            assert box["height"] >= 44
-            assert box["x"] >= previous_right - 1
-            assert box["x"] + box["width"] <= width
-            previous_right = box["x"] + box["width"]
+            form = page.locator("#config-body").bounding_box()
+            assert nav_box["x"] + nav_box["width"] <= form["x"]
+            assert nav_box["y"] == pytest.approx(form["y"], abs=1)
+        nav_step.click()
+        assert navigation.locator(".wizard-step[aria-current=step]").count() == 1
+        assert navigation.is_visible() == (width > 700)
+        assert picker.get_attribute("aria-expanded") == "false"
         assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
-    # The expanded connection form must remain reachable behind the sticky footer.
-    open_step(page, "连接机器")
-    page.get_by_text("高级连接设置", exact=True).click()
-    last_input = page.locator("#config-body input:visible").last
-    last_input.evaluate("el => el.scrollIntoView({block: 'center'})")
-    last_field = last_input.bounding_box()
-    assert last_field["y"] >= 44
-    assert last_field["y"] + last_field["height"] <= bar.bounding_box()["y"]
-
     set_editor_mode(page, "yaml")
-    assert page.locator("#wizard-steps").is_hidden()
+    assert navigation.is_hidden()
+    assert picker.is_hidden()
     assert page.locator("#prev-step").is_hidden()
-    assert page.locator("#secondary-action").is_visible()
-    assert page.locator("#primary-action").text_content().strip() == "保存并检查"
-    page.evaluate("window.scrollTo(0, document.documentElement.scrollHeight)")
-    actions = bar.locator(".actions").bounding_box()
-    footer = bar.bounding_box()
-    assert abs(actions["x"] + actions["width"] - footer["x"] - footer["width"]) <= 1
-    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    assert (
+        page.locator("#yaml-panel .yaml-help")
+        .get_by_role("button", name="检查配置", exact=True)
+        .is_visible()
+    )
     page.locator("#tab-runs").click()
-    assert bar.is_hidden()
+    assert page.locator("#primary-action").is_hidden()
 
 
-@pytest.mark.parametrize("width", [1440, 768, 390])
-def test_bottom_bar_step_keyboard_focus_survives_render(browser_page, ui_server, width):
+def test_save_draft_shortcut_while_editing(browser_page, ui_server):
+    page, server = browser_page, ui_server
+    ready(page, server)
+    host = page.locator("#input-machines-0-ssh-host")
+    host.fill("updated.example")
+    host.press("Control+s")
+    page.wait_for_function("() => document.querySelector('#save-state').textContent === '已保存'")
+    assert host.evaluate("e => e === document.activeElement")
+    document = yaml.safe_load((server.root / "autobench.yaml").read_text())
+    assert document["machines"][0]["ssh"]["host"] == "updated.example"
+
+
+@pytest.mark.parametrize("width", [1440, 768])
+def test_step_keyboard_focus_survives_render(browser_page, ui_server, width):
     page = browser_page
     page.set_viewport_size({"width": width, "height": 900})
-    ready(page, ui_server)
+    ready(page, ui_server, startup_path=ui_server.existing)
     step = page.locator(".wizard-step").nth(3)
     step.focus()
     page.keyboard.press("Space")
@@ -2058,10 +2231,33 @@ def test_bottom_bar_step_keyboard_focus_survives_render(browser_page, ui_server,
     page.keyboard.press("Enter")
     assert page.evaluate("document.activeElement.id") == "wizard-step-4"
     assert page.locator(".wizard-step[aria-current=step]").get_attribute("id") == "wizard-step-4"
-    page.keyboard.press("Tab")
-    assert page.evaluate("document.activeElement.id") == "prev-step"
+    page.locator("#prev-step").focus()
     page.keyboard.press("Enter")
-    assert "运行设置" in page.locator(".wizard-step[aria-current=step]").inner_text()
+    assert page.locator("#config-body h2").first.evaluate("e => e === document.activeElement")
+    assert "运行设置" in page.locator(".wizard-step[aria-current=step]").text_content()
+
+
+def test_step_picker_supports_keyboard_and_restores_focus(browser_page, ui_server):
+    page = browser_page
+    page.set_viewport_size({"width": 390, "height": 844})
+    ready(page, ui_server, startup_path=ui_server.existing)
+    picker = page.get_by_role("button", name="配置步骤 1/5 · 连接机器", exact=True)
+    picker.press("Enter")
+    assert page.evaluate("document.activeElement.id") == "wizard-step-0"
+    page.keyboard.press("Escape")
+    assert picker.get_attribute("aria-expanded") == "false"
+    assert page.evaluate("document.activeElement.id") == "step-picker"
+    picker.press("Space")
+    page.keyboard.press("Tab")
+    assert page.evaluate("document.activeElement.id") == "wizard-step-1"
+    page.keyboard.press("Enter")
+    assert page.evaluate("document.activeElement.id") == "step-picker"
+    assert page.locator("#wizard-steps").is_hidden()
+    assert page.get_by_role("button", name="配置步骤 2/5 · 选择系统", exact=True).is_visible()
+    reveal_steps(page)
+    page.locator("#prev-step").press("Enter")
+    assert page.locator("#wizard-steps").is_hidden()
+    assert page.get_by_role("button", name="配置步骤 1/5 · 连接机器", exact=True).is_visible()
 
 
 @pytest.mark.parametrize("width", [1440, 768, 390])
@@ -2080,11 +2276,11 @@ def test_five_steps_preserve_existing_config_and_fit_viewport(browser_page, ui_s
         assert (
             page.locator(".wizard-step[aria-current=step]").text_content() == str(index + 1) + name
         )
-        assert page.locator("#config-plan").is_visible()
+        assert page.locator("#config-plan").is_visible() == (index < 4)
         assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
-        assert page.locator("#prev-step").is_visible() == (index > 0)
+        assert (page.locator("#prev-step").get_attribute("hidden") is None) == (index > 0)
         assert page.locator("#primary-action").text_content().strip() == (
-            "下一步 →" if index < 4 else "保存并检查"
+            "下一步 →" if index < 4 else "检查配置"
         )
         if name == "设置测试":
             assert page.locator("#input-policy-output_dir").count() == 0
@@ -2092,7 +2288,7 @@ def test_five_steps_preserve_existing_config_and_fit_viewport(browser_page, ui_s
             page.get_by_text("高级调度设置", exact=True).click()
             assert page.locator("#input-policy-output_dir").is_visible()
             assert page.locator("#input-version").is_visible()
-    page.locator("#secondary-action").click()
+    save_draft(page)
     page.wait_for_function(
         "() => !document.querySelector('#secondary-action').classList.contains('busy')"
     )
@@ -2133,7 +2329,7 @@ def test_machine_drag_and_keyboard_sort_preserve_config(browser_page, ui_server,
     assert tabs.all_text_contents() == ["server03", "server01", "server02"]
     assert page.locator(".dragging, .drop-target").count() == 0
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
-    page.locator("#secondary-action").click()
+    save_draft(page)
     page.wait_for_function("() => document.querySelector('#save-state').textContent === '已保存'")
     saved = yaml.safe_load(server.existing.read_text())
     assert [m["id"] for m in saved["machines"]] == ["server03", "server01", "server02"]
@@ -2163,7 +2359,7 @@ def test_machine_drag_across_rows_and_cancel(browser_page, ui_server, width):
     tabs.nth(13).drag_to(tabs.nth(0))
     assert tabs.all_text_contents() == [before[-1], *before[:-1]]
     assert page.locator(".machine-picker .active").text_content() == "server14"
-    page.locator("#secondary-action").click()
+    save_draft(page)
     page.wait_for_function("() => document.querySelector('#save-state').textContent === '已保存'")
     page.wait_for_function("() => !document.querySelector('#secondary-action').disabled")
     page.locator("#notice").wait_for(state="hidden")
@@ -2207,7 +2403,7 @@ def test_machine_corner_delete_preserves_selection(browser_page, ui_server, sele
         index = remaining.index(expected)
         assert page.locator(f"#input-machines-{index}-ssh-host").input_value() == "selected-host"
     assert dialogs == []
-    page.locator("#secondary-action").click()
+    save_draft(page)
     page.wait_for_function("() => document.querySelector('#save-state').textContent === '已保存'")
     saved = yaml.safe_load(server.existing.read_text())
     assert [m["id"] for m in saved["machines"]] == remaining
@@ -2238,10 +2434,10 @@ def test_machine_corner_visibility_keyboard_delete_and_empty_state(browser_page,
     assert page.get_by_role("button", name="＋ 添加机器", exact=True).evaluate(
         "e => e === document.activeElement"
     )
-    open_step(page, "选择系统")
-    assert page.get_by_text("返回上一步填写连接信息。", exact=True).is_visible()
-    assert page.get_by_role("button", name="＋ 添加机器", exact=True).count() == 0
-    open_step(page, "连接机器")
+    assert page.locator("#wizard-step-1").is_disabled()
+    click_primary(page)
+    assert page.locator("#wizard-step-0").get_attribute("aria-current") == "step"
+    assert page.get_by_role("button", name="机器：请添加至少一台机器。", exact=True).is_visible()
     page.get_by_role("button", name="＋ 添加机器", exact=True).click()
     assert page.locator(".machine-picker .active").text_content() == "server01"
     page.get_by_role("button", name="＋ 添加机器", exact=True).click()
@@ -2257,9 +2453,13 @@ def test_system_step_only_selects_existing_machines(browser_page, ui_server):
     load_existing(page, server)
     for _ in range(2):
         page.get_by_role("button", name="＋ 添加机器", exact=True).click()
+    for index in (1, 2):
+        page.locator(".machine-picker .chip-button").nth(index).click()
+        page.locator(f"#input-machines-{index}-ssh-host").fill("localhost")
+        page.locator(f"#input-machines-{index}-ssh-username").fill("bench")
     tabs = page.locator(".machine-picker .chip-button")
     tabs.nth(2).press("Alt+ArrowLeft")
-    page.locator("#secondary-action").click()
+    save_draft(page)
     page.wait_for_function("() => document.querySelector('#save-state').textContent === '已保存'")
     original = server.existing.read_text()
     open_step(page, "选择系统")
@@ -2338,7 +2538,7 @@ def test_benchmark_drag_and_keyboard_sort_preserve_config(browser_page, ui_serve
     assert tabs.all_text_contents() == ["unixbench03", "unixbench01", "unixbench02"]
     assert page.locator(".dragging, .drop-target").count() == 0
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
-    page.locator("#secondary-action").click()
+    save_draft(page)
     page.wait_for_function("() => document.querySelector('#save-state').textContent === '已保存'")
     saved = yaml.safe_load(server.existing.read_text())
     assert saved["benchmarks"] == [original[2], original[0], original[1]]
@@ -2361,7 +2561,7 @@ def test_benchmark_drag_across_rows_and_cancel(browser_page, ui_server, width):
     tabs.nth(13).drag_to(tabs.nth(0))
     assert tabs.all_text_contents() == [original[-1]["id"], *[b["id"] for b in original[:-1]]]
     assert page.locator(".benchmark-picker .active").text_content() == "unixbench14"
-    page.locator("#secondary-action").click()
+    save_draft(page)
     page.wait_for_function("() => document.querySelector('#save-state').textContent === '已保存'")
     page.wait_for_function("() => !document.querySelector('#secondary-action').disabled")
     page.locator("#notice").wait_for(state="hidden")
@@ -2405,7 +2605,7 @@ def test_benchmark_corner_delete_preserves_selection(browser_page, ui_server, se
     )
     assert tabs.nth(index).evaluate("e => e === document.activeElement")
     assert dialogs == []
-    page.locator("#secondary-action").click()
+    save_draft(page)
     page.wait_for_function("() => document.querySelector('#save-state').textContent === '已保存'")
     saved = yaml.safe_load(server.existing.read_text())
     assert saved["benchmarks"] == remaining
@@ -2440,8 +2640,8 @@ def test_benchmark_corner_keyboard_delete_and_empty_state(browser_page, ui_serve
         "e => e === document.activeElement"
     )
     assert page.get_by_text("尚未添加测试", exact=True).is_visible()
-    page.locator("#primary-action").click()
-    assert page.get_by_text("请添加至少一项测试。", exact=True).is_visible()
+    click_primary(page)
+    assert page.get_by_role("button", name="测试：请添加至少一项测试。", exact=True).is_visible()
     page.get_by_role("button", name="＋ 添加测试", exact=True).click()
     assert page.locator("#input-benchmarks-0-source_archive").input_value() == ""
     assert page.locator(".benchmark-picker .active").text_content() == "unixbench01"
@@ -2455,7 +2655,7 @@ def test_run_settings_error_navigation_and_validation_invalidation(
     ready(page, server)
     load_existing(page, server)
     open_step(page, "检查运行")
-    page.locator("#primary-action").click()
+    click_primary(page)
     page.wait_for_function(
         "() => document.querySelector('#primary-action').textContent.includes('开始测试')"
     )
@@ -2466,9 +2666,9 @@ def test_run_settings_error_navigation_and_validation_invalidation(
     original = control.input_value()
     control.fill(invalid)
     assert page.locator("#validation-result").is_hidden()
-    page.locator("#primary-action").click()
+    click_primary(page)
     assert page.locator("#primary-action").text_content() == "保存并检查"
-    page.locator("#primary-action").click()
+    click_primary(page)
     page.locator("#config-errors").wait_for()
     page.locator(".error-link").first.click()
     assert page.locator(".wizard-step[aria-current=step]").text_content() == "4运行设置"
@@ -2476,8 +2676,8 @@ def test_run_settings_error_navigation_and_validation_invalidation(
     assert control.get_attribute("aria-invalid") == "true"
     assert control.evaluate("e => e === document.activeElement")
     control.fill(original)
-    page.locator("#primary-action").click()
-    page.locator("#primary-action").click()
+    click_primary(page)
+    click_primary(page)
     page.wait_for_function(
         "() => document.querySelector('#primary-action').textContent.includes('开始测试')"
     )
@@ -2502,7 +2702,9 @@ def test_imported_yaml_enters_guided_steps_without_changing_content(browser_page
     assert page.locator("#yaml-editor").input_value() == text
     set_editor_mode(page, "form")
     assert page.locator(".wizard-step[aria-current=step]").text_content() == "4运行设置"
-    page.locator("#secondary-action").click()
+    save_draft(page)
+    page.locator("#save-path").fill(str(server.root / "autobench.yaml"))
+    page.locator("#path-confirm").click()
     page.wait_for_function("() => document.querySelector('#save-state').textContent === '已保存'")
     assert (server.root / "autobench.yaml").read_text() == text
 
@@ -2692,6 +2894,7 @@ def test_report_stale_response_does_not_leak_into_another_run(browser_page, ui_s
     page.wait_for_function(
         "() => document.querySelector('.report-panel').getAttribute('aria-busy') === 'true'"
     )
+    page.locator("#back-to-runs").click()
     page.locator("#runs-list tbody tr").filter(has_text=second).get_by_role(
         "button", name="查看详情", exact=True
     ).click()

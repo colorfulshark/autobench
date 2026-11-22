@@ -18,19 +18,26 @@ const view = {
   directory: "",
   selected: null,
   list: [],
+  listKey: null,
+  listReady: false,
+  listError: "",
   detail: null,
+  detailError: "",
+  detailRequest: null,
   after: 0,
   events: [],
   artifacts: [],
   artifactError: "",
   artifactsAt: 0,
-  busy: false,
+  listRequest: null,
   control: false,
   search: "",
   filter: "",
   token: 0,
   renderKey: null,
   report: null,
+  previewToken: 0,
+  previewPath: null,
 };
 export const directory = () => view.directory || state.info.state_dir;
 const query = (extra) =>
@@ -39,6 +46,7 @@ function url(suffix = "", extra = {}) {
   return `/api/runs/${encodeURIComponent(view.selected)}${suffix}?${query(extra)}`;
 }
 function storage() {
+  sessionStorage.setItem("autobench-run-directory", directory());
   if (view.selected)
     sessionStorage.setItem(
       "autobench-selection",
@@ -46,19 +54,19 @@ function storage() {
     );
   else sessionStorage.removeItem("autobench-selection");
 }
-export function setDirectory(path) {
+function changeDirectory(path) {
+  if (path !== directory()) {
+    view.list = [];
+    view.listReady = false;
+    view.listError = "";
+    view.listRequest = null;
+  }
   view.directory = path;
-  view.selected = null;
-  view.detail = null;
-  view.report = null;
-  view.token++;
-  storage();
-  renderRuns();
-  return refreshRuns();
 }
-export async function selectRun(id) {
+function selectRun(id, focus = false) {
   view.selected = id;
   view.detail = null;
+  view.detailError = "";
   view.report = null;
   view.renderKey = null;
   view.after = 0;
@@ -67,15 +75,15 @@ export async function selectRun(id) {
   view.artifactError = "";
   view.artifactsAt = 0;
   view.token++;
+  view.detailRequest = null;
   storage();
-  $("preview-drawer").hidden = true;
-  await refreshDetail();
+  closePreview();
   renderRuns();
-}
-export async function openRun(id, path) {
-  view.directory = path;
-  await selectRun(id);
-  await refreshRuns();
+  if (focus) {
+    window.scrollTo(0, 0);
+    $("back-to-runs").focus({ preventScroll: true });
+  }
+  if (id) return refreshDetail();
 }
 export async function startRun() {
   if (
@@ -88,7 +96,8 @@ export async function startRun() {
     path: state.path,
     revision: state.revision,
   });
-  await openRun(result.run_id, result.state_dir);
+  changeDirectory(result.state_dir);
+  selectRun(result.run_id);
   observe(result.operation);
   return result;
 }
@@ -123,22 +132,40 @@ async function control(action) {
   }
 }
 export async function refreshRuns() {
-  if (view.busy) return;
-  view.busy = true;
-  const path = directory();
+  if (view.listRequest) return;
+  const request = api("/api/runs?" + query());
+  view.listRequest = request;
   try {
-    const list = await api("/api/runs?" + query());
-    if (path !== directory()) return;
+    const list = await request;
+    if (view.listRequest !== request) return;
     view.list = list;
-    renderList();
-    if (view.selected) await refreshDetail();
+    view.listReady = true;
+    view.listError = "";
+  } catch (error) {
+    if (view.listRequest !== request) return;
+    view.listError = error.message;
   } finally {
-    view.busy = false;
+    if (view.listRequest === request) view.listRequest = null;
   }
+  renderList();
+  if (view.selected) await refreshDetail();
 }
-async function refreshDetail() {
+function refreshDetail() {
   if (!view.selected) return;
+  if (view.detailRequest) return view.detailRequest;
   const token = view.token;
+  view.detailRequest = readDetail(token)
+    .catch((error) => {
+      if (token !== view.token) return;
+      view.detailError = error.message;
+      renderSelection();
+    })
+    .finally(() => {
+      if (token === view.token) view.detailRequest = null;
+    });
+  return view.detailRequest;
+}
+async function readDetail(token) {
   const detail = await api(url());
   if (token !== view.token) return;
   view.detail = detail;
@@ -158,13 +185,16 @@ async function refreshDetail() {
       view.artifacts = artifacts;
       view.artifactError = "";
     } catch (error) {
+      if (token !== view.token) return;
       view.artifactError =
         error.status === 404
           ? "结果尚未回收，可在任务封存后收集。"
           : error.message;
     }
   }
+  view.detailError = "";
   renderDetail();
+  renderSelection();
 }
 function renderList() {
   $("state-location").textContent = directory();
@@ -177,17 +207,67 @@ function renderList() {
           .toLowerCase()
           .includes(view.search.toLowerCase())),
   );
-  $("run-count").textContent = `${list.length} 次运行`;
-  if (!list.length) {
-    $("runs-list").replaceChildren(
+  const key = JSON.stringify([
+    view.listReady,
+    view.listError,
+    list,
+    view.search,
+    view.filter,
+  ]);
+  if (key === view.listKey) return;
+  view.listKey = key;
+  $("run-count").textContent = view.listReady ? `${list.length} 次运行` : "";
+  const root = $("runs-list");
+  if (view.listError) {
+    root.replaceChildren(
       empty(
-        "没有匹配的运行记录",
-        "可从配置页面开始测试，或更改历史记录的位置。",
+        "无法加载运行记录",
+        view.listError,
+        button("重试", refreshRuns, "button secondary"),
       ),
     );
     return;
   }
-  $("runs-list").replaceChildren(
+  if (!view.listReady) {
+    const message = node("p", "callout", "正在读取运行记录…");
+    message.setAttribute("role", "status");
+    root.replaceChildren(message);
+    return;
+  }
+  if (!list.length) {
+    const filtered = Boolean(view.search || view.filter);
+    root.replaceChildren(
+      empty(
+        filtered ? "没有匹配的运行记录" : "此目录暂无运行记录",
+        filtered
+          ? "可以清除筛选条件查看全部运行。"
+          : "从测试配置开始一次测试，或切换到已有记录的目录。",
+        filtered
+          ? button(
+              "清除筛选",
+              () => {
+                $("run-search").value = view.search = "";
+                $("run-filter").value = view.filter = "";
+                renderList();
+                $("run-search").focus();
+              },
+              "button secondary",
+            )
+          : button(
+              "前往测试配置",
+              () => {
+                $("tab-config").click();
+                $("tab-config").focus();
+              },
+              "button secondary",
+            ),
+      ),
+    );
+    return;
+  }
+  const focusedRun =
+    root.contains(document.activeElement) && document.activeElement.dataset.run;
+  root.replaceChildren(
     table(
       ["创建时间", "状态", "最近更新", "操作"],
       list.map((run) => {
@@ -196,19 +276,33 @@ function renderList() {
           node("strong", "", date(run.created)),
           node("div", "secondary mono", run.id),
         );
-        return [
-          title,
-          badge(run.status),
-          date(run.updated),
-          button(
-            view.selected === run.id ? "当前查看" : "查看详情",
-            () => selectRun(run.id),
-            "text-button",
-          ),
-        ];
+        const open = button(
+          "查看详情",
+          () => selectRun(run.id, true),
+          "text-button",
+        );
+        open.dataset.run = run.id;
+        return [title, badge(run.status), date(run.updated), open];
       }),
     ),
   );
+  if (focusedRun) focusRun(focusedRun);
+}
+function focusRun(id) {
+  const row = [...$("runs-list").querySelectorAll("[data-run]")].find(
+    (control) => control.dataset.run === id,
+  );
+  (row || $("run-search")).focus();
+}
+function renderSelection() {
+  const selected = Boolean(view.selected);
+  $("run-selection").hidden = !selected;
+  $("runs-overview").hidden = selected;
+  $("header-runs").hidden = selected || state.page !== "runs";
+  const status = $("run-detail-status");
+  status.hidden = !selected || (Boolean(view.detail) && !view.detailError);
+  status.textContent = view.detailError || "正在加载运行详情…";
+  status.classList.toggle("error", Boolean(view.detailError));
 }
 function outcomeHint(detail) {
   if (
@@ -267,7 +361,7 @@ function renderDetail() {
     : null;
   const oldEvents = root.querySelector("details[data-events]")?.open || false;
   const oldMatrix = root.querySelector("details[data-matrix]")?.open || false;
-  const panel = node("section", "panel");
+  const panel = node("section", "panel run-summary");
   const actions = node("div", "actions");
   const recoverable =
     !d.controller_active && ["pending", "running", "paused"].includes(d.status);
@@ -324,7 +418,7 @@ function renderDetail() {
   ).length;
   const blocked = d.jobs.filter((j) => j.status === "blocked").length;
   for (const [label, n] of [
-    ["已完成 / 总任务", `${complete} / ${d.jobs.length}`],
+    ["已结束 / 总任务", `${complete} / ${d.jobs.length}`],
     ["进行中", active],
     ["失败", failed],
     ["阻塞", blocked],
@@ -334,6 +428,11 @@ function renderDetail() {
     stats.append(box);
   }
   panel.append(stats);
+  const progress = node("progress", "run-progress");
+  progress.max = d.jobs.length || 1;
+  progress.value = complete;
+  progress.setAttribute("aria-label", "已完成任务");
+  panel.append(progress);
   const current = d.jobs.filter((j) =>
     [
       "preparing",
@@ -479,8 +578,11 @@ function artifactPanel() {
       );
       names.append(detail);
       r.append(names);
-      if (!/\.(html?|svg)$/i.test(item.path))
-        r.append(button("预览", () => preview(item), "text-button"));
+      if (!/\.(html?|svg)$/i.test(item.path)) {
+        const open = button("预览", () => preview(item), "text-button");
+        open.dataset.previewPath = item.path;
+        r.append(open);
+      }
       const a = node("a", "text-button", "下载");
       a.href = url("/artifact", { path: item.path });
       a.download = basename;
@@ -492,24 +594,45 @@ function artifactPanel() {
   return panel;
 }
 async function preview(item) {
-  const token = view.token;
+  const token = ++view.previewToken;
   const result = await api(
     url("/artifact", { path: item.path, preview: "true" }),
   );
-  if (token !== view.token) return;
+  if (token !== view.previewToken) return;
+  view.previewPath = item.path;
   $("preview-drawer").hidden = false;
   $("preview-title").textContent = item.path.split("/").at(-1);
   $("preview-path").textContent = item.path;
   $("artifact-preview").textContent =
     result.text +
     (result.truncated ? "\n\n仅预览前 256 KiB，请下载查看完整文件。" : "");
+  $("close-preview").focus({ preventScroll: true });
+}
+export function closePreview(restoreFocus = false) {
+  view.previewToken++;
+  $("preview-drawer").hidden = true;
+  if (restoreFocus) {
+    const trigger = [
+      ...$("run-detail").querySelectorAll("[data-preview-path]"),
+    ].find((element) => element.dataset.previewPath === view.previewPath);
+    (trigger || $("back-to-runs")).focus({ preventScroll: true });
+  }
+  view.previewPath = null;
 }
 export function renderRuns() {
+  renderSelection();
   renderList();
   renderDetail();
 }
 export async function initRuns() {
-  view.directory = state.info.state_dir;
+  view.directory =
+    sessionStorage.getItem("autobench-run-directory") || state.info.state_dir;
+  $("back-to-runs").addEventListener("click", () => {
+    const id = view.selected;
+    selectRun(null);
+    window.scrollTo(0, 0);
+    focusRun(id);
+  });
   $("run-search").addEventListener("input", () => {
     view.search = $("run-search").value;
     renderList();
@@ -524,18 +647,25 @@ export async function initRuns() {
         kind: "directory",
         title: "选择历史状态目录",
       });
-      if (path) await setDirectory(path);
+      if (path) {
+        changeDirectory(path);
+        selectRun(null);
+        await refreshRuns();
+      }
     }),
   );
   $("use-config-location").addEventListener("click", () =>
-    perform($("use-config-location"), () =>
-      setDirectory(
+    perform($("use-config-location"), () => {
+      changeDirectory(
         configStateDir(state.document, state.target, state.info.base_dir),
-      ),
-    ),
+      );
+      selectRun(null);
+      return refreshRuns();
+    }),
   );
-  $("close-preview").addEventListener("click", () => {
-    $("preview-drawer").hidden = true;
+  $("close-preview").addEventListener("click", () => closePreview(true));
+  $("preview-drawer").addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closePreview(true);
   });
   try {
     const saved = JSON.parse(
