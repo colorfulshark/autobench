@@ -27,6 +27,7 @@ const view = {
   after: 0,
   events: [],
   artifacts: [],
+  artifactKey: null,
   artifactError: "",
   artifactsAt: 0,
   listRequest: null,
@@ -72,6 +73,7 @@ function selectRun(id, focus = false) {
   view.after = 0;
   view.events = [];
   view.artifacts = [];
+  view.artifactKey = null;
   view.artifactError = "";
   view.artifactsAt = 0;
   view.token++;
@@ -333,21 +335,10 @@ function renderDetail() {
     return;
   }
   root.hidden = false;
-  const renderKey = JSON.stringify([
-    d,
-    view.after,
-    view.artifacts,
-    view.artifactError,
-    view.control,
-  ]);
-  if (view.renderKey === renderKey) return;
+  const renderKey = JSON.stringify([d, view.after, view.control]);
+  const artifactKey = JSON.stringify([view.artifacts, view.artifactError]);
+  if (view.renderKey === renderKey && view.artifactKey === artifactKey) return;
   view.renderKey = renderKey;
-  const openDetails = new Map(
-    [...root.querySelectorAll("details[data-keep]")].map((e) => [
-      e.dataset.keep,
-      e.open,
-    ]),
-  );
   const previousLog = root.querySelector(".event-log");
   const logScroll = previousLog
     ? {
@@ -521,75 +512,97 @@ function renderDetail() {
   panel.append(events);
   if (view.report?.isConnected) {
     root.firstElementChild.replaceWith(panel);
-    root.lastElementChild.replaceWith(artifactPanel());
+    if (view.artifactKey !== artifactKey) {
+      const previous = root.lastElementChild;
+      previous.replaceWith(artifactPanel(previous));
+    }
   } else {
     view.report = createReportPanel(url("/report"));
     root.replaceChildren(panel, view.report, artifactPanel());
   }
-  root.querySelectorAll("details[data-keep]").forEach((e) => {
-    if (openDetails.has(e.dataset.keep))
-      e.open = openDetails.get(e.dataset.keep);
-  });
+  view.artifactKey = artifactKey;
   const log = root.querySelector(".event-log");
   if (log) {
     log.scrollTop =
       !logScroll || logScroll.bottom ? log.scrollHeight : logScroll.top;
   }
 }
-function artifactCategory(path) {
-  if (/(^|\/)build\.(stdout|stderr)$/.test(path)) return "编译日志";
-  if (/(^|\/)run\.(stdout|stderr)$/.test(path)) return "运行日志";
-  if (path.includes("/results/") || /\.html?$/i.test(path)) return "测试报告";
-  if (/environment|toolchain/.test(path)) return "环境信息";
-  return "其他文件";
+function artifactRow(item, basename) {
+  const row = node("li", "artifact-row");
+  const names = node("div", "artifact-name");
+  const detail = node("details", "file-location");
+  detail.dataset.keep = "path-" + item.path;
+  detail.append(
+    node("summary", "", `${Math.ceil(item.size / 1024)} KiB · 文件位置`),
+    node("code", "", item.path),
+  );
+  names.append(node("strong", "", basename), detail);
+  row.append(names);
+  if (!/\.(html?|svg)$/i.test(item.path)) {
+    const open = button("预览", () => preview(item), "text-button");
+    open.dataset.previewPath = item.path;
+    row.append(open);
+  }
+  const download = node("a", "text-button", "下载");
+  download.href = url("/artifact", { path: item.path });
+  download.download = basename;
+  row.append(download);
+  return row;
 }
-function artifactPanel() {
+function renderArtifactTree(directory, parentPath = "", depth = 0) {
+  const list = node("ul", "artifact-tree");
+  list.setAttribute("role", "list");
+  for (const [name, child] of directory.directories) {
+    const path = parentPath ? `${parentPath}/${name}` : name;
+    const item = node("li");
+    const folder = node("details", "artifact-folder");
+    folder.dataset.keep = "folder-" + path;
+    folder.open = depth < 2;
+    folder.append(
+      node("summary", "", name),
+      renderArtifactTree(child, path, depth + 1),
+    );
+    item.append(folder);
+    list.append(item);
+  }
+  for (const { item, basename } of directory.files) {
+    list.append(artifactRow(item, basename));
+  }
+  return list;
+}
+function artifactPanel(previous) {
   const panel = node("section", "panel");
   panel.append(heading("结果与日志"));
   if (!view.artifacts.length) {
     panel.append(hint(view.artifactError || "暂无已回收文件。"));
     return panel;
   }
-  for (const category of [
-    "测试报告",
-    "运行日志",
-    "编译日志",
-    "环境信息",
-    "其他文件",
-  ]) {
-    const items = view.artifacts.filter(
-      (item) => artifactCategory(item.path) === category,
-    );
-    if (!items.length) continue;
-    const group = node("details", "artifact-group");
-    group.dataset.keep = "category-" + category;
-    group.open = ["测试报告", "运行日志"].includes(category);
-    group.append(node("summary", "", `${category} · ${items.length}`));
-    for (const item of items) {
-      const r = node("div", "artifact-row");
-      const names = node("div", "artifact-name");
-      const basename = item.path.split("/").at(-1);
-      names.append(node("strong", "", basename));
-      const detail = node("details", "file-location");
-      detail.dataset.keep = "path-" + item.path;
-      detail.append(
-        node("summary", "", `${Math.ceil(item.size / 1024)} KiB · 文件位置`),
-        node("code", "", item.path),
-      );
-      names.append(detail);
-      r.append(names);
-      if (!/\.(html?|svg)$/i.test(item.path)) {
-        const open = button("预览", () => preview(item), "text-button");
-        open.dataset.previewPath = item.path;
-        r.append(open);
+  const tree = { directories: new Map(), files: [] };
+  for (const item of view.artifacts) {
+    const parts = item.path.split("/");
+    const basename = parts.pop();
+    let directory = tree;
+    for (const name of parts) {
+      if (!directory.directories.has(name)) {
+        directory.directories.set(name, { directories: new Map(), files: [] });
       }
-      const a = node("a", "text-button", "下载");
-      a.href = url("/artifact", { path: item.path });
-      a.download = basename;
-      r.append(a);
-      group.append(r);
+      directory = directory.directories.get(name);
     }
-    panel.append(group);
+    directory.files.push({ item, basename });
+  }
+  panel.append(renderArtifactTree(tree));
+  if (previous) {
+    const openDetails = new Map(
+      [...previous.querySelectorAll("details[data-keep]")].map((detail) => [
+        detail.dataset.keep,
+        detail.open,
+      ]),
+    );
+    for (const detail of panel.querySelectorAll("details[data-keep]")) {
+      if (openDetails.has(detail.dataset.keep)) {
+        detail.open = openDetails.get(detail.dataset.keep);
+      }
+    }
   }
   return panel;
 }

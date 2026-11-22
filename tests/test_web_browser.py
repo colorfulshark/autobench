@@ -122,6 +122,19 @@ def ready(page, server, startup_path=None):
     complete_startup(page, startup_path)
 
 
+def artifact_folder(page, path):
+    return page.locator(f'.artifact-folder[data-keep="folder-{path}"]')
+
+
+def open_artifact_folder(page, path):
+    parts = PurePosixPath(path).parts
+    for depth in range(1, len(parts) + 1):
+        folder = artifact_folder(page, "/".join(parts[:depth]))
+        folder.wait_for()
+        if folder.get_attribute("open") is None:
+            folder.locator(":scope > summary").click()
+
+
 @pytest.mark.parametrize("width", [1440, 390])
 def test_startup_blocks_workbench_until_new_config_is_saved(browser_page, ui_server, width):
     page, server = browser_page, ui_server
@@ -872,6 +885,7 @@ def test_readable_run_names_and_nested_downloads(browser_page, ui_server, monkey
     row.get_by_text(run_id, exact=True).wait_for()
     row.get_by_role("button", name="查看详情", exact=True).click()
     page.locator("#run-detail").get_by_text(run_id, exact=True).wait_for()
+    open_artifact_folder(page, PurePosixPath(relative).parent)
     artifact = page.locator(".artifact-row").filter(has_text="run.stdout")
     preview = artifact.get_by_role("button", name="预览", exact=True)
     drawer = page.get_by_role("dialog", name="run.stdout")
@@ -913,6 +927,83 @@ def test_readable_run_names_and_nested_downloads(browser_page, ui_server, monkey
     assert downloaded_archive.value.suggested_filename == f"autobench-{run_id}.zip"
     with zipfile.ZipFile(downloaded_archive.value.path()) as zipped:
         assert zipped.read(f"{run_id}/{relative}") == result.read_bytes()
+
+
+@pytest.mark.parametrize("width", [1440, 1024, 768, 390, 320])
+def test_run_artifact_tree_groups_file_paths_and_keeps_expansion(browser_page, ui_server, width):
+    from autobench.storage import Store
+
+    page, server = browser_page, ui_server
+    store = Store(server.config.policy.state_dir)
+    run_id = store.create(server.config)
+    store.close()
+    root = server.config.policy.output_dir / run_id
+    benchmark = "server01/os1/ub"
+    first = f"{benchmark}/round-001"
+    second = f"{benchmark}/round-002"
+    report_name = "localhost.localdomain-" + "report" * 18 + ".html"
+    files = {
+        "summary.txt": "run summary",
+        f"{benchmark}/build.stdout": "shared build log",
+        f"{first}/run.stdout": "round one",
+        f"{first}/results/{report_name}": "<html></html>",
+        f"{second}/run.stdout": "round two",
+    }
+    for path, value in files.items():
+        destination = root / path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(value)
+    page.set_viewport_size({"width": width, "height": 844})
+    page.clock.install()
+    ready(page, server)
+    page.locator('[data-page="runs"]').click()
+    page.get_by_role("button", name="查看详情", exact=True).click()
+    root_tree = page.locator(".artifact-tree").first
+    root_file = root_tree.locator(":scope > .artifact-row")
+    root_filename = root_file.locator("strong").filter(has_text="summary.txt")
+    root_filename.wait_for()
+    folder_toggle = artifact_folder(page, "server01").locator(":scope > summary")
+    toggle_start = folder_toggle.evaluate(
+        "element => element.getBoundingClientRect().left + "
+        "parseFloat(getComputedStyle(element).paddingInlineStart)"
+    )
+    assert toggle_start == pytest.approx(root_filename.bounding_box()["x"], abs=1)
+    assert toggle_start == pytest.approx(
+        root_file.locator(".file-location > summary").bounding_box()["x"], abs=1
+    )
+    assert artifact_folder(page, benchmark).get_attribute("open") is None
+    open_artifact_folder(page, first)
+    first_folder = artifact_folder(page, first)
+    second_folder = artifact_folder(page, second)
+    common = artifact_folder(page, benchmark).locator(":scope > .artifact-tree > .artifact-row")
+    assert common.locator("strong").text_content() == "build.stdout"
+    first_log = first_folder.get_by_role("button", name="预览", exact=True)
+    second_log = second_folder.get_by_role("button", name="预览", exact=True)
+    assert first_log.is_visible() and second_log.is_hidden()
+    reports = artifact_folder(page, f"{first}/results")
+    reports.locator(":scope > summary").click()
+    assert reports.get_by_text(report_name, exact=True).is_visible()
+    assert reports.get_by_role("link", name="下载", exact=True).is_visible()
+    assert reports.get_by_role("button", name="预览", exact=True).count() == 0
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+    (root / first / "run.stderr").write_text("newly collected log")
+    page.clock.fast_forward(10000)
+    first_folder.get_by_text("run.stderr", exact=True).wait_for()
+    assert reports.get_by_text(report_name, exact=True).is_visible()
+    assert second_log.is_hidden()
+
+    second_folder.locator(":scope > summary").press("Enter")
+    second_log.click()
+    drawer = page.get_by_role("dialog", name="run.stdout")
+    drawer.wait_for()
+    assert drawer.locator("#artifact-preview").text_content() == "round two"
+    assert drawer.locator("#preview-path").text_content() == f"{second}/run.stdout"
+    page.keyboard.press("Escape")
+    drawer.wait_for(state="hidden")
+    with page.expect_download() as downloaded_file:
+        second_folder.get_by_role("link", name="下载", exact=True).click()
+    assert Path(downloaded_file.value.path()).read_text() == "round two"
 
 
 @pytest.mark.parametrize("remembered", ["inspect", "unknown"])
@@ -1299,7 +1390,10 @@ def test_wizard_password_connection_test_manual_system_files_save_run_and_cancel
     page.wait_for_function(
         "() => document.querySelector('#run-detail').textContent.includes('运行已取消')"
     )
-    page.get_by_text("run.stdout", exact=True).wait_for(timeout=20000)
+    machine = saved["machines"][0]
+    open_artifact_folder(
+        page, f'{machine["id"]}/{machine["systems"][0]["id"]}/{saved["benchmarks"][0]["id"]}/round-001'
+    )
     page.locator(".artifact-row").filter(has_text="run.stdout").get_by_role(
         "button", name="预览"
     ).click()

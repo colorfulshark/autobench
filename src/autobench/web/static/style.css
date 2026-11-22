@@ -1243,22 +1243,54 @@ td .secondary {
   line-height: 1.8;
   overflow-wrap: anywhere;
 }
-.artifact-group {
-  margin-top: 16px;
-  border-top: 1px solid var(--line);
-  padding-top: 14px;
+.artifact-tree {
+  --branch-gap: clamp(14px, 2vw, 20px);
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
-.artifact-group > summary {
-  font-size: 12px;
+.artifact-folder > summary {
+  padding-block: 8px;
+  padding-inline-end: 8px;
+  border-radius: var(--radius-control);
+  font-size: 13px;
+  font-weight: 500;
   cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.artifact-folder > summary::marker {
   color: var(--muted);
+}
+.artifact-folder > summary:hover {
+  background: var(--hover);
+}
+.artifact-folder > .artifact-tree {
+  margin-inline-start: 3px;
+  padding-inline-start: var(--branch-gap);
+  border-inline-start: 1px solid var(--line);
+}
+.artifact-folder > .artifact-tree > li {
+  position: relative;
+}
+.artifact-folder > .artifact-tree > li::before {
+  position: absolute;
+  inset-block-start: 18px;
+  inset-inline-start: calc(-1 * var(--branch-gap));
+  inline-size: var(--branch-gap);
+  border-block-start: 1px solid var(--line);
+  content: "";
+  pointer-events: none;
 }
 .artifact-row {
   display: flex;
   align-items: center;
   gap: 13px;
-  border-bottom: 1px solid var(--line);
-  padding: 13px 0;
+  border-bottom: 1px solid var(--rule);
+  padding: 8px 0;
+}
+.artifact-row > .text-button {
+  display: inline-flex;
+  align-items: center;
 }
 .artifact-name {
   flex: 1;
@@ -1781,6 +1813,13 @@ textarea:focus-visible {
   }
   .stat:nth-child(n + 3) {
     border-top: 1px solid var(--line);
+  }
+  .artifact-folder > summary {
+    min-height: 44px;
+    padding-block: 12px;
+  }
+  .artifact-folder > .artifact-tree > li::before {
+    inset-block-start: 21px;
   }
   .artifact-row {
     flex-wrap: wrap;
