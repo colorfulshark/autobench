@@ -1253,6 +1253,7 @@ export function renderConfig() {
           ),
     );
   if (state.step === 1) {
+    const content = node("div", "system-content");
     if (m) {
       if (state.system !== null && asList(m.systems)[state.system]) {
         container.append(
@@ -1264,12 +1265,15 @@ export function renderConfig() {
             },
             "text-button system-back",
           ),
+        );
+        content.append(
           systemEditor(m, state.machine, m.systems[state.system], state.system),
         );
       } else {
-        container.append(systemsBoard(m, state.machine));
+        content.append(systemsBoard(m, state.machine));
       }
-    } else container.append(empty("请先添加机器", "返回上一步填写连接信息。"));
+    } else content.append(empty("请先添加机器", "返回上一步填写连接信息。"));
+    container.append(content);
   }
   if (state.step === 2) {
     container.append(benchmarkTabs());

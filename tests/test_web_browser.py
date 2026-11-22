@@ -2392,6 +2392,42 @@ def test_five_steps_preserve_existing_config_and_fit_viewport(browser_page, ui_s
     assert page.locator(".wizard-step").count() == 5
 
 
+@pytest.mark.parametrize("width", [1440, 851, 850])
+def test_plan_aligns_with_each_wizard_card(browser_page, ui_server, width):
+    page = browser_page
+    page.set_viewport_size({"width": width, "height": 900})
+    ready(page, ui_server, startup_path=ui_server.existing)
+    card = page.locator("#config-body > .panel, .system-content > .panel")
+    plan = page.locator("#config-plan")
+
+    def assert_plan_alignment():
+        card_box = card.bounding_box()
+        plan_box = plan.bounding_box()
+        if width > 850:
+            assert plan_box["y"] == pytest.approx(card_box["y"], abs=1)
+            assert plan_box["x"] > card_box["x"] + card_box["width"]
+        else:
+            assert plan_box["x"] == pytest.approx(card_box["x"], abs=1)
+            assert plan_box["y"] >= card_box["y"] + card_box["height"]
+
+    assert_plan_alignment()
+    open_step(page, "选择系统")
+    assert_plan_alignment()
+    page.get_by_role("button", name="编辑系统配置 os1", exact=True).click()
+    assert_plan_alignment()
+    for step in ["设置测试", "运行设置"]:
+        open_step(page, step)
+        assert_plan_alignment()
+
+    open_step(page, "连接机器")
+    for _ in range(2):
+        page.get_by_role("button", name="＋ 添加机器", exact=True).click()
+    if width == 851:
+        tabs = page.locator(".machine-connection-tabs .machine-tab")
+        assert tabs.first.bounding_box()["y"] < tabs.last.bounding_box()["y"]
+    assert_plan_alignment()
+
+
 @pytest.mark.parametrize("width", [1440, 768, 390])
 def test_machine_drag_and_keyboard_sort_preserve_config(browser_page, ui_server, width):
     page, server = browser_page, ui_server
