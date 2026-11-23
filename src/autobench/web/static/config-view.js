@@ -590,14 +590,11 @@ function objectActions({
   onRemove,
   removeTitle = `删除${label} ${name}`,
 }) {
-  const inlineStyle = kind === "machine" ? "machine-tab-action" : "";
-  const removeStyle = inlineStyle || "object-corner object-remove";
-  const editStyle = inlineStyle || "object-corner object-edit";
-  const remove = button("", onRemove, `${removeStyle} ${kind}-remove`);
+  const remove = button("", onRemove, `object-tab-action ${kind}-remove`);
   remove.setAttribute("aria-label", `删除${label} ${name}`);
   remove.title = removeTitle;
   remove.append(icon("error"));
-  const edit = button("", null, `${editStyle} ${kind}-edit`);
+  const edit = button("", null, `object-tab-action ${kind}-edit`);
   edit.id = "edit-id-" + path.join("-");
   edit.setAttribute("aria-label", `修改${label}标识 ${name}`);
   edit.setAttribute("aria-haspopup", "dialog");
@@ -606,7 +603,7 @@ function objectActions({
   edit.addEventListener("click", () =>
     editObjectId(label, items, item, path, edit),
   );
-  return inlineStyle ? [edit, remove] : [remove, edit];
+  return [edit, remove];
 }
 function systemSection(title, symbol, content) {
   const section = node("section", "system-editor-section");
@@ -699,7 +696,7 @@ function systemEditor(machine, mi, system, si) {
       );
   }
   panel.append(
-    systemSection("基本信息", "tag", basic),
+    systemSection("基本信息", "layers", basic),
     systemSection("配置选项", "settings", options),
     systemSection("环境变量", "layers", environment),
   );
@@ -805,14 +802,15 @@ function systemsBoard(machine, index) {
   return board;
 }
 function benchmarkEditor(b, index) {
-  const panel = node("section", "panel");
+  const panel = node("section", "panel benchmark-panel");
   const path = ["benchmarks", index];
-  panel.append(heading("UnixBench 测试"));
+  panel.append(heading("UnixBench 测试", null, null, "chart"));
   panel.append(
     row(
       field("服务器源码包", [...path, "source_archive"], {
         file: true,
         required: true,
+        labelIcon: "layers",
         placeholder: "tar / tar.gz 文件路径",
         help: "相对路径以 YAML 所在目录为准。",
         width: "grow",
@@ -824,6 +822,8 @@ function benchmarkEditor(b, index) {
   warmup.dataset.fieldPath = JSON.stringify([...path, "warmup"]);
   const control = node("label", "warmup-setting");
   const title = node("label", "field-label", "预热");
+  title.classList.add("icon-heading");
+  title.prepend(icon("flame"));
   const input = node("input");
   input.type = "checkbox";
   input.checked = b.warmup ?? true;
@@ -857,6 +857,7 @@ function benchmarkEditor(b, index) {
       fallback: 1,
       type: "number",
       help: "仅保存正式结果。",
+      labelIcon: "settings",
     }),
     warmup,
     node("p", "hint rounds-note", "预热与每轮正式测试前，均等待系统稳定。"),
@@ -880,10 +881,11 @@ function benchmarkEditor(b, index) {
       (content) => {
         content.append(
           row(
-            field("测试标识", [...path, "id"]),
+            field("测试标识", [...path, "id"], { labelIcon: "tag" }),
             field("测试类型", [...path, "type"], {
               fallback: "unixbench",
               help: "当前支持 unixbench。",
+              labelIcon: "layers",
             }),
           ),
           row(
@@ -891,6 +893,7 @@ function benchmarkEditor(b, index) {
               reset: true,
               nullable: true,
               help: "默认自动识别唯一的 UnixBench 目录。",
+              labelIcon: "folder",
             }),
             field("源码 SHA256", [...path, "source_sha256"], {
               reset: true,
@@ -902,11 +905,13 @@ function benchmarkEditor(b, index) {
               fallback: 1800,
               type: "number",
               reset: true,
+              labelIcon: "timer",
             }),
             field("运行超时（秒）", [...path, "timeout"], {
               fallback: 21600,
               type: "number",
               reset: true,
+              labelIcon: "play",
             }),
           ),
           listEditor("编译参数", [...path, "make_args"]),
@@ -920,18 +925,21 @@ function benchmarkEditor(b, index) {
   return panel;
 }
 function policyEditor() {
-  const panel = node("section", "panel");
-  panel.append(heading("运行设置"));
+  const panel = node("section", "panel policy-panel");
+  panel.append(heading("运行设置", null, null, "layers"));
   panel.append(
     row(
       field("结果输出目录", ["policy", "output_dir"], {
         fallback: "results",
         file: "directory",
+        help: "用于保存测试结果、日志和中间文件。",
+        labelIcon: "folder",
       }),
       field("并行机器数", ["policy", "parallel_machines"], {
         fallback: 4,
         type: "number",
         width: "short-field",
+        labelIcon: "layers",
       }),
     ),
   );
@@ -953,25 +961,27 @@ function policyEditor() {
             file: "directory",
             reset: true,
             help: "恢复运行时须使用创建该运行时的状态目录。",
+            labelIcon: "folder",
           }),
         );
-        for (const [a, b] of [
-          ["poll_interval", "settle_seconds"],
-          ["reconnect_timeout", "boot_timeout"],
-          ["connect_timeout", null],
+        for (const settings of [
+          [
+            ["poll_interval", "轮询间隔", "timer", "检测任务和机器状态的间隔。"],
+            ["settle_seconds", "系统稳定等待", "hourglass", "预热及每轮正式测试前等待系统稳定的时间。"],
+          ],
+          [
+            ["reconnect_timeout", "重连超时", "timer", "断开连接后尝试重连的最长时间。"],
+            ["boot_timeout", "启动超时", "power", "等待机器完成启动的最长时间。"],
+          ],
+          [["connect_timeout", "SSH 连接超时", "code", "建立单次 SSH 连接的最长等待时间。"]],
         ]) {
-          const names = {
-            poll_interval: "轮询间隔",
-            settle_seconds: "系统稳定等待",
-            reconnect_timeout: "重连超时",
-            boot_timeout: "启动超时",
-            connect_timeout: "SSH 连接超时",
-          };
-          const fields = [a, b].filter(Boolean).map((key) =>
-            field(names[key] + "（秒）", ["policy", key], {
+          const fields = settings.map(([key, label, labelIcon, help]) =>
+            field(label + "（秒）", ["policy", key], {
               fallback: policyDefaults[key],
               type: "number",
               reset: true,
+              labelIcon,
+              help,
             }),
           );
           content.append(row(...fields));
@@ -981,6 +991,7 @@ function policyEditor() {
             fallback: 1,
             type: "number",
             help: "当前支持版本 1。",
+            labelIcon: "settings",
           }),
         );
       },
@@ -996,17 +1007,21 @@ export function review() {
     heading(
       "检查测试计划",
       "检查配置时不会连接或重启机器。开始测试后，调度器会按计划切换系统。",
+      null,
+      "calendar",
     ),
   );
   const stats = node("div", "stat-grid");
-  for (const [label, count] of [
-    ["机器", n.machines],
-    ["系统", n.systems],
-    ["测试", n.benchmarks],
-    ["任务", n.jobs],
+  for (const [label, count, symbol] of [
+    ["机器", n.machines, "monitor"],
+    ["系统", n.systems, "layers"],
+    ["测试", n.benchmarks, "flask"],
+    ["任务", n.jobs, "clipboard"],
   ]) {
     const item = node("div", "stat");
-    item.append(node("strong", "", count), node("span", "", label));
+    const figures = node("div", "stat-value");
+    figures.append(node("strong", "", count), node("span", "", label));
+    item.append(icon(symbol), figures);
     stats.append(item);
   }
   panel.append(stats);
@@ -1032,21 +1047,25 @@ export function review() {
   const wrap = node("div", "table-scroll");
   const plan = table(["机器 / 系统", "测试", "正式轮数", "预热"], rows);
   plan.classList.add("review-plan-table");
+  [...plan.tHead.rows[0].cells].forEach((cell, index) => {
+    cell.prepend(icon(["layers", "flask", "layers", "flame"][index]));
+  });
   wrap.append(plan);
   panel.append(
     rows.length ? wrap : hint("配置机器、系统和测试后，此处会列出测试任务。"),
   );
-  panel.append(
-    node(
-      "div",
-      "review-paths",
-      `结果目录 ${state.document.policy?.output_dir ?? "results"}`,
-    ),
+  const resultPath = node("div", "review-paths");
+  resultPath.append(
+    icon("folder"),
+    node("strong", "", "结果目录"),
+    node("span", "", state.document.policy?.output_dir ?? "results"),
   );
+  panel.append(resultPath);
   return panel;
 }
 function objectTabs({
   kind,
+  symbol,
   label,
   collection,
   items,
@@ -1058,7 +1077,7 @@ function objectTabs({
   onAdd,
   removeTitle = (name) => `删除${label} ${name}`,
 }) {
-  const e = node("div", `machine-tabs ${kind}-picker`);
+  const e = node("div", `object-tabs ${kind}-picker`);
   let draggedItem = null;
   const clearDropTargets = () => {
     e.querySelectorAll(".drop-target").forEach((tab) =>
@@ -1078,10 +1097,8 @@ function objectTabs({
     );
     b.classList.toggle("active", index === selected);
     b.setAttribute("aria-pressed", String(index === selected));
-    if (kind === "machine") {
-      b.prepend(icon("database"));
-      if (!editable) b.append(icon("lock", "icon system-machine-lock"));
-    }
+    b.prepend(icon(symbol));
+    if (!editable) b.append(icon("lock", "icon object-tab-lock"));
     tab.append(b);
     if (editable) {
       b.draggable = true;
@@ -1145,8 +1162,9 @@ function objectTabs({
   return e;
 }
 function machineTabs() {
-  const tabs = objectTabs({
+  return objectTabs({
     kind: "machine",
+    symbol: "database",
     label: "机器",
     collection: "machines",
     items: machines(),
@@ -1161,12 +1179,11 @@ function machineTabs() {
     onAdd: addMachine,
     removeTitle: (name) => `删除机器 ${name} 及其系统配置`,
   });
-  if (state.step === 0) tabs.classList.add("machine-connection-tabs");
-  return tabs;
 }
 function benchmarkTabs() {
   return objectTabs({
     kind: "benchmark",
+    symbol: "chart",
     label: "测试",
     collection: "benchmarks",
     items: benchmarks(),
@@ -1262,7 +1279,11 @@ export function renderConfig() {
     const content = node("div", "system-content");
     if (m) {
       if (state.system !== null && asList(m.systems)[state.system]) {
-        container.append(
+        const editor = systemEditor(
+          m, state.machine, m.systems[state.system], state.system,
+        );
+        const frame = node("div", "panel system-editor-frame");
+        frame.append(
           button(
             "← 返回系统列表",
             () => {
@@ -1271,10 +1292,9 @@ export function renderConfig() {
             },
             "text-button system-back",
           ),
+          editor,
         );
-        content.append(
-          systemEditor(m, state.machine, m.systems[state.system], state.system),
-        );
+        content.append(frame);
       } else {
         content.append(systemsBoard(m, state.machine));
       }

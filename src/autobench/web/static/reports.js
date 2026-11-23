@@ -1,5 +1,5 @@
 import { api } from "./state.js";
-import { node, button, hint, heading, table, date } from "./ui.js";
+import { node, button, hint, heading, icon, table, date } from "./ui.js";
 
 export function createReportPanel(reportUrl) {
   const root = node("section", "panel report-panel");
@@ -95,6 +95,7 @@ export function createReportPanel(reportUrl) {
       "button secondary",
     );
     refresh.id = "generate-report";
+    refresh.prepend(icon("file"));
     refresh.disabled = loading;
     actions.append(refresh);
     if (data && !loading && !error) {
@@ -108,6 +109,7 @@ export function createReportPanel(reportUrl) {
       "UnixBench 平均结果报告",
       "各正式轮次 INDEX 分数的算术平均值，预热不计入。",
       actions,
+      "chart",
     );
     root.replaceChildren(header);
     root.setAttribute("aria-busy", String(loading));

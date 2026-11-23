@@ -168,7 +168,7 @@ def test_startup_blocks_workbench_until_new_config_is_saved(browser_page, ui_ser
     page.reload()
     page.get_by_role("button", name="选择目录…", exact=True).click()
     page.get_by_role("dialog", name="选择配置保存目录").wait_for()
-    page.get_by_role("button", name="▱ new configs 目录").click()
+    page.get_by_role("button", name="new configs 目录", exact=True).click()
     page.locator("#file-confirm").click()
     assert directory.input_value() == str(folder)
     assert filename.input_value() == "autobench.yaml"
@@ -206,7 +206,7 @@ def test_startup_saves_existing_text_in_selected_directory(browser_page, ui_serv
     page.locator("#file-dialog").wait_for(state="hidden")
     assert page.locator("#startup-dialog").is_visible()
     page.locator("#startup-browse").click()
-    assert page.get_by_role("button", name="▤ existing.yaml 文件").is_disabled()
+    assert page.get_by_role("button", name="existing.yaml 文件", exact=True).is_disabled()
     page.locator("#file-confirm").click()
     assert page.locator("#startup-directory").input_value() == str(server.root)
     page.locator("#startup-filename").fill(server.existing.name)
@@ -223,7 +223,7 @@ def test_startup_opens_existing_yaml_from_file_picker(browser_page, ui_server):
     original = server.existing.read_bytes()
     page.goto(server.url)
     page.locator("#startup-open").click()
-    page.get_by_role("button", name="▤ existing.yaml 文件").click()
+    page.get_by_role("button", name="existing.yaml 文件", exact=True).click()
     with page.expect_request("**/api/config/save") as save:
         page.locator("#file-confirm").click()
     assert save.value.post_data_json["path"] == str(server.existing)
@@ -314,7 +314,7 @@ def load_existing(page, server):
     page.wait_for_function(
         "() => document.querySelector('#file-list').getAttribute('aria-busy') === 'false'"
     )
-    page.get_by_role("button", name="▤ existing.yaml 文件").click()
+    page.get_by_role("button", name="existing.yaml 文件", exact=True).click()
     page.locator("#file-confirm").click()
     page.wait_for_function("() => document.querySelector('#save-state').textContent === '已保存'")
 
@@ -354,7 +354,7 @@ def test_initial_directory_response_preserves_path_editing(browser_page, ui_serv
         "document.querySelector('#file-list').getAttribute('aria-busy') === 'false'",
         arg=str(destination),
     )
-    page.get_by_role("button", name="▤ existing.yaml 文件").click()
+    page.get_by_role("button", name="existing.yaml 文件", exact=True).click()
     page.locator("#file-confirm").click()
     page.wait_for_function("() => document.querySelector('#save-state').textContent === '已保存'")
 
@@ -371,7 +371,7 @@ def test_file_navigation_blocks_old_entries_and_ignores_stale_responses(
     with page.expect_request("**/api/files?*"):
         page.locator("#open-config").click()
     pending[0].continue_()
-    entry = page.get_by_role("button", name="▤ existing.yaml 文件")
+    entry = page.get_by_role("button", name="existing.yaml 文件", exact=True)
     entry.wait_for()
     entry.click()
     assert page.locator("#file-confirm").is_enabled()
@@ -1112,13 +1112,16 @@ def test_header_files_layout_and_independent_locations(browser_page, ui_server, 
             assert page.locator("#save-path").input_value() == str(saved_path)
             page.get_by_role("button", name="取消", exact=True).click()
         else:
-            assert header["y"] - top["y"] - top["height"] == pytest.approx(12, abs=1)
-            assert header["height"] <= 60
+            assert header["y"] > top["y"] + top["height"]
+            assert header["y"] + header["height"] < page.locator("#runs-overview").bounding_box()["y"]
             count = page.locator("#run-count").bounding_box()
             search = page.locator("#run-search").bounding_box()
-            assert count["y"] + count["height"] / 2 == pytest.approx(
-                search["y"] + search["height"] / 2, abs=1
-            )
+            if width <= 600:
+                assert count["y"] + count["height"] < search["y"]
+            else:
+                assert count["y"] + count["height"] / 2 == pytest.approx(
+                    search["y"] + search["height"] / 2, abs=1
+                )
         assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
         page.evaluate("window.scrollTo(0, 400)")
         assert page.locator(".topbar").bounding_box()["y"] == 0
@@ -1146,6 +1149,7 @@ def test_header_mode_switch_supports_keyboard_and_keeps_source(browser_page, ui_
     ready(page, ui_server)
     load_existing(page, ui_server)
     open_step(page, "运行设置")
+    header_height = page.locator(".topbar").bounding_box()["height"]
     toggle = page.locator("#mode-toggle")
     reveal_file_menu(page)
     assert page.locator("#header-config #mode-toggle").is_visible()
@@ -1171,7 +1175,7 @@ def test_header_mode_switch_supports_keyboard_and_keeps_source(browser_page, ui_
     assert "运行设置" in page.locator('.wizard-step[aria-current="step"]').text_content()
     set_editor_mode(page, "yaml")
     assert page.locator("#yaml-editor").input_value() == text
-    assert page.locator(".topbar").bounding_box()["height"] == 48
+    assert page.locator(".topbar").bounding_box()["height"] == header_height
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
 
@@ -1338,9 +1342,9 @@ def test_wizard_password_connection_test_manual_system_files_save_run_and_cancel
     alias = page.get_by_label("主机别名", exact=True).bounding_box()
     ignore = page.get_by_label("忽略主机密钥检查", exact=True).bounding_box()
     assert alias["x"] == pytest.approx(username["x"], abs=1)
-    assert ignore["x"] == pytest.approx(username["x"], abs=1)
+    assert ignore["x"] == pytest.approx(host["x"], abs=1)
     password = page.get_by_label("登录密码 *", exact=True).bounding_box()
-    assert ignore["y"] + ignore["height"] / 2 == password["y"] + password["height"] / 2
+    assert ignore["y"] > password["y"] + password["height"]
     known_hosts = page.get_by_label("主机密钥文件", exact=True).bounding_box()
     browse = page.locator(".machine-known-hosts .browse-button").bounding_box()
     assert known_hosts["y"] == alias["y"] == browse["y"]
@@ -1360,7 +1364,7 @@ def test_wizard_password_connection_test_manual_system_files_save_run_and_cancel
     page.locator('[data-field-path=\'["benchmarks",0,"source_archive"]\']').get_by_role(
         "button", name="选择…"
     ).click()
-    page.get_by_role("button", name="▤ source.tar.gz 文件").click()
+    page.get_by_role("button", name="source.tar.gz 文件", exact=True).click()
     page.locator("#file-confirm").click()
     click_primary(page)
     # The fourth step contains the full scheduling controls.
@@ -2619,9 +2623,31 @@ def test_plan_aligns_with_each_wizard_card(browser_page, ui_server, width):
     for _ in range(2):
         page.get_by_role("button", name="＋ 添加机器", exact=True).click()
     if width == 851:
-        tabs = page.locator(".machine-connection-tabs .machine-tab")
+        tabs = page.locator(".machine-picker .machine-tab")
         assert tabs.first.bounding_box()["y"] < tabs.last.bounding_box()["y"]
     assert_plan_alignment()
+
+
+@pytest.mark.parametrize("width", [851, 320])
+def test_picker_tiles_fit_names_without_overflowing_config(browser_page, ui_server, width):
+    page, server = browser_page, ui_server
+    document = yaml.safe_load(server.existing.read_text())
+    for key in ("machines", "benchmarks"):
+        item = document[key][0]
+        document[key] = [{**item, "id": name} for name in ("short", "W" * 64)]
+    server.existing.write_text(yaml.safe_dump(document))
+    page.set_viewport_size({"width": width, "height": 900})
+    ready(page, server, startup_path=server.existing)
+    page.evaluate("document.fonts.ready")
+
+    for step in ("连接机器", "选择系统", "设置测试"):
+        open_step(page, step)
+        tiles = page.locator(".object-tabs .object-tab")
+        short, long = [tile.bounding_box() for tile in tiles.all()]
+        form = page.locator("#config-body").bounding_box()
+        assert short["width"] < long["width"]
+        assert long["x"] + long["width"] <= form["x"] + form["width"]
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
 
 @pytest.mark.parametrize("width", [1440, 768, 390])
@@ -2793,6 +2819,7 @@ def test_machine_tab_renames_only_target_and_preserves_selection(browser_page, u
     load_existing(page, server)
     page.get_by_role("button", name="＋ 添加机器", exact=True).click()
     tabs = page.locator(".machine-picker .chip-button")
+    original_width = page.locator(".machine-tab").first.bounding_box()["width"]
     edit = page.get_by_role("button", name="修改机器标识 server01", exact=True)
     page.mouse.move(0, 0)
     assert edit.evaluate("e => getComputedStyle(e).opacity") == "1"
@@ -2819,6 +2846,7 @@ def test_machine_tab_renames_only_target_and_preserves_selection(browser_page, u
     value.press("Enter")
     assert dialog.is_hidden()
     assert tabs.all_text_contents() == ["bench-host_01", "server02"]
+    assert page.locator(".machine-tab").first.bounding_box()["width"] > original_width
     assert page.locator(".machine-picker .active").text_content() == "server02"
     assert page.get_by_role("button", name="修改机器标识 bench-host_01").evaluate(
         "e => e === document.activeElement"
@@ -2860,13 +2888,17 @@ def test_system_step_only_selects_existing_machines(browser_page, ui_server):
     connection_frames = machine_tiles.evaluate_all(tile_frames)
     open_step(page, "选择系统")
     assert database_icon.evaluate(icon_size) == connection_size
-    assert machine_tiles.evaluate_all(tile_frames) == connection_frames
+    for system_frame, connection_frame in zip(
+        machine_tiles.evaluate_all(tile_frames), connection_frames, strict=True
+    ):
+        assert system_frame[0] < connection_frame[0]
+        assert system_frame[1:] == connection_frame[1:]
     assert tabs.all_text_contents() == ["server01", "server03", "server02"]
     assert page.get_by_role("button", name="＋ 添加机器", exact=True).count() == 0
     assert page.get_by_role("button", name="上移机器", exact=True).count() == 0
     assert page.get_by_role("button", name="下移机器", exact=True).count() == 0
     assert page.get_by_role("button", name="移除此机器", exact=True).count() == 0
-    assert page.locator(".machine-picker :is(.machine-tab-action, [draggable=true])").count() == 0
+    assert page.locator(".machine-picker :is(.object-tab-action, [draggable=true])").count() == 0
     tabs.nth(0).hover()
     tabs.nth(0).click()
     assert page.locator(".machine-picker .active").text_content() == "server01"
@@ -2910,20 +2942,21 @@ def load_benchmark_picker(page, server, count=3):
     return items
 
 
-def test_benchmark_corner_renames_without_changing_selection(browser_page, ui_server):
+def test_benchmark_tab_renames_without_changing_selection(browser_page, ui_server):
     page, server = browser_page, ui_server
     original = load_benchmark_picker(page, server)
-    page.locator(".benchmark-tab").first.hover()
+    last_tab = page.locator(".benchmark-tab").last
+    original_width = last_tab.bounding_box()["width"]
     page.get_by_role("button", name="修改测试标识 unixbench01", exact=True).click()
     dialog = page.get_by_role("dialog", name="修改测试标识")
     value = dialog.get_by_label("测试标识", exact=True)
     value.fill("unixbench-new")
     dialog.get_by_role("button", name="取消", exact=True).click()
     assert page.locator(".benchmark-picker .chip-button").first.text_content() == "unixbench01"
-    page.locator(".benchmark-tab").last.hover()
     page.get_by_role("button", name="修改测试标识 unixbench03", exact=True).click()
     value.fill("unixbench-new")
     dialog.get_by_role("button", name="确定", exact=True).click()
+    assert last_tab.bounding_box()["width"] > original_width
     assert page.locator(".benchmark-picker .active").text_content() == "unixbench01"
     set_editor_mode(page, "yaml")
     saved = yaml.safe_load(page.locator("#yaml-editor").input_value())
@@ -3001,16 +3034,14 @@ def test_benchmark_drag_across_rows_and_cancel(browser_page, ui_server, width):
 
 
 @pytest.mark.parametrize("selected,removed", [(2, 0), (0, 2), (1, 1), (0, 0), (2, 2)])
-def test_benchmark_corner_delete_preserves_selection(browser_page, ui_server, selected, removed):
+def test_benchmark_tab_delete_preserves_selection(browser_page, ui_server, selected, removed):
     page, server = browser_page, ui_server
     original = load_benchmark_picker(page, server)
     tabs = page.locator(".benchmark-picker .chip-button")
     tabs.nth(selected).click()
     dialogs = []
     page.on("dialog", lambda dialog: dialogs.append(dialog.type))
-    corner = page.get_by_role("button", name=f"删除测试 {original[removed]['id']}", exact=True)
-    page.locator(".benchmark-tab").nth(removed).hover()
-    corner.click()
+    page.get_by_role("button", name=f"删除测试 {original[removed]['id']}", exact=True).click()
     remaining = original[:removed] + original[removed + 1 :]
     expected = original[selected] if selected != removed else remaining[max(0, removed - 1)]
     assert tabs.all_text_contents() == [b["id"] for b in remaining]
@@ -3032,22 +3063,25 @@ def test_benchmark_corner_delete_preserves_selection(browser_page, ui_server, se
     assert page.locator(".benchmark-picker .active").text_content() == expected["id"]
 
 
-def test_benchmark_corner_keyboard_delete_and_empty_state(browser_page, ui_server):
+def test_benchmark_tab_inline_keyboard_delete_and_empty_state(browser_page, ui_server):
     page, server = browser_page, ui_server
     load_benchmark_picker(page, server, count=2)
     tabs = page.locator(".benchmark-picker .chip-button")
     tabs.nth(1).click()
     page.mouse.move(0, 0)
-    corner = page.get_by_role("button", name="删除测试 unixbench01", exact=True)
-    assert corner.evaluate("e => getComputedStyle(e).opacity") == "0"
-    page.locator(".benchmark-tab").nth(0).hover()
-    assert corner.evaluate("e => getComputedStyle(e).opacity") == "1"
-    page.mouse.move(0, 0)
-    tabs.nth(0).focus()
-    assert corner.evaluate("e => getComputedStyle(e).opacity") == "1"
-    tabs.nth(0).press("Tab")
-    assert corner.evaluate("e => e === document.activeElement")
-    corner.press("Enter")
+    first = tabs.first
+    edit = page.get_by_role("button", name="修改测试标识 unixbench01", exact=True)
+    remove = page.get_by_role("button", name="删除测试 unixbench01", exact=True)
+    chip_box, edit_box, remove_box = first.bounding_box(), edit.bounding_box(), remove.bounding_box()
+    assert chip_box["x"] + chip_box["width"] <= edit_box["x"]
+    assert edit_box["x"] + edit_box["width"] <= remove_box["x"]
+    assert edit_box["y"] == remove_box["y"]
+    assert remove.evaluate("e => getComputedStyle(e).opacity") == "1"
+    first.press("Tab")
+    assert edit.evaluate("e => e === document.activeElement")
+    page.keyboard.press("Tab")
+    assert remove.evaluate("e => e === document.activeElement")
+    remove.press("Enter")
     assert page.locator(".benchmark-picker .active").text_content() == "unixbench02"
     assert page.locator("#input-benchmarks-0-source_archive").input_value() == "archive-2.tar.gz"
     page.get_by_role("button", name="删除测试 unixbench02", exact=True).press("Space")

@@ -3,6 +3,7 @@ import { configStateDir, statusLabels } from "./model.js";
 import {
   $,
   node,
+  icon,
   button,
   hint,
   badge,
@@ -218,7 +219,7 @@ function renderList() {
   ]);
   if (key === view.listKey) return;
   view.listKey = key;
-  $("run-count").textContent = view.listReady ? `${list.length} 次运行` : "";
+  $("run-count").textContent = view.listReady ? `${list.length} 次运行` : "运行记录";
   const root = $("runs-list");
   if (view.listError) {
     root.replaceChildren(
@@ -376,11 +377,12 @@ function renderDetail() {
   if (view.control)
     actions.querySelectorAll("button").forEach((b) => (b.disabled = true));
   const archive = node("a", "button secondary", "下载完整归档");
+  archive.prepend(icon("download"));
   archive.href = url("/archive");
   archive.download = "";
   if (view.artifacts.length) actions.append(archive);
   panel.append(
-    heading("运行详情", `${d.run_id}`, badge(d.status)),
+    heading("运行详情", d.run_id, badge(d.status), "layers"),
     node(
       "p",
       "callout " + (["failed", "paused"].includes(d.status) ? "warning" : ""),
@@ -388,6 +390,7 @@ function renderDetail() {
     ),
     actions,
   );
+  panel.querySelector(".callout").prepend(icon("info"));
   const stats = node("div", "stat-grid");
   const complete = d.jobs.filter((j) =>
     ["succeeded", "failed", "cancelled", "interrupted"].includes(j.status),
@@ -408,14 +411,16 @@ function renderDetail() {
     ["failed", "interrupted"].includes(j.status),
   ).length;
   const blocked = d.jobs.filter((j) => j.status === "blocked").length;
-  for (const [label, n] of [
-    ["已结束 / 总任务", `${complete} / ${d.jobs.length}`],
-    ["进行中", active],
-    ["失败", failed],
-    ["阻塞", blocked],
+  for (const [label, n, symbol] of [
+    ["已结束 / 总任务", `${complete} / ${d.jobs.length}`, "circleCheck"],
+    ["进行中", active, "timer"],
+    ["失败", failed, "circleError"],
+    ["阻塞", blocked, "pause"],
   ]) {
     const box = node("div", "stat");
-    box.append(node("strong", "", n), node("span", "", label));
+    const figures = node("div", "stat-value");
+    figures.append(node("strong", "", n), node("span", "", label));
+    box.append(icon(symbol), figures);
     stats.append(box);
   }
   panel.append(stats);
@@ -455,24 +460,26 @@ function renderDetail() {
     panel.append(
       node("p", "run-reason", `${job.machine} / ${job.system}：${job.reason}`),
     );
-  panel.append(
-    button(
-      "复制完整运行 ID",
-      async () => {
-        try {
-          await navigator.clipboard.writeText(d.run_id);
-          show("运行 ID 已复制。");
-        } catch {
-          window.prompt("复制运行 ID", d.run_id);
-        }
-      },
-      "text-button",
-    ),
+  const copyId = button(
+    "复制完整运行 ID",
+    async () => {
+      try {
+        await navigator.clipboard.writeText(d.run_id);
+        show("运行 ID 已复制。");
+      } catch {
+        window.prompt("复制运行 ID", d.run_id);
+      }
+    },
+    "text-button run-copy-id",
   );
+  copyId.prepend(icon("copy"));
+  panel.append(copyId);
   const matrix = node("details", "technical");
   matrix.dataset.matrix = "true";
   matrix.open = oldMatrix;
-  matrix.append(node("summary", "", "按机器与系统查看任务"));
+  const matrixTitle = node("summary", "", "按机器与系统查看任务");
+  matrixTitle.prepend(icon("server"));
+  matrix.append(matrixTitle);
   const grouped = new Map();
   for (const job of d.jobs) {
     const key = job.machine + " / " + job.system;
@@ -499,8 +506,10 @@ function renderDetail() {
   const events = node("details", "technical");
   events.dataset.events = "true";
   events.open = oldEvents;
+  const eventsTitle = node("summary", "", "原始运行事件");
+  eventsTitle.prepend(icon("code"));
   events.append(
-    node("summary", "", "原始运行事件"),
+    eventsTitle,
     node(
       "pre",
       "event-log",
@@ -537,13 +546,15 @@ function artifactRow(item, basename) {
     node("code", "", item.path),
   );
   names.append(node("strong", "", basename), detail);
-  row.append(names);
+  row.append(icon("file"), names);
   if (!/\.(html?|svg)$/i.test(item.path)) {
     const open = button("预览", () => preview(item), "text-button");
+    open.prepend(icon("eye"));
     open.dataset.previewPath = item.path;
     row.append(open);
   }
   const download = node("a", "text-button", "下载");
+  download.prepend(icon("download"));
   download.href = url("/artifact", { path: item.path });
   download.download = basename;
   row.append(download);
@@ -558,8 +569,10 @@ function renderArtifactTree(directory, parentPath = "", depth = 0) {
     const folder = node("details", "artifact-folder");
     folder.dataset.keep = "folder-" + path;
     folder.open = depth < 2;
+    const label = node("summary", "", name);
+    label.prepend(icon(depth === 0 ? "server" : depth < 3 ? "cube" : "folder"));
     folder.append(
-      node("summary", "", name),
+      label,
       renderArtifactTree(child, path, depth + 1),
     );
     item.append(folder);
@@ -571,8 +584,8 @@ function renderArtifactTree(directory, parentPath = "", depth = 0) {
   return list;
 }
 function artifactPanel(previous) {
-  const panel = node("section", "panel");
-  panel.append(heading("结果与日志"));
+  const panel = node("section", "panel artifact-panel");
+  panel.append(heading("结果与日志", null, null, "layers"));
   if (!view.artifacts.length) {
     panel.append(hint(view.artifactError || "暂无已回收文件。"));
     return panel;

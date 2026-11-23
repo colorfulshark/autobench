@@ -7,7 +7,7 @@
       name="description"
       content="配置 Linux 性能测试，查看运行进度和 UnixBench 报告。"
     />
-    <meta name="theme-color" content="#142637" />
+    <meta name="theme-color" content="#e6effc" />
     <meta name="page-type" content="software" />
     <meta name="site-kind" content="software" />
     <title>AutoBench · 测试工作台</title>
@@ -31,7 +31,7 @@
               aria-hidden="true"
             >
               <path
-                d="m3 19 7-14h3l7 14M6 14h10M16 6h5v5M21 6l-7 7"
+                d="m3 20 7.4-15a1 1 0 0 1 1.8 0L20 20M6.5 13.5c3 2 7 2 14-1"
               /></svg></span
           ><span>AutoBench</span></a
         >
@@ -60,7 +60,7 @@
               stroke-linejoin="round"
               aria-hidden="true"
             >
-              <path d="M4 5h16v14H4zM4 10h16M9 10v9" />
+              <path d="M3 5h18v16H3zM7 3v4m10-4v4M3 10h18m-13 4h2m4 0h2m-8 3h2" />
             </svg>
             测试配置
           </button>
@@ -83,7 +83,7 @@
               stroke-linejoin="round"
               aria-hidden="true"
             >
-              <path d="M5 4h14v16H5zM8 8h8M8 12h5M8 16h7" />
+              <path d="M5 3h9l5 5v13H5zM14 3v5h5M8 11h8m-8 4h8m-8 3h4" />
             </svg>
             运行记录
           </button>
@@ -288,9 +288,14 @@
             aria-label="历史记录位置"
             hidden
           >
-            <div>
-              <span class="history-label">历史记录位置</span>
-              <code id="state-location"></code>
+            <div class="history-path">
+              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" aria-hidden="true">
+                <path d="M3 5h6l3 3h9v12H3z" />
+              </svg>
+              <div>
+                <span class="history-label">历史记录位置</span>
+                <code id="state-location"></code>
+              </div>
             </div>
             <div class="actions">
               <button
@@ -313,14 +318,26 @@
           </div>
           <div id="runs-overview" class="panel">
             <div class="section-heading">
-              <span id="run-count" class="secondary"></span>
+              <h2 class="icon-heading runs-heading">
+                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" aria-hidden="true">
+                  <path d="m2 7 10-5 10 5-10 5Zm0 5 10 5 10-5M2 17l10 5 10-5" />
+                </svg>
+                <span id="run-count"></span>
+              </h2>
               <div class="run-filters">
-                <input
-                  id="run-search"
-                  aria-label="搜索运行"
-                  placeholder="搜索运行"
-                  title="按运行 ID 或日期搜索"
-                /><select id="run-filter" aria-label="筛选运行状态">
+                <div class="run-search-control">
+                  <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true">
+                    <circle cx="10.5" cy="10.5" r="6.5" />
+                    <path d="m15.5 15.5 5 5" />
+                  </svg>
+                  <input
+                    id="run-search"
+                    aria-label="搜索运行"
+                    placeholder="搜索运行"
+                    title="按运行 ID 或日期搜索"
+                  />
+                </div>
+                <select id="run-filter" aria-label="筛选运行状态">
                   <option value="">全部状态</option>
                   <option value="running">运行中</option>
                   <option value="paused">已暂停</option>
@@ -471,27 +488,37 @@
         </div>
       </form>
     </dialog>
-    <dialog id="file-dialog" class="file-dialog" aria-labelledby="file-title">
-      <h2 id="file-title">选择服务器文件</h2>
-      <p id="file-help" class="hint"></p>
+    <dialog
+      id="file-dialog"
+      class="file-dialog"
+      aria-labelledby="file-title"
+      aria-describedby="file-help"
+    >
+      <header class="file-dialog-heading">
+        <span id="file-dialog-symbol" aria-hidden="true"></span>
+        <div>
+          <h2 id="file-title">选择服务器文件</h2>
+          <p id="file-help" class="hint">这里浏览的是运行 AutoBench Web 的服务器文件。</p>
+        </div>
+      </header>
       <div class="file-path-bar">
-        <button id="file-up" class="icon-button" aria-label="上级目录">↑</button
-        ><input
+        <button id="file-up" class="icon-button" type="button" aria-label="上级目录"></button>
+        <input
           id="file-path"
           aria-label="服务器目录路径"
           spellcheck="false"
-        /><button id="file-go" class="button secondary">前往</button>
+        />
+        <button id="file-go" class="button secondary" type="button">前往</button>
       </div>
-      <label class="toggle file-hidden-toggle"
-        ><input type="checkbox" id="file-hidden" /><span
-          >显示隐藏文件</span
-        ></label
-      >
+      <label class="toggle file-hidden-toggle">
+        <input type="checkbox" id="file-hidden" />
+        <span>显示隐藏文件</span>
+      </label>
       <div id="file-list" class="file-list"></div>
-      <p id="file-selected" class="secondary mono"></p>
+      <p id="file-selected" class="secondary" role="status"></p>
       <div class="dialog-actions">
-        <button id="file-cancel" class="button secondary">取消</button
-        ><button id="file-confirm" class="button primary">选择</button>
+        <button id="file-cancel" class="button secondary" type="button">取消</button>
+        <button id="file-confirm" class="button primary" type="button">选择</button>
       </div>
     </dialog>
   </body>

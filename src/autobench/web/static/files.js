@@ -1,6 +1,6 @@
 import { state, api } from "./state.js";
 import { pathParent } from "./model.js";
-import { $, node, button, hint } from "./ui.js";
+import { $, node, button, hint, icon } from "./ui.js";
 let resolver = null,
   kind = "file",
   selected = null,
@@ -13,7 +13,6 @@ export function chooseFile(initial = "", options = {}) {
   $("file-title").textContent =
     options.title ||
     (kind === "directory" ? "选择服务器目录" : "选择服务器文件");
-  $("file-help").textContent = "这里浏览的是运行 AutoBench Web 的服务器文件。";
   $("file-hidden").checked = initial.includes("/.");
   $("file-selected").textContent = "";
   $("file-confirm").disabled = kind !== "directory";
@@ -66,22 +65,20 @@ function render() {
   );
   $("file-list").replaceChildren(
     ...entries.map((entry) => {
+      const isDirectory = entry.type === "directory";
       const e = button(
         "",
-        () =>
-          entry.type === "directory"
-            ? navigate(entry.path)
-            : select(entry.path),
+        () => isDirectory ? navigate(entry.path) : select(entry.path),
         "file-entry",
       );
       e.append(
-        node("span", "file-icon", entry.type === "directory" ? "▱" : "▤"),
-        node("span", "", entry.name),
-        node("span", "file-type", entry.type === "directory" ? "目录" : "文件"),
+        icon(isDirectory ? "folder" : "file"),
+        node("span", "file-entry-name", entry.name),
+        node("span", "file-type", isDirectory ? "目录" : "文件"),
       );
-      e.classList.toggle("selected", entry.path === selected);
-      if (entry.type === "file") {
+      if (!isDirectory) {
         e.disabled = kind === "directory";
+        if (!e.disabled) e.setAttribute("aria-pressed", String(entry.path === selected));
         e.addEventListener("dblclick", () => finish(entry.path));
       }
       return e;
@@ -103,6 +100,8 @@ function finish(path) {
   if (resolve) resolve(path);
 }
 export function initFiles() {
+  $("file-dialog-symbol").append(icon("folder"));
+  $("file-up").append(icon("arrowUp"));
   $("file-up").addEventListener("click", () => {
     if (current)
       navigate(current.parent).catch((error) => {

@@ -1,6 +1,6 @@
 import { state, change } from "./state.js";
 import { at } from "./model.js";
-import { node, button, hint, toggle, friendlyError } from "./ui.js";
+import { node, button, hint, icon, toggle, friendlyError } from "./ui.js";
 
 const groups = [
   [
@@ -41,7 +41,9 @@ const groups = [
 export function unixbenchTestsEditor(path) {
   const box = node("section", "unixbench-tests field");
   box.dataset.fieldPath = JSON.stringify(path);
-  box.append(node("h3", "", "测试项"));
+  const title = node("h3", "icon-heading", "测试项");
+  title.prepend(icon("clipboard"));
+  box.append(title);
   box.append(
     hint("未指定测试名时运行标准 index 测试。shell 包含 shell1、shell8、shell16。"),
     hint("运行参数 args 中已有的测试名仍会参与运行；此处选择会追加到 args 之后。清空选择仅清空 tests。"),
@@ -59,9 +61,12 @@ export function unixbenchTestsEditor(path) {
     return box;
   }
   const selected = raw || [];
-  for (const [title, options] of groups) {
-    const group = node("fieldset", "unixbench-test-group");
-    group.append(node("legend", "", title));
+  for (const [label, options] of groups) {
+    const group = node(
+      "fieldset",
+      label === "测试组合" ? "unixbench-test-group unixbench-combinations" : "unixbench-test-group",
+    );
+    group.append(node("legend", "", label));
     const grid = node("div", "unixbench-test-grid");
     for (const [name, description] of options)
       grid.append(
@@ -97,6 +102,8 @@ export function unixbenchTestsEditor(path) {
   const custom = node("div", "field");
   const id = "custom-" + path.join("-");
   const label = node("label", "field-label", "其他测试名");
+  label.classList.add("icon-heading");
+  label.prepend(icon("edit"));
   label.htmlFor = id;
   const controls = node("div", "input-controls");
   const input = node("input");

@@ -1,6 +1,6 @@
 import { configSteps, state } from "./state.js";
 import { counts } from "./model.js";
-import { $, node, button } from "./ui.js";
+import { $, node, button, icon } from "./ui.js";
 import { canGoToStep, goToStep } from "./config-view.js";
 
 // The preview and the review screen use the same configuration and task count.
@@ -18,7 +18,12 @@ export function renderPlan(stepLimit) {
   );
   const totals = counts(state.document);
   const header = node("div", "plan-heading");
-  header.append(node("h2", "", "测试计划"));
+  const title = node("h2", "icon-heading", "测试计划");
+  title.prepend(icon("calendar"));
+  const layers = node("span", "plan-layers");
+  layers.setAttribute("aria-hidden", "true");
+  layers.append(node("span"), node("span"), node("span"));
+  header.append(title, layers);
   const figure = node("div", "plan-figure");
   figure.append(
     node("strong", "", totals.jobs.toLocaleString("zh-CN")),
@@ -38,11 +43,13 @@ export function renderPlan(stepLimit) {
     return edit;
   };
   const sequence = node("section", "plan-section");
-  sequence.append(node("h3", "", "系统执行顺序"));
+  const sequenceTitle = node("h3", "icon-heading", "系统执行顺序");
+  sequenceTitle.prepend(icon("network"));
+  sequence.append(sequenceTitle);
   for (const machine of machines.slice(0, 3)) {
     const group = node("div", "plan-machine");
     group.append(
-      node("div", "plan-machine-name mono", machine.id || "未命名机器"),
+      node("div", "plan-machine-name", machine.id || "未命名机器"),
     );
     const systems = list(machine.systems).filter(
       (value) => value && typeof value === "object",
@@ -78,7 +85,9 @@ export function renderPlan(stepLimit) {
   root.append(sequence);
 
   const tests = node("section", "plan-section");
-  tests.append(node("h3", "", "测试与轮次"));
+  const testsTitle = node("h3", "icon-heading", "测试与轮次");
+  testsTitle.prepend(icon("layers"));
+  tests.append(testsTitle);
   for (const benchmark of benchmarks.slice(0, 3)) {
     const item = node("div", "plan-test");
     const rounds = node("span", "plan-test-rounds");
@@ -87,7 +96,7 @@ export function renderPlan(stepLimit) {
       node("span", "", "轮正式"),
     );
     item.append(
-      node("span", "plan-test-name mono", benchmark.id || "未命名测试"),
+      node("span", "plan-test-name", benchmark.id || "未命名测试"),
       rounds,
       node(
         "span",
