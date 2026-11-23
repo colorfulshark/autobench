@@ -1,5 +1,5 @@
 import { state, api, waitOperation, show } from "./state.js";
-import { configStateDir, statusLabels } from "./model.js";
+import { configStateDir, statusLabels, statusTone } from "./model.js";
 import {
   $,
   node,
@@ -64,6 +64,13 @@ function changeDirectory(path) {
     view.listRequest = null;
   }
   view.directory = path;
+}
+function jobReason(job) {
+  if (!["paused", "cancel_pending", "failed", "interrupted", "cancelled", "blocked"]
+    .includes(job.phase || job.status)) return "";
+  if (job.reason === "target boot verified after lost reboot acknowledgement; ready to resume")
+    return "已确认目标系统启动，等待恢复控制。";
+  return job.reason || "";
 }
 function selectRun(id, focus = false) {
   view.selected = id;
@@ -456,10 +463,13 @@ function renderDetail() {
           .join("；"),
       ),
     );
-  for (const job of d.jobs.filter((j) => j.reason))
-    panel.append(
-      node("p", "run-reason", `${job.machine} / ${job.system}：${job.reason}`),
-    );
+  for (const job of d.jobs) {
+    const reason = jobReason(job);
+    if (!reason) continue;
+    const line = node("p", "run-reason", `${job.machine} / ${job.system}：${reason}`);
+    line.dataset.tone = statusTone(job.phase || job.status);
+    panel.append(line);
+  }
   const copyId = button(
     "复制完整运行 ID",
     async () => {
@@ -496,7 +506,7 @@ function renderDetail() {
           j.benchmark,
           j.repetition,
           badge(j.status),
-          j.reason || "—",
+          jobReason(j) || "—",
         ]),
       ),
     );

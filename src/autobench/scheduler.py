@@ -213,7 +213,7 @@ class Scheduler:
                         "existing GRUB boot selection conflicts with automatic switching"
                     )
                 switch["grub"] = grub
-            self.store.update(job["id"], "switching", switch=switch)
+            self.store.update(job["id"], "switching", switch=switch, reason=None)
             destination = f"Boot{system.boot_entry}"
             if grub:
                 destination += f" / GRUB {grub['id']}"
@@ -273,7 +273,7 @@ class Scheduler:
         outcome = remote["state"]["status"]
         if outcome not in TERMINAL:
             raise RemoteError("invalid terminal remote state")
-        self.store.update(job["id"], "collecting", remote_outcome=outcome)
+        self.store.update(job["id"], "collecting", remote_outcome=outcome, reason=None)
         directory = job["details"]["remote_dir"]
         self.event(job, f"collecting artifacts ({outcome})")
         common = remote["common"]
@@ -353,6 +353,7 @@ class Scheduler:
                 remote_dir=directory,
                 manifest=manifest,
                 remote_boot_id=probe["boot_id"],
+                reason=None,
                 **boot_details,
             )
             details = self.store.job(job["id"])["details"]
@@ -373,7 +374,7 @@ class Scheduler:
                 )
             if probe["boot_id"] != details["manifest"]["boot_id"]:
                 raise RemoteError("boot ID changed before submission; job will not be replayed")
-            self.store.update(job["id"], "preparing")
+            self.store.update(job["id"], "preparing", reason=None)
             await self.retry(
                 lambda: client.stage(
                     job["id"], directory, details["manifest"], benchmark.source_archive
@@ -404,7 +405,7 @@ class Scheduler:
                     phase = "preparing"
                 previous = self.store.job(job["id"])["status"]
                 ready_at = status.get("state", {}).get("ready_at")
-                self.store.update(job["id"], phase, ready_at=ready_at)
+                self.store.update(job["id"], phase, ready_at=ready_at, reason=None)
                 if phase != previous:
                     suffix = (
                         f" ({max(0, ready_at - time.time()):.0f}s remaining)"

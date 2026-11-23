@@ -1776,6 +1776,44 @@ def test_warmup_status_shows_as_active_in_run_details(browser_page, ui_server):
     detail.get_by_text("预热中", exact=True).wait_for()
 
 
+def test_run_detail_hides_resolved_reason_and_translates_recovery(browser_page, ui_server):
+    from playwright.sync_api import expect
+
+    from autobench.storage import Store
+
+    page, server = browser_page, ui_server
+    english = "target boot verified after lost reboot acknowledgement; ready to resume"
+    translated = "已确认目标系统启动，等待恢复控制。"
+    store = Store(server.config.policy.state_dir)
+    try:
+        run_id = store.create(server.config)
+        recovering, failed = store.jobs(run_id)
+        store.set_run_status(run_id, "paused")
+        store.update(recovering["id"], "paused", reason=english)
+        store.update(failed["id"], "failed", reason="实际失败")
+        ready(page, server)
+        page.locator('[data-page="runs"]').click()
+        page.get_by_role("button", name="查看详情", exact=True).click()
+        detail = page.locator("#run-detail")
+        notice = detail.locator(".run-reason").filter(has_text=translated)
+        expect(notice).to_have_attribute("data-tone", "warning")
+        failure = detail.locator(".run-reason").filter(has_text="实际失败")
+        expect(failure).to_have_attribute("data-tone", "error")
+        detail.get_by_text("按机器与系统查看任务", exact=True).click()
+        expect(detail.get_by_text(translated, exact=True)).to_be_visible()
+        expect(detail.get_by_text(english)).to_have_count(0)
+
+        # An older controller can retain the previous reason while the job runs.
+        store.update(recovering["id"], "running")
+        store.set_run_status(run_id, "running")
+        expect(detail.locator(".current-stage")).to_contain_text("运行中")
+        expect(notice).to_have_count(0)
+        expect(detail.get_by_text(translated, exact=True)).to_have_count(0)
+        expect(failure).to_be_visible()
+    finally:
+        store.close()
+
+
 def test_unixbench_tests_selection_save_reload_and_yaml_roundtrip(browser_page, ui_server):
     page, server = browser_page, ui_server
     raw = server.config.model_dump(mode="json")

@@ -1684,7 +1684,8 @@ dialog input {
 }
 .pill[data-tone="warning"],
 .callout.warning,
-#notice[data-tone="warning"] {
+#notice[data-tone="warning"],
+.run-reason[data-tone="warning"] {
   background: var(--warning-bg);
   color: var(--warning-ink);
   border-color: var(--line);
@@ -1693,7 +1694,7 @@ dialog input {
 .callout.error,
 #notice[data-tone="error"],
 .error-summary,
-.run-reason {
+.run-reason[data-tone="error"] {
   background: var(--error-bg);
   color: var(--error-ink);
   border-color: var(--line);

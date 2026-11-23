@@ -306,6 +306,21 @@ async def test_controller_crash_then_frozen_resume(config):
     store.close()
 
 
+async def test_resume_clears_previous_reason_when_job_is_submitted(config):
+    store, run_id, world = setup(config)
+    try:
+        job_id = store.jobs(run_id)[0]["id"]
+        store.update(job_id, "paused", reason="ready to resume")
+        world.crash_controller = True
+
+        assert await execute(store, run_id, world) == "paused"
+        job = store.job(job_id)
+        assert job["status"] == "submitting"
+        assert job["details"].get("reason") is None
+    finally:
+        store.close()
+
+
 async def test_readable_archives_separate_machines_systems_benchmarks_and_rounds(config):
     other_machine = config.machines[0].model_copy(deep=True, update={"id": "host2"})
     config.machines.append(other_machine)
