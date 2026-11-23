@@ -19,6 +19,7 @@ import {
 import { pathParent } from "./model.js";
 import { $, node, button, perform, friendlyError, jsonDetails } from "./ui.js";
 import { initFiles, chooseFile } from "./files.js";
+import { initSelectMenus } from "./select-menus.js";
 import {
   renderConfig,
   updateConfig,
@@ -498,6 +499,7 @@ async function boot() {
   $("version").textContent = `v${state.info.version}`;
   $("server-address").textContent = window.location.host;
   initFiles();
+  initSelectMenus();
   const rememberedPath = sessionStorage.getItem("autobench-config-path");
   if (restoring) {
     await restoreProject(rememberedPath || state.info.config);

@@ -1438,6 +1438,53 @@ def test_auth_switches_are_exclusive_and_show_only_selected_controls(browser_pag
     )
 
 
+@pytest.mark.parametrize("fallback", [False, True])
+@pytest.mark.parametrize("width", [1440, 390])
+def test_auth_menu_expands_below_select(browser_page, ui_server, fallback, width):
+    from playwright.sync_api import expect
+
+    page = browser_page
+    page.set_viewport_size({"width": width, "height": 844})
+    if fallback:
+        page.add_init_script("""const supports = CSS.supports.bind(CSS);
+            CSS.supports = (...args) => args[0] !== 'appearance: base-select' && supports(...args);
+        """)
+
+        def disable_native_picker(route):
+            response = route.fetch()
+            route.fulfill(
+                response=response,
+                body=response.text() + "\nselect, select::picker(select) { appearance: none; }",
+            )
+
+        page.route("**/static/style.css", disable_native_picker)
+    ready(page, ui_server)
+    auth = page.get_by_label("认证方式", exact=True)
+    if fallback:
+        option = page.locator("#select-menu").get_by_text("密钥认证", exact=True)
+    else:
+        option = auth.locator('option[value="key"]')
+
+    auth.click()
+    expect(option).to_be_visible()
+    trigger, row = auth.bounding_box(), option.bounding_box()
+    assert row["y"] >= trigger["y"] + trigger["height"]
+    expect(auth).to_have_css("outline-style", "none")
+    option.click()
+    expect(auth).to_have_value("key")
+
+    auth.press("Space")
+    expect(option).to_be_visible()
+    page.keyboard.press("Escape")
+    expect(option).to_be_hidden()
+    expect(auth).to_have_value("key")
+
+    auth.press("Space")
+    page.keyboard.press("Home")
+    page.keyboard.press("Enter")
+    expect(auth).to_have_value("password")
+
+
 def test_existing_advanced_values_and_comments_survive_viewing_and_editing(browser_page, ui_server):
     page, server = browser_page, ui_server
     raw = server.config.model_dump(mode="json")
@@ -1710,6 +1757,8 @@ def test_warmup_defaults_toggle_save_reload_and_yaml_roundtrip(browser_page, ui_
 
 @pytest.mark.parametrize("width", [1440, 768, 390])
 def test_warmup_alignment_and_pointer_vs_keyboard_focus(browser_page, ui_server, width):
+    from playwright.sync_api import expect
+
     page, server = browser_page, ui_server
     page.set_viewport_size({"width": width, "height": 1000})
     ready(page, server)
@@ -1740,10 +1789,17 @@ def test_warmup_alignment_and_pointer_vs_keyboard_focus(browser_page, ui_server,
     assert control.evaluate("input => getComputedStyle(input).outlineStyle") == "none"
 
     formal.focus()
+    expect(formal).to_have_css("border-width", "1px")
+    expect(formal).to_have_css("border-color", "rgb(127, 168, 237)")
+    expect(formal).to_have_css("border-radius", "10px")
+    expect(formal).to_have_css("box-shadow", "rgba(59, 130, 246, 0.1) 0px 0px 0px 3px")
+    expect(formal).to_have_css("outline-style", "none")
     page.keyboard.press("Tab")
     assert control.evaluate("input => document.activeElement === input")
     assert control.evaluate("input => input.matches(':focus-visible')")
-    assert control.evaluate("input => getComputedStyle(input).outlineWidth") == "2px"
+    expect(control).to_have_css("outline-style", "none")
+    expect(formal).to_have_css("border-color", "rgb(196, 211, 232)")
+    expect(formal).to_have_css("box-shadow", "none")
     control.press("Space")
     assert not control.is_checked()
     assert control.evaluate("input => input.matches(':focus-visible')")
@@ -1776,12 +1832,14 @@ def test_warmup_status_shows_as_active_in_run_details(browser_page, ui_server):
     detail.get_by_text("预热中", exact=True).wait_for()
 
 
-def test_run_detail_hides_resolved_reason_and_translates_recovery(browser_page, ui_server):
+@pytest.mark.parametrize("width", [1440, 390])
+def test_run_detail_hides_resolved_reason_and_translates_recovery(browser_page, ui_server, width):
     from playwright.sync_api import expect
 
     from autobench.storage import Store
 
     page, server = browser_page, ui_server
+    page.set_viewport_size({"width": width, "height": 900})
     english = "target boot verified after lost reboot acknowledgement; ready to resume"
     translated = "已确认目标系统启动，等待恢复控制。"
     store = Store(server.config.policy.state_dir)
@@ -1799,9 +1857,26 @@ def test_run_detail_hides_resolved_reason_and_translates_recovery(browser_page, 
         expect(notice).to_have_attribute("data-tone", "warning")
         failure = detail.locator(".run-reason").filter(has_text="实际失败")
         expect(failure).to_have_attribute("data-tone", "error")
-        detail.get_by_text("按机器与系统查看任务", exact=True).click()
+        summary = detail.get_by_text("按机器与系统查看任务", exact=True)
+        detail.get_by_role("button", name="复制完整运行 ID").press("Tab")
+        expect(summary).to_be_focused()
+        expect(summary).to_have_css("outline-style", "none")
+        summary.press("Enter")
         expect(detail.get_by_text(translated, exact=True)).to_be_visible()
         expect(detail.get_by_text(english)).to_have_count(0)
+        headers = detail.locator(".run-task-table thead tr")
+        scroller = detail.get_by_role("region", name="机器与系统任务表")
+        if width == 390:
+            summary.press("Tab")
+            expect(scroller).to_be_focused()
+            scroller.evaluate("el => el.scrollLeft = el.scrollWidth")
+            assert scroller.evaluate("el => el.scrollLeft") > 0
+        column_edges = """rows => rows.map(row => [...row.cells].map(cell => {
+            const { left, right } = cell.getBoundingClientRect();
+            return [left, right];
+        }))"""
+        first, second = headers.evaluate_all(column_edges)
+        assert first == second
 
         # An older controller can retain the previous reason while the job runs.
         store.update(recovering["id"], "running")
@@ -1809,7 +1884,11 @@ def test_run_detail_hides_resolved_reason_and_translates_recovery(browser_page, 
         expect(detail.locator(".current-stage")).to_contain_text("运行中")
         expect(notice).to_have_count(0)
         expect(detail.get_by_text(translated, exact=True)).to_have_count(0)
+        if width == 390:
+            expect(scroller).to_be_focused()
         expect(failure).to_be_visible()
+        assert headers.evaluate_all(column_edges) == [first, first]
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     finally:
         store.close()
 
@@ -3327,6 +3406,15 @@ def test_report_preview_baseline_download_and_layout(browser_page, ui_server, wi
     page.locator("#download-report").wait_for()
     assert len(calls) == 1
     panel = page.locator(".report-panel")
+    assert panel.locator(".report-table table").evaluate_all("""tables => tables.every(table => {
+        const columns = [...table.tHead.rows[0].cells];
+        return [...table.tBodies[0].rows].every(row => [...row.cells].every((cell, index) => {
+            const heading = columns[index].getBoundingClientRect();
+            const data = cell.getBoundingClientRect();
+            return Math.abs(heading.left - data.left) <= 1 &&
+                Math.abs(heading.right - data.right) <= 1;
+        }));
+    })""")
     assert "400.00 (0.00%)" in panel.text_content()
     assert "480.00 (+20.00%)" in panel.text_content()
     assert "有效轮次 3/3" in panel.text_content()

@@ -36,7 +36,11 @@
   --muted: #4c6386;
   --line: #cbdcf5;
   --rule: #d4e1f5;
-  --control: #9cb7df;
+  --control: #b6b9bf;
+  --input-border: #c4d3e8;
+  --input-focus-border: #7fa8ed;
+  --input-focus-shadow: 0 0 0 3px rgb(59 130 246 / 10%);
+  --control-emphasis: #4a4e55;
   --primary: #0863e7;
   --primary-hover: #075acb;
   --accent: #065de4;
@@ -144,7 +148,7 @@ button {
 }
 button:disabled {
   color: var(--muted);
-  border-color: var(--line);
+  border-color: var(--control);
   background: var(--raised);
   cursor: not-allowed;
 }
@@ -163,20 +167,117 @@ select {
 }
 select {
   appearance: none;
+  cursor: pointer;
   padding-inline-end: 34px;
   background: #f9fbff9e url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 18 18'%3E%3Cpath d='m4 7 5 5 5-5' fill='none' stroke='%230c1d3c' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") right 10px center / 18px no-repeat;
+}
+select:disabled {
+  cursor: not-allowed;
+}
+.select-menu {
+  position: fixed;
+  z-index: 40;
+  overflow: auto;
+  max-height: 280px;
+  padding: 4px;
+  border: 1px solid var(--control);
+  border-radius: var(--radius-control);
+  background: var(--panel);
+  color: var(--ink);
+  box-shadow: var(--overlay-shadow);
+}
+.select-menu-option {
+  padding: 8px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.select-menu-option[aria-disabled="true"] {
+  cursor: not-allowed;
+  color: var(--muted);
+}
+.select-menu-option[aria-selected="true"] {
+  font-weight: 600;
+}
+.select-menu-option.active,
+.select-menu-option:hover:not([aria-disabled="true"]) {
+  background: var(--active);
+}
+@supports (appearance: base-select) and selector(select::picker(select)) {
+  select,
+  select::picker(select) {
+    appearance: base-select;
+  }
+  select {
+    padding-inline-end: 13px;
+    background-image: none;
+  }
+  select::picker-icon {
+    color: var(--ink);
+  }
+  select::picker(select) {
+    inset: auto;
+    position-area: block-end span-inline-end;
+    position-try-order: normal;
+    position-try-fallbacks: flip-block;
+    inline-size: anchor-size(width);
+    margin-block: 4px;
+    overflow: auto;
+    max-height: min(280px, 45dvh);
+    padding: 4px;
+    border: 1px solid var(--control);
+    border-radius: var(--radius-control);
+    background: var(--panel);
+    color: var(--ink);
+    box-shadow: var(--overlay-shadow);
+  }
+  select option {
+    min-height: 36px;
+    padding: 7px 9px;
+    border-radius: 5px;
+    cursor: pointer;
+    overflow-wrap: anywhere;
+  }
+  select option:checked {
+    font-weight: 600;
+  }
+  select option:is(:hover, :focus):enabled {
+    background: var(--active);
+  }
+  select option:disabled {
+    cursor: not-allowed;
+  }
 }
 .required-mark {
   color: var(--danger);
 }
-input:focus,
-select:focus,
-textarea:focus,
-button:focus-visible,
-a:focus-visible,
-summary:focus-visible {
-  outline: 2px solid var(--muted);
-  outline-offset: 2px;
+:focus {
+  outline: none;
+}
+:is(
+  input:not([type]),
+  input:is(
+    [type="text"],
+    [type="number"],
+    [type="password"],
+    [type="search"],
+    [type="email"],
+    [type="tel"],
+    [type="url"]
+  ),
+  textarea
+) {
+  border-color: var(--input-border);
+  border-radius: 10px;
+
+  &:focus {
+    border-color: var(--input-focus-border);
+    box-shadow: var(--input-focus-shadow);
+  }
+}
+:is(input, textarea)[aria-invalid="true"]:not(:focus),
+select[aria-invalid="true"] {
+  border-color: var(--danger);
 }
 input[type="checkbox"] {
   accent-color: var(--primary);
@@ -213,19 +314,18 @@ button.busy {
 }
 .primary {
   background: var(--primary-fill);
-  border-color: var(--primary);
+  border-color: transparent;
   color: white;
   box-shadow: var(--control-shadow);
 }
 .primary:enabled:hover {
   background: var(--primary-hover);
-  border-color: var(--primary-hover);
 }
 .button.secondary:hover,
 .icon-button:hover,
 .browse-button:hover {
   background: var(--raised);
-  border-color: var(--muted);
+  border-color: var(--control-emphasis);
 }
 .browse-button,
 .button.secondary {
@@ -477,13 +577,6 @@ pre {
   min-height: 42px;
   cursor: pointer;
 }
-.warmup-setting input:focus:not(:focus-visible) {
-  outline: none;
-}
-.warmup-setting input:focus-visible {
-  outline: 2px solid var(--muted);
-  outline-offset: 3px;
-}
 .warmup-setting input {
   appearance: none;
   position: relative;
@@ -623,7 +716,7 @@ pre {
   padding: 6px 8px;
   font-size: var(--font-size-caption);
   background: var(--panel);
-  border: 1px solid var(--rule);
+  border: 1px solid var(--control);
   border-radius: var(--radius-control);
   overflow-wrap: anywhere;
 }
@@ -631,7 +724,6 @@ pre {
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
 }
 .unixbench-test-grid .toggle:has(input:checked) {
-  border-color: var(--control);
   background: var(--active);
 }
 .unixbench-test-grid input {
@@ -843,9 +935,6 @@ pre {
   font-size: 12px;
   white-space: normal;
 }
-.field.invalid input {
-  border-color: var(--muted);
-}
 .field-error {
   font-size: 12px;
   color: var(--ink);
@@ -866,10 +955,9 @@ pre {
 }
 #yaml-editor {
   display: block;
-  width: 100%;
+  width: calc(100% - 16px);
   min-height: 510px;
-  border: 0;
-  border-radius: 0;
+  margin: 8px 8px 0;
   background: var(--code-bg);
   color: var(--code-ink);
   white-space: pre;
@@ -1442,7 +1530,6 @@ dialog input {
 .file-path-bar :is(button, input),
 .file-dialog .dialog-actions > .button {
   min-height: 44px;
-  border-radius: var(--radius-control);
 }
 .file-path-bar .button,
 .file-dialog .dialog-actions > .button {
@@ -1451,7 +1538,6 @@ dialog input {
 .file-path-bar .icon-button {
   flex: none;
   width: 44px;
-  border-color: #8ab7fb;
   background: var(--button-fill);
   color: var(--accent);
   box-shadow: var(--control-shadow);
@@ -1488,7 +1574,7 @@ dialog input {
   width: 100%;
   min-height: 44px;
   border: 0;
-  border-bottom: 1px solid var(--rule);
+  border-bottom: 1px solid var(--control);
   background: #edf4fd8c;
   padding: 8px 12px;
   text-align: left;
@@ -1500,9 +1586,6 @@ dialog input {
   background: var(--active);
   color: var(--accent);
   font-weight: 600;
-}
-.file-entry:focus-visible {
-  outline-offset: -3px;
 }
 .file-entry-name {
   flex: 1;
@@ -1708,9 +1791,6 @@ dialog input {
 .error-summary strong {
   color: var(--danger);
 }
-.field.invalid input {
-  border-color: var(--danger);
-}
 .callout {
   background: var(--raised);
   color: var(--muted);
@@ -1735,15 +1815,6 @@ textarea {
     border-color 120ms ease,
     color 120ms ease;
 }
-button:focus-visible,
-a:focus-visible,
-summary:focus-visible,
-input:focus-visible,
-select:focus-visible,
-textarea:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 3px;
-}
 .skip-link {
   position: fixed;
   left: 16px;
@@ -1756,10 +1827,6 @@ textarea:focus-visible {
 }
 .skip-link:focus {
   top: 12px;
-}
-#main-content:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
 }
 .status-icon .icon {
   width: 18px;
@@ -2071,7 +2138,7 @@ textarea:focus-visible {
   flex: none;
   width: 35px;
   height: 35px;
-  border: 1px solid #3f8ef5;
+  border: 1px solid transparent;
   border-radius: 8px;
   background: linear-gradient(155deg, #5a9cf7, #0876ef 76%, #055bdb);
   color: white;
@@ -2107,17 +2174,12 @@ textarea:focus-visible {
 }
 .page-tab.active {
   font-weight: 600;
-  box-shadow: inset 0 -2px var(--accent);
 }
 .page-tab .icon {
   color: var(--nav-text);
 }
 .page-tab.active .icon {
   color: inherit;
-}
-.topbar
-  :is(.brand, .page-tab, #step-picker, #file-menu > summary):focus-visible {
-  outline-color: var(--accent);
 }
 .service-info {
   margin-left: auto;
@@ -2159,7 +2221,7 @@ main {
   gap: 7px;
   min-height: 36px;
   padding: 0 13px;
-  border: 1px solid #a2c3f3;
+  border: 1px solid var(--control);
   border-radius: var(--radius-control);
   background: var(--button-fill);
   color: var(--ink);
@@ -2390,7 +2452,7 @@ main {
 .wizard-step[aria-current="step"] .step-number {
   background: var(--primary-fill);
   color: white;
-  border-color: var(--primary);
+  border-color: transparent;
 }
 .wizard-step:disabled,
 .plan-section .text-button:disabled {
@@ -2401,7 +2463,6 @@ main {
   text-decoration: none;
 }
 .wizard-step:disabled .step-number {
-  border-color: var(--line);
   background: var(--ground);
 }
 .config-layout {
@@ -2791,13 +2852,12 @@ main {
   width: max-content;
   gap: 2px;
   padding-inline-end: 3px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--control);
   border-radius: 10px;
   background: #f8faff;
 }
 .object-tab:has(> .chip-button:is(.active, :hover)) {
   background: var(--active);
-  border-color: #b6cefa;
   color: var(--accent);
 }
 .object-tab > .chip-button {
@@ -2826,7 +2886,7 @@ main {
   cursor: grabbing;
 }
 .object-tab.drop-target {
-  outline: 2px solid var(--ink);
+  outline: 2px solid var(--control-emphasis);
   outline-offset: 2px;
 }
 .object-tab > .chip-button > .icon {
@@ -2857,9 +2917,6 @@ main {
 .object-tab-action .icon {
   width: 16px;
   height: 16px;
-}
-.object-tab :is(.chip-button, .object-tab-action):focus-visible {
-  outline-offset: -2px;
 }
 @media (pointer: coarse) {
   .object-tabs {
@@ -2917,17 +2974,11 @@ main {
 .machine-connection :is(input:not([type="checkbox"]), select, .browse-button) {
   min-width: 0;
   min-height: var(--connection-control-height);
-  border-color: var(--control);
-  border-radius: 9px;
   background-color: #f8fbff99;
   color: var(--ink);
 }
-.machine-connection .field.invalid input {
-  border-color: var(--danger);
-}
 .machine-connection .browse-button:enabled:hover {
   background-color: var(--active);
-  border-color: var(--accent);
 }
 .machine-connection .hint {
   margin: 7px 0 0;
@@ -2996,14 +3047,12 @@ main {
   min-height: var(--connection-control-height);
   margin-top: var(--connection-label-space);
   padding-inline: clamp(10px, 1.4cqw, 23px);
-  border-color: #81a7ff;
   border-radius: 10px;
   background: var(--button-fill);
   color: var(--accent);
   box-shadow: var(--control-shadow);
 }
 .machine-connection .connection-test-button:enabled:hover {
-  border-color: var(--accent);
   background: #dae8ff;
 }
 .machine-connection .connection-test-button:disabled {
@@ -3199,7 +3248,7 @@ main {
   align-items: center;
   min-height: var(--system-control-height);
   padding-inline: clamp(10px, 1.8cqw, 24px);
-  border: 1px solid #b6c8ff;
+  border: 1px solid var(--control);
   border-radius: 10px;
   background: var(--button-fill);
   color: var(--accent);
@@ -3208,14 +3257,10 @@ main {
   text-decoration: none;
 }
 .system-card :is(.system-action, .env-actions > .text-button):enabled:hover {
-  border-color: #849fea;
   background: #dfeaff;
 }
 .system-card .system-action:disabled {
   opacity: 0.62;
-}
-.system-step :is(button, summary):focus-visible {
-  outline-color: var(--accent);
 }
 .systems-board {
   min-block-size: clamp(315px, 49cqw, 460px);
@@ -3281,10 +3326,8 @@ main {
 }
 .system-row-action:enabled:hover {
   background: var(--active);
-  border-color: var(--accent);
 }
 .system-row-action:disabled {
-  border-color: var(--line);
   background: #f8faff;
   color: #6b7d9d;
 }
@@ -3353,16 +3396,8 @@ main {
 }
 .system-editor :is(input:not([type="checkbox"]), select, textarea) {
   min-height: var(--system-control-height);
-  border-color: var(--control);
-  border-radius: 8px;
   background-color: #f8fbff99;
   color: var(--ink);
-}
-.system-editor .field.invalid :is(input, select) {
-  border-color: var(--danger);
-}
-.system-editor :is(input, select, textarea):focus {
-  outline-color: var(--accent);
 }
 .system-editor input::placeholder {
   color: #4e638d;
@@ -3723,6 +3758,27 @@ main {
 }
 .run-summary .technical > summary .icon {
   margin-inline: 6px 9px;
+}
+.run-task-tables .group-label {
+  overflow-wrap: anywhere;
+}
+.run-task-table {
+  min-width: 480px;
+  table-layout: fixed;
+}
+.run-task-table th:first-child {
+  width: 30%;
+}
+.run-task-table th:nth-child(2) {
+  width: 4.5rem;
+}
+.run-task-table th:nth-child(3) {
+  width: 7rem;
+}
+.run-task-table td {
+  vertical-align: top;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .run-copy-id {
   display: inline-flex;

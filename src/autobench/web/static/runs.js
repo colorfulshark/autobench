@@ -360,6 +360,11 @@ function renderDetail() {
     : null;
   const oldEvents = root.querySelector("details[data-events]")?.open || false;
   const oldMatrix = root.querySelector("details[data-matrix]")?.open || false;
+  const previousTaskTables = view.report?.isConnected
+    ? root.querySelector(".run-task-tables")
+    : null;
+  const taskScrollLeft = previousTaskTables?.scrollLeft ?? 0;
+  const taskTablesFocused = previousTaskTables === document.activeElement;
   const panel = node("section", "panel run-summary");
   const actions = node("div", "actions");
   const recoverable =
@@ -496,22 +501,24 @@ function renderDetail() {
     if (!grouped.has(key)) grouped.set(key, []);
     grouped.get(key).push(job);
   }
+  const taskTables = node("div", "table-scroll run-task-tables");
+  taskTables.tabIndex = 0;
+  taskTables.setAttribute("role", "region");
+  taskTables.setAttribute("aria-label", "机器与系统任务表");
   for (const [name, jobs] of grouped) {
-    matrix.append(node("h3", "group-label", name));
-    const scroll = node("div", "table-scroll");
-    scroll.append(
-      table(
-        ["测试", "次数", "状态", "说明"],
-        jobs.map((j) => [
-          j.benchmark,
-          j.repetition,
-          badge(j.status),
-          jobReason(j) || "—",
-        ]),
-      ),
+    const taskTable = table(
+      ["测试", "次数", "状态", "说明"],
+      jobs.map((j) => [
+        j.benchmark,
+        j.repetition,
+        badge(j.status),
+        jobReason(j) || "—",
+      ]),
     );
-    matrix.append(scroll);
+    taskTable.classList.add("run-task-table");
+    taskTables.append(node("h3", "group-label", name), taskTable);
   }
+  if (grouped.size) matrix.append(taskTables);
   panel.append(matrix);
   const events = node("details", "technical");
   events.dataset.events = "true";
@@ -539,6 +546,8 @@ function renderDetail() {
     view.report = createReportPanel(url("/report"));
     root.replaceChildren(panel, view.report, artifactPanel());
   }
+  taskTables.scrollLeft = taskScrollLeft;
+  if (taskTablesFocused) taskTables.focus({ preventScroll: true });
   view.artifactKey = artifactKey;
   const log = root.querySelector(".event-log");
   if (log) {
