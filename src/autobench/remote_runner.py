@@ -305,33 +305,12 @@ def grub_words(words, variables):
     return result
 
 
-def kernel_argument_groups(args, vt_handoff=False):
+def kernel_argument_groups(args):
     roots = [arg for arg in args if arg.startswith(("root=", "rootflags="))]
     remaining = [
-        arg
-        for arg in args
-        if not arg.startswith(("root=", "rootflags=", "BOOT_IMAGE=", "initrd="))
-        and not (vt_handoff and arg == "vt.handoff=7")
+        arg for arg in args if not arg.startswith(("root=", "rootflags=", "BOOT_IMAGE=", "initrd="))
     ]
     return roots, remaining
-
-
-def bootloader_cmdline(release):
-    actual = shlex.split(Path("/proc/cmdline").read_text())
-    if not re.fullmatch(r"x86_64|i[3-6]86", platform.machine()):
-        return actual
-    try:
-        config = Path("/boot/config-" + release).read_text()
-        if "CONFIG_CMDLINE_BOOL=y" not in config.splitlines():
-            return actual
-        if "CONFIG_CMDLINE_OVERRIDE=y" in config.splitlines():
-            return actual
-        setting = re.search(r'(?m)^CONFIG_CMDLINE=(".*")$', config)
-        built_in = shlex.split(shlex.split(setting.group(1))[0]) if setting else []
-    except (OSError, ValueError):
-        return actual
-    # x86 prepends built-in arguments. Other differences must still mismatch.
-    return actual[len(built_in) :] if actual[: len(built_in)] == built_in else actual
 
 
 def grub_digest(value):
@@ -367,9 +346,6 @@ def grub_leaves(menu, variables, parents=()):
                         [kernel, args, initrd, sorted(entry.get("boot_sources", ()))]
                     )
                     leaf["kernel"] = kernel
-                    leaf["vt_handoff"] = any(
-                        arg in ("$vt_handoff", "${vt_handoff}") for arg in kernels[0]
-                    )
                     leaf["roots"], leaf["args"] = kernel_argument_groups(args)
             except ValueError:
                 pass
@@ -417,24 +393,29 @@ def grub_boot_menu(boot_entry, loaders=None):
     if not entries:
         raise RuntimeError("no GRUB menu entries found")
     release = platform.release()
-    actual = bootloader_cmdline(release)
+    cmdline = Path("/proc/cmdline").read_text()
+    try:
+        actual = shlex.split(cmdline)
+    except ValueError:
+        actual = cmdline.split()
     image = next((arg[11:] for arg in actual if arg.startswith("BOOT_IMAGE=")), None)
     if image:
         image = re.sub(r"^\([^)]*\)", "", image)
+    roots, _ = kernel_argument_groups(actual)
     for entry in entries:
         if "signature" not in entry:
             continue
-        roots, args = kernel_argument_groups(actual, entry["vt_handoff"])
         entry["same_os"] = entry["roots"] == roots
-        image_matches = (
+        # Root arguments help identify the current system's default for discovery.
+        # Boot verification uses the kernel image, since Linux can add its own arguments.
+        entry["matches_boot"] = (
             entry["kernel"] == image
             if image
             else PurePosixPath(entry["kernel"]).name in {release, "vmlinuz-" + release}
         )
-        entry["matches_boot"] = entry["same_os"] and image_matches and entry["args"] == args
 
-    # Entries that look identical from Linux can only be verified if their
-    # kernel, argument and initrd commands describe the same boot.
+    # Guard against menu entries with the same kernel and options but conflicting
+    # boot files. The signature also ties a saved reboot intent to its menu entry.
     observable = {}
     for entry in entries:
         if "signature" in entry:
@@ -506,6 +487,7 @@ def grub_boot_menu(boot_entry, loaders=None):
                         "selectable",
                         "signature",
                         "matches_boot",
+                        "same_os",
                     )
                     if key in entry
                 }
@@ -540,7 +522,7 @@ def current_grub_menu(firmware):
                 menu, _, _ = grub_boot_menu(number, loaders)
             except (OSError, RuntimeError, ValueError):
                 continue
-            if any(entry.get("matches_boot") for entry in menu["entries"]):
+            if any(entry.get("same_os") and entry.get("matches_boot") for entry in menu["entries"]):
                 key = (
                     tuple(menu["identity"]),
                     tuple((entry["id"], entry.get("signature")) for entry in menu["entries"]),

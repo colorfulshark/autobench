@@ -373,11 +373,8 @@ def grub_host(monkeypatch):
     def read_text(path, *args, **kwargs):
         if str(path) == "/proc/cmdline":
             return state["cmdline"]
-        if path.name.startswith("config-"):
-            return state.get("kernel_config", "")
         raise AssertionError(path)
 
-    monkeypatch.setattr(rr.platform, "machine", lambda: "x86_64")
     monkeypatch.setattr(rr, "grub_tool", lambda name: "grub-" + name)
     monkeypatch.setattr(
         rr,
@@ -408,17 +405,17 @@ def test_grub_traditional_discovery_selects_default_for_current_linux(grub_host,
     assert menu["identity"] == ["fs-uuid", "/grub2/grubenv"]
     assert [entry["id"] for entry in menu["entries"]] == ["new", "advanced>old", "other", "setup"]
     assert rr.resolve_grub_entry(menu["entries"], "Older versions>0")["matches_boot"]
+    assert not rr.resolve_grub_entry(menu["entries"], "new")["matches_boot"]
     assert not rr.resolve_grub_entry(menu["entries"], "setup")["selectable"]
 
 
-def test_grub_bls_entries_use_real_order_and_expand_kernelopts(grub_host):
+def test_grub_bls_entries_match_kernel_with_extra_boot_arguments(grub_host):
     state, files = grub_host
     state.update(
         config=GRUB_HEADER.replace("${saved_entry}", "0") + "blscfg\n",
         grubby='index=0\nid="linux-10.1"\n\nindex=1\nid="linux-9.1"\n',
         env="kernelopts=root=UUID=current ro quiet\n",
         cmdline="driver_sync_probe=sd,nvme BOOT_IMAGE=(hd0,gpt2)/vmlinuz-9.1 root=UUID=current ro quiet",
-        kernel_config='CONFIG_CMDLINE_BOOL=y\nCONFIG_CMDLINE="driver_sync_probe=sd,nvme"\n',
     )
     for release in ("10.1", "9.1"):
         files[f"/boot/loader/entries/linux-{release}.conf"] = (
@@ -477,7 +474,9 @@ def test_grub_discovery_uses_running_linux_when_firmware_entry_has_no_loader(
             {
                 "boot_entry": number,
                 "identity": [number, "/grub2/grubenv"],
-                "entries": [{"id": "linux", "matches_boot": number == "0004" or ambiguous}],
+                "entries": [
+                    {"id": "linux", "matches_boot": True, "same_os": number == "0004" or ambiguous}
+                ],
             },
             None,
             None,
