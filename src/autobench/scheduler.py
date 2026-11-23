@@ -226,8 +226,8 @@ class Scheduler:
                     job["id"],
                     **({"grub": grub} if grub is not None else {}),
                 )
-            except ConnectionLost:
-                pass  # The reboot can close SSH before it acknowledges the request.
+            except (ConnectionLost, UncertainSubmission):
+                self.event(job, "reboot acknowledgement lost; checking the original reboot")
             probe = await self.wait_boot(machine, system, switch)
         # Use the target profile even if bootstrap credentials worked on the other OS.
         target = self.client(machine, system)

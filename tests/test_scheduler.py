@@ -6,7 +6,7 @@ from pathlib import PurePosixPath
 import pytest
 from conftest import assert_no_removed_outputs
 
-from autobench.errors import ConnectionLost
+from autobench.errors import ConnectionLost, UncertainSubmission
 from autobench.scheduler import Scheduler
 from autobench.storage import Store
 
@@ -476,7 +476,7 @@ def shared_grub(config):
     return config
 
 
-@pytest.mark.parametrize("outcome", ["normal", "wrong", "pending", "resume"])
+@pytest.mark.parametrize("outcome", ["normal", "wrong", "pending", "resume", "no-acknowledgement"])
 async def test_shared_grub_switch_checks_boot_and_reuses_proof(shared_grub, monkeypatch, outcome):
     store, run_id, world = setup(shared_grub)
     original_probe = FakeRemote.probe
@@ -503,6 +503,8 @@ async def test_shared_grub_switch_checks_boot_and_reuses_proof(shared_grub, monk
                 self.world.current[self.machine.id] = self.machine.systems[0]
             elif outcome == "resume":
                 raise asyncio.CancelledError()
+            elif outcome == "no-acknowledgement":
+                raise UncertainSubmission("reboot acknowledgement was missing")
             raise
 
     monkeypatch.setattr(FakeRemote, "probe", probe)
@@ -513,7 +515,7 @@ async def test_shared_grub_switch_checks_boot_and_reuses_proof(shared_grub, monk
             assert store.jobs(run_id)[2]["details"]["switch"]["grub"]["id"] == "kernel-two"
             status = await execute(store, run_id, world)
         assert world.events.count(("host1", "switch")) == (0 if outcome == "pending" else 1)
-        if outcome in ("normal", "resume"):
+        if outcome in ("normal", "resume", "no-acknowledgement"):
             assert status == "succeeded"
             assert len(world.starts) == 4
             assert world.jobs[world.starts[-1]]["manifest"]["grub_entry"] == "kernel-two"

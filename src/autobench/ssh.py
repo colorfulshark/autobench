@@ -15,7 +15,13 @@ from python_socks.async_.asyncio import Proxy
 
 from autobench import remote_runner
 from autobench.config import Machine, Policy, SSHConfig, System, file_sha256
-from autobench.errors import AuthenticationFailed, ChecksumError, ConnectionLost, RemoteError
+from autobench.errors import (
+    AuthenticationFailed,
+    ChecksumError,
+    ConnectionLost,
+    RemoteError,
+    UncertainSubmission,
+)
 from autobench.storage import private_dir
 
 
@@ -110,7 +116,19 @@ class SSHClient:
             result = await connection.run(shlex.join(argv), check=False, timeout=timeout)
         try:
             reply = json.loads(result.stdout)
+            if (
+                not isinstance(reply, dict)
+                or not isinstance(reply.get("ok"), bool)
+                or (reply["ok"] and "value" not in reply)
+            ):
+                raise ValueError("incomplete remote response")
         except (ValueError, TypeError) as exc:
+            if action == "switch":
+                raise UncertainSubmission(
+                    "reboot acknowledgement was missing or incomplete"
+                ) from exc
+            if result.exit_status in (None, -1):
+                raise ConnectionLost(f"SSH command ended without a reply for {self.label}") from exc
             raise RemoteError(
                 "remote helper did not return JSON; check Python and login shell output"
             ) from exc

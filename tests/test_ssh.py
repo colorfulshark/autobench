@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import json
 import socket
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 import asyncssh
@@ -9,8 +10,42 @@ import pytest
 from pydantic import ValidationError
 
 from autobench.config import SOCKS5Proxy
-from autobench.errors import AuthenticationFailed, ChecksumError, ConnectionLost, RemoteError
+from autobench.errors import (
+    AuthenticationFailed,
+    ChecksumError,
+    ConnectionLost,
+    RemoteError,
+    UncertainSubmission,
+)
 from autobench.ssh import RemoteClient, validate_inventory
+
+
+@pytest.mark.parametrize(
+    "action, stdout, exit_status, error, message",
+    [
+        ("switch", "", None, UncertainSubmission, "reboot acknowledgement"),
+        ("switch", '{"ok":', 0, UncertainSubmission, "reboot acknowledgement"),
+        ("switch", '{"ok":true}', 0, UncertainSubmission, "reboot acknowledgement"),
+        ("switch", '{"ok":false,"error":"BootNext conflict"}', 1, RemoteError, "BootNext conflict"),
+        ("probe", "", -1, ConnectionLost, "SSH command ended"),
+        ("probe", "login banner", 0, RemoteError, "remote helper did not return JSON"),
+    ],
+)
+async def test_ssh_rpc_classifies_unacknowledged_reboots(
+    config, monkeypatch, action, stdout, exit_status, error, message
+):
+    client = RemoteClient(config.machines[0], None, config.policy)
+
+    async def run(*args, **kwargs):
+        return SimpleNamespace(stdout=stdout, exit_status=exit_status)
+
+    @asynccontextmanager
+    async def connection():
+        yield SimpleNamespace(run=run)
+
+    monkeypatch.setattr(client, "connection", connection)
+    with pytest.raises(error, match=message):
+        await client.call(action)
 
 
 @pytest.fixture
