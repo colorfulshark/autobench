@@ -98,6 +98,461 @@ def efi():
     return result
 
 
+def grub_tool(name):
+    # An unprivileged SSH login may omit sbin from PATH, even with passwordless sudo.
+    system_path = "/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/sbin:/usr/local/bin"
+    for prefix in ("grub-", "grub2-"):
+        executable = shutil.which(prefix + name, path=system_path)
+        if executable:
+            return executable
+    raise RuntimeError("missing GRUB utility: grub-" + name + " or grub2-" + name)
+
+
+def boot_file(path):
+    return command(["cat", "--", str(path)], privileged=True)
+
+
+def path_on_boot_filesystem(path):
+    target, root = command(
+        ["findmnt", "-nro", "TARGET,FSROOT", "--target", str(path)], privileged=True
+    ).split()
+    return PurePosixPath(root) / path.relative_to(target)
+
+
+def grub_loaders():
+    verbose = command(["efibootmgr", "-v"], privileged=True)
+    loaders = {}
+    for line in verbose.splitlines():
+        loader = re.match(
+            r"Boot([0-9A-F]{4})\*?\s+.*?HD\(\d+,GPT,([a-fA-F0-9-]+),[^)]*\)/File\(([^)]+)\)",
+            line,
+        )
+        if not loader:
+            continue
+        number, partition, file = loader.groups()
+        file = PurePosixPath(file.replace("\\", "/").lstrip("/"))
+        if ".." not in file.parts and re.fullmatch(r"(?:shim|grub)[\w-]*\.efi", file.name, re.I):
+            loaders[number] = partition, file
+    return loaders
+
+
+def grub_config(boot_entry, loaders=None):
+    """Find the menu for an explicit loader, including its ESP forwarding stub."""
+    loaders = grub_loaders() if loaders is None else loaders
+    if boot_entry not in loaders:
+        raise RuntimeError("cannot locate the GRUB loader for Boot" + boot_entry)
+    partition, file = loaders[boot_entry]
+    for mount in (Path("/boot/efi"), Path("/efi"), Path("/boot")):
+        try:
+            source = command(["findmnt", "-nro", "SOURCE", "--mountpoint", str(mount)]).strip()
+            uuid = command(["lsblk", "-ndo", "PARTUUID", "--", source], privileged=True).strip()
+        except (OSError, RuntimeError):
+            continue
+        if uuid.lower() == partition.lower():
+            break
+    else:
+        raise RuntimeError("the EFI system partition for Boot" + boot_entry + " is not mounted")
+    stub_path = mount.joinpath(*file.parent.parts, "grub.cfg")
+    stub = boot_file(stub_path)
+    if re.search(r"(?m)^\s*(?:menuentry|blscfg|load_env)\b", stub):
+        return stub_path, stub
+    lines = [shlex.split(line, comments=True) for line in stub.splitlines()]
+    search = next(
+        (
+            line
+            for line in lines
+            if line and (line[0] == "search.fs_uuid" or line[0] == "search" and "--fs-uuid" in line)
+        ),
+        [],
+    )
+    uuid = next((word for word in search[1:] if re.fullmatch(r"[0-9a-fA-F-]{8,}", word)), None)
+    prefix = next(
+        (
+            re.fullmatch(r"prefix=\(\$(?:\w+|\{\w+\})\)(/[^ ]*)", line[1])
+            for line in lines
+            if len(line) == 2 and line[0] == "set" and line[1].startswith("prefix=")
+        ),
+        None,
+    )
+    if (
+        not uuid
+        or not prefix
+        or not any(
+            line in (["configfile", "$prefix/grub.cfg"], ["configfile", "${prefix}/grub.cfg"])
+            for line in lines
+        )
+    ):
+        raise RuntimeError("unsupported GRUB forwarding configuration")
+    probe_tool = grub_tool("probe")
+    for candidate in (Path("/boot/grub/grub.cfg"), Path("/boot/grub2/grub.cfg")):
+        try:
+            fs = command([probe_tool, "--target=fs_uuid", str(candidate)], privileged=True).strip()
+            relative = path_on_boot_filesystem(candidate).parent
+            if fs.lower() == uuid.lower() and relative == PurePosixPath(prefix.group(1)):
+                return candidate, boot_file(candidate)
+        except (OSError, RuntimeError, ValueError):
+            continue
+    raise RuntimeError("the active GRUB menu is not available in /boot/grub or /boot/grub2")
+
+
+def grub_env(tool, path):
+    return dict(
+        line.split("=", 1)
+        for line in command([tool, str(path), "list"], privileged=True).splitlines()
+        if "=" in line
+    )
+
+
+def menu_id(args):
+    for index, arg in enumerate(args):
+        if arg.startswith("--id="):
+            return arg[5:]
+        if arg in ("--id", "$menuentry_id_option", "${menuentry_id_option}"):
+            return args[index + 1] if index + 1 < len(args) else None
+    return None
+
+
+def grub_entries(config, path, environment):
+    root = {"children": []}
+    blocks = [root]
+    bls_loaded = False
+    for line in config.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith(("menuentry ", "submenu ")) and line.endswith("{"):
+            kind, label, *args = shlex.split(line[:-1], comments=True)
+            entry = {"label": label, "id": menu_id(args), "children": []}
+            if kind == "menuentry":
+                entry["linux"] = []
+                entry["initrd"] = []
+                entry["boot_sources"] = set()
+            blocks[-1].get("children", []).append(entry)
+            blocks.append(entry)
+        elif line == "}":
+            if len(blocks) > 1:
+                blocks.pop()
+        elif line.endswith(" {"):
+            blocks.append({})
+        elif "linux" in blocks[-1] and re.match(r"linux(?:efi|16)?\s", line):
+            blocks[-1]["linux"].append(shlex.split(line, comments=True)[1:])
+        elif "initrd" in blocks[-1] and re.match(r"initrd(?:efi|16)?\s", line):
+            blocks[-1]["initrd"].append(shlex.split(line, comments=True)[1:])
+        elif "boot_sources" in blocks[-1] and line.startswith(("search ", "search.fs_uuid ")):
+            parts = shlex.split(line, comments=True)
+            if "--set=root" in parts or parts[0] == "search.fs_uuid" and "root" in parts:
+                blocks[-1]["boot_sources"].update(
+                    word.lower() for word in parts[1:] if re.fullmatch(r"[0-9a-fA-F-]{8,}", word)
+                )
+        elif "linux" in blocks[-1] and re.match(
+            r"(?:chainloader|configfile|multiboot2?|source)\s", line
+        ):
+            blocks[-1]["linux"].append([])
+        elif line == "blscfg":
+            if bls_loaded or blocks[-1] is not root:
+                raise RuntimeError("unsupported placement of GRUB BLS loader")
+            root["children"].extend(bls_entries(path, environment))
+            bls_loaded = True
+    return root["children"]
+
+
+def bls_entries(path, environment):
+    # grubby uses the same version ordering as Fedora's blscfg. The fragments
+    # supply the original options, which grubby formats into separate fields.
+    boot = path.parent.parent if path.parent.name in ("grub", "grub2") else Path("/boot")
+    directory = boot / environment.get("blsdir", "loader/entries").lstrip("/")
+    if ".." in directory.parts:
+        raise RuntimeError("invalid GRUB BLS directory")
+    output = command(["grubby", "--info=ALL", "--bls-directory", str(directory)], privileged=True)
+    entries = []
+    for match in re.finditer(r'(?m)^id="?([\w.+-]+)"?\s*$', output):
+        id_ = match.group(1)
+        fields = {}
+        for line in boot_file(directory / (id_ + ".conf")).splitlines():
+            parts = line.split(maxsplit=1)
+            if len(parts) == 2:
+                fields.setdefault(parts[0], []).append(parts[1])
+        if not fields.get("title") or not fields.get("linux"):
+            raise RuntimeError("incomplete GRUB BLS entry: " + id_)
+        entries.append(
+            {
+                "id": id_,
+                "label": fields["title"][0],
+                "linux": [
+                    [kernel, *shlex.split(" ".join(fields.get("options", [])))]
+                    for kernel in fields["linux"]
+                ],
+                "initrd": [fields["initrd"]] if fields.get("initrd") else [],
+                "children": [],
+            }
+        )
+    if not entries:
+        raise RuntimeError("grubby did not return GRUB BLS entries")
+    return entries
+
+
+def grub_words(words, variables):
+    result = []
+    for word in words:
+        variable = re.fullmatch(r"\$(?:\{(\w+)\}|(\w+))", word)
+        name = (variable.group(1) or variable.group(2)) if variable else None
+        if name in variables:
+            result.extend(shlex.split(variables[name]))
+        elif "$" in word or "`" in word:
+            raise ValueError("unresolved GRUB variable")
+        else:
+            result.append(word)
+    return result
+
+
+def kernel_argument_groups(args, vt_handoff=False):
+    roots = [arg for arg in args if arg.startswith(("root=", "rootflags="))]
+    remaining = [
+        arg
+        for arg in args
+        if not arg.startswith(("root=", "rootflags=", "BOOT_IMAGE=", "initrd="))
+        and not (vt_handoff and arg == "vt.handoff=7")
+    ]
+    return roots, remaining
+
+
+def bootloader_cmdline(release):
+    actual = shlex.split(Path("/proc/cmdline").read_text())
+    if not re.fullmatch(r"x86_64|i[3-6]86", platform.machine()):
+        return actual
+    try:
+        config = Path("/boot/config-" + release).read_text()
+        if "CONFIG_CMDLINE_BOOL=y" not in config.splitlines():
+            return actual
+        if "CONFIG_CMDLINE_OVERRIDE=y" in config.splitlines():
+            return actual
+        setting = re.search(r'(?m)^CONFIG_CMDLINE=(".*")$', config)
+        built_in = shlex.split(shlex.split(setting.group(1))[0]) if setting else []
+    except (OSError, ValueError):
+        return actual
+    # x86 prepends built-in arguments. Other differences must still mismatch.
+    return actual[len(built_in) :] if actual[: len(built_in)] == built_in else actual
+
+
+def grub_digest(value):
+    return hashlib.sha256(json.dumps(value, ensure_ascii=False).encode()).hexdigest()
+
+
+def grub_leaves(menu, variables, parents=()):
+    for index, entry in enumerate(menu):
+        level = (entry["id"], entry["label"], str(index))
+        ancestry = (*parents, level)
+        if "linux" not in entry:
+            yield from grub_leaves(entry["children"], variables, ancestry)
+            continue
+        id_ = ">".join(id_ or index for id_, _, index in ancestry)
+        leaf = {
+            "id": id_,
+            "label": " › ".join(label for _, label, _ in ancestry),
+            "selectors": ancestry,
+            "recovery": any(
+                re.search(r"recovery|rescue|single.user", name or "", re.I)
+                for id_, label, _ in ancestry
+                for name in (id_, label)
+            ),
+        }
+        kernels = entry["linux"]
+        initrds = entry["initrd"]
+        if len(kernels) == 1 and kernels[0] and len(initrds) <= 1:
+            try:
+                kernel, *args = grub_words(kernels[0], variables)
+                initrd = grub_words(initrds[0], variables) if initrds else []
+                if kernel.startswith("/") and any(arg.startswith("root=") for arg in args):
+                    leaf["signature"] = grub_digest(
+                        [kernel, args, initrd, sorted(entry.get("boot_sources", ()))]
+                    )
+                    leaf["kernel"] = kernel
+                    leaf["vt_handoff"] = any(
+                        arg in ("$vt_handoff", "${vt_handoff}") for arg in kernels[0]
+                    )
+                    leaf["roots"], leaf["args"] = kernel_argument_groups(args)
+            except ValueError:
+                pass
+        yield leaf
+
+
+def resolve_grub_entry(entries, selector):
+    if not selector:
+        return None
+    parts = selector.split(">")
+    matches = [
+        item
+        for item in entries
+        if len(item["selectors"]) == len(parts)
+        and all(part in names for part, names in zip(parts, item["selectors"]))
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def grub_boot_menu(boot_entry, loaders=None):
+    path, config = grub_config(boot_entry, loaders)
+    env_file = Path(
+        command(["realpath", "-e", "--", str(path.with_name("grubenv"))], privileged=True).strip()
+    )
+    tool = grub_tool("editenv")
+    environment = grub_env(tool, env_file)
+    variables = {"vt_handoff": "", "tuned_params": "", "tuned_initrd": ""}
+    for match in re.finditer(r"(?m)^\s*set\s+(kernelopts|tuned_params|tuned_initrd)=(.+)$", config):
+        values = shlex.split(match.group(2), comments=True)
+        if values:
+            variables[match.group(1)] = values[0]
+    variables.update(
+        {name: environment[name] for name in (*variables, "kernelopts") if name in environment}
+    )
+    if re.search(r"(?m)^\s*source\s+[^\n]*[/]tuned\.cfg", config):
+        try:
+            tuned = boot_file(path.with_name("tuned.cfg"))
+        except RuntimeError:
+            tuned = ""
+        for match in re.finditer(r"(?m)^\s*set\s+(tuned_params|tuned_initrd)=(.+)$", tuned):
+            values = shlex.split(match.group(2), comments=True)
+            if values:
+                variables[match.group(1)] = values[0]
+    entries = list(grub_leaves(grub_entries(config, path, environment), variables))
+    if not entries:
+        raise RuntimeError("no GRUB menu entries found")
+    release = platform.release()
+    actual = bootloader_cmdline(release)
+    image = next((arg[11:] for arg in actual if arg.startswith("BOOT_IMAGE=")), None)
+    if image:
+        image = re.sub(r"^\([^)]*\)", "", image)
+    for entry in entries:
+        if "signature" not in entry:
+            continue
+        roots, args = kernel_argument_groups(actual, entry["vt_handoff"])
+        entry["same_os"] = entry["roots"] == roots
+        image_matches = (
+            entry["kernel"] == image
+            if image
+            else PurePosixPath(entry["kernel"]).name in {release, "vmlinuz-" + release}
+        )
+        entry["matches_boot"] = entry["same_os"] and image_matches and entry["args"] == args
+
+    # Entries that look identical from Linux can only be verified if their
+    # kernel, argument and initrd commands describe the same boot.
+    observable = {}
+    for entry in entries:
+        if "signature" in entry:
+            key = (PurePosixPath(entry["kernel"]).name, tuple(entry["roots"]), tuple(entry["args"]))
+            observable.setdefault(key, set()).add(entry["signature"])
+    for entry in entries:
+        key = (
+            PurePosixPath(entry.get("kernel", "")).name,
+            tuple(entry.get("roots", [])),
+            tuple(entry.get("args", [])),
+        )
+        entry["selectable"] = (
+            len(observable.get(key, ())) == 1 and resolve_grub_entry(entries, entry["id"]) is entry
+        )
+    # A pending one-time selection is independent of the persistent default.
+    header = re.split(r"(?m)^\s*(?:menuentry|submenu|blscfg)\b", config, maxsplit=1)[0]
+    defaults = {
+        value.strip("'\"") for value in re.findall(r"(?m)^\s*set\s+default=(.+)$", header)
+    } - {"$next_entry", "${next_entry}"}
+    selector = next(iter(defaults)) if len(defaults) == 1 else ("0" if not defaults else None)
+    if selector in ("$saved_entry", "${saved_entry}"):
+        selector = environment.get("saved_entry") or "0"
+    default = resolve_grub_entry(entries, selector)
+    if not (default and default.get("same_os") and default["selectable"]):
+        normal = [
+            entry
+            for entry in entries
+            if entry["selectable"] and entry.get("same_os") and not entry["recovery"]
+        ]
+        running = [entry for entry in normal if entry.get("matches_boot")]
+        top_level = [entry for entry in running if len(entry["selectors"]) == 1]
+        candidates = top_level or running or normal
+        default = candidates[0] if len(candidates) == 1 else None
+    fs_probe = grub_tool("probe")
+    filesystem = command([fs_probe, "--target=fs", str(env_file)], privileged=True).strip()
+    abstraction = command(
+        [fs_probe, "--target=abstraction", str(env_file)], privileged=True
+    ).strip()
+    uuid = command([fs_probe, "--target=fs_uuid", str(env_file)], privileged=True).strip()
+    identity = [uuid.lower(), str(path_on_boot_filesystem(env_file))]
+    next_entry = environment.get("next_entry") or None
+    previous_entry = environment.get("prev_saved_entry") or None
+    environment_ref = r"""["']?\$\{?(?:env_block|prefix|config_directory)\}?(?:/grubenv)?["']?"""
+    one_shot = (
+        bool(uuid)
+        and not abstraction
+        and (
+            filesystem in ("ext2", "xfs", "fat")
+            or filesystem == "btrfs"
+            and bool(environment.get("env_block"))
+        )
+        and bool(re.search(r"(?m)^\s*set\s+default=[\"']?\$\{?next_entry\}?[\"']?\s*$", header))
+        and bool(re.search(r"(?m)^\s*set\s+next_entry=(?:\"\"|'')?\s*$", header))
+        and bool(re.search(rf"(?m)^\s*load_env(?:[ \t]+-f[ \t]+{environment_ref})?[ \t]*$", header))
+        and bool(
+            re.search(rf"(?m)^\s*save_env\s+(?:-f\s+{environment_ref}\s+)?next_entry\s*$", header)
+        )
+    )
+    return (
+        {
+            "boot_entry": boot_entry,
+            "entries": [
+                {
+                    key: entry[key]
+                    for key in (
+                        "id",
+                        "label",
+                        "selectors",
+                        "selectable",
+                        "signature",
+                        "matches_boot",
+                    )
+                    if key in entry
+                }
+                for entry in entries
+            ],
+            "default_entry": default["id"]
+            if default and default["selectable"] and one_shot
+            else None,
+            "identity": identity,
+            "next_entry": next_entry,
+            "prev_saved_entry": previous_entry,
+            "one_shot": one_shot,
+        },
+        tool,
+        env_file,
+    )
+
+
+def current_grub_menu(firmware):
+    current = firmware.get("current")
+    loaders = grub_loaders()
+    try:
+        return grub_boot_menu(current, loaders)[0]
+    except (OSError, RuntimeError, ValueError) as current_error:
+        # Firmware disk entries can boot a GRUB installation without naming its
+        # EFI file. Find the installed menu whose entry describes this boot.
+        matches = {}
+        for number in loaders:
+            if number == current or not firmware["entries"].get(number, {}).get("active"):
+                continue
+            try:
+                menu, _, _ = grub_boot_menu(number, loaders)
+            except (OSError, RuntimeError, ValueError):
+                continue
+            if any(entry.get("matches_boot") for entry in menu["entries"]):
+                key = (
+                    tuple(menu["identity"]),
+                    tuple((entry["id"], entry.get("signature")) for entry in menu["entries"]),
+                )
+                matches.setdefault(key, menu)
+        if len(matches) == 1:
+            return next(iter(matches.values()))
+        if matches:
+            raise RuntimeError("multiple GRUB menus match the running system") from current_error
+        raise
+
+
 def probe(payload):
     result = {
         "schema_version": 1,
@@ -114,6 +569,20 @@ def probe(payload):
         result["efi"] = efi()
     except Exception as exc:
         result["efi_error"] = str(exc)
+    firmware = result.get("efi", {})
+    grub_boot_entry = payload.get("grub_boot_entry")
+    if payload.get("grub") and firmware.get("current"):
+        try:
+            if grub_boot_entry is None:
+                result["grub"] = current_grub_menu(firmware)
+            else:
+                if not re.fullmatch(r"[0-9A-F]{4}", grub_boot_entry):
+                    raise ValueError("invalid UEFI entry for GRUB discovery")
+                if grub_boot_entry not in firmware.get("entries", {}):
+                    raise RuntimeError("Boot" + grub_boot_entry + " is missing")
+                result["grub"], _, _ = grub_boot_menu(grub_boot_entry)
+        except Exception as exc:
+            result["grub_error"] = str(exc)
     try:
         result["systemd_version"] = int(command(["systemctl", "--version"]).split()[1])
         command(["systemctl", "show", "--property=Version"], privileged=True)
@@ -424,14 +893,70 @@ def switch(payload):
             raise RuntimeError("target EFI entry is missing or inactive")
         if current.get("next"):
             raise RuntimeError("existing BootNext prevents reboot")
+        grub_target = payload.get("grub")
+        if grub_target:
+            # The firmware may have reached the same installation through a disk
+            # entry. Resolve the requested loader independently before writing.
+            menu, tool, env_file = grub_boot_menu(target)
+            selected = resolve_grub_entry(menu["entries"], grub_target["id"])
+            if (
+                not menu["one_shot"]
+                or menu["identity"] != grub_target["identity"]
+                or not selected
+                or not selected["selectable"]
+                or selected["signature"] != grub_target["signature"]
+            ):
+                raise RuntimeError("GRUB menu or target changed before reboot request")
+            if menu["next_entry"] or menu["prev_saved_entry"]:
+                raise RuntimeError("existing GRUB boot selection prevents reboot")
         marker = root / "switches" / (payload["token"] + ".json")
         if marker.exists():
             raise RuntimeError("reboot was already submitted; reconcile instead of resubmitting")
-        atomic_json(marker, {"target": target, "boot_id": boot_id(), "time": now()})
-        command(["efibootmgr", "-n", target], privileged=True)
-        if efi().get("next") != target:
-            raise RuntimeError("BootNext readback mismatch")
-        command(["systemctl", "reboot", "--no-block"], privileged=True)
+        intent = {"target": target, "boot_id": boot_id(), "time": now()}
+        if grub_target:
+            intent["grub"] = grub_target
+        atomic_json(marker, intent)
+        efi_attempted = False
+        try:
+            if grub_target:
+                selector = selected["id"]
+                command([tool, str(env_file), "set", "next_entry=" + selector], privileged=True)
+                if grub_env(tool, env_file).get("next_entry") != selector:
+                    raise RuntimeError("GRUB next_entry readback mismatch")
+            efi_attempted = True
+            command(["efibootmgr", "-n", target], privileged=True)
+            if efi().get("next") != target:
+                raise RuntimeError("BootNext readback mismatch")
+            if grub_target:
+                try:
+                    command(["systemctl", "reboot", "--no-block"], privileged=True)
+                except subprocess.TimeoutExpired:
+                    # The request may already have reached systemd. Reconcile by boot ID.
+                    return {"reboot_requested": True}
+        except Exception as exc:
+            if not grub_target:
+                raise
+            rollback_errors = []
+            if efi_attempted:
+                try:
+                    if efi().get("next") == target:
+                        command(["efibootmgr", "-N"], privileged=True)
+                        if efi().get("next") == target:
+                            raise RuntimeError("BootNext is still set")
+                except Exception as rollback:
+                    rollback_errors.append(str(rollback))
+            try:
+                if grub_env(tool, env_file).get("next_entry") == selector:
+                    command([tool, str(env_file), "unset", "next_entry"], privileged=True)
+                    if grub_env(tool, env_file).get("next_entry") == selector:
+                        raise RuntimeError("GRUB next_entry is still set")
+            except Exception as rollback:
+                rollback_errors.append(str(rollback))
+            if rollback_errors:
+                raise RuntimeError(f"{exc}. Boot rollback failed: " + ", ".join(rollback_errors))
+            raise
+        if not grub_target:
+            command(["systemctl", "reboot", "--no-block"], privileged=True)
     return {"reboot_requested": True}
 
 

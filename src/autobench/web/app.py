@@ -104,6 +104,11 @@ class ProbeBody(Body):
     connect_timeout: PositiveSeconds = 15
 
 
+class BootEntriesBody(ProbeBody):
+    # Older pages include the selected UEFI entry. Discovery uses the running system.
+    boot_entry: str | None = Field(default=None, pattern=r"^[0-9a-fA-F]{4}$")
+
+
 def field_errors(exc: Exception) -> list[dict]:
     if isinstance(exc, ConfigurationFieldError):
         return [{"path": exc.path, "code": exc.code, "message": str(exc)}]
@@ -191,12 +196,29 @@ class Operations:
                 if kind in {"discover", "doctor"}:
                     for item in result:
                         item["errors"] = self.clean(item.get("errors", []))
+                        probe = item.get("probe", {})
+                        if "grub_error" in probe:
+                            probe["grub_error"] = self.clean(probe["grub_error"])
+                        if "grub" in probe:
+                            probe["grub"] = self.clean(probe["grub"])
                 if kind == "connection_probe":
                     for item in result["checks"]:
                         item["message"] = self.clean(item["message"])
                 if kind == "boot_entries":
                     for entry in result["entries"]:
                         entry["label"] = self.clean(entry["label"])
+                    if "grub" in result:
+                        menu = result["grub"]
+                        menu["error"] = self.clean(menu["error"])
+                        menu["entries"] = [
+                            {**entry, "label": self.clean(entry["label"])}
+                            for entry in menu["entries"]
+                            if entry["id"] == self.clean(entry["id"])
+                        ]
+                        if not any(
+                            entry["id"] == menu["default_entry"] for entry in menu["entries"]
+                        ):
+                            menu["default_entry"] = None
                 record["result"] = result
                 record["status"] = "completed"
             except asyncio.CancelledError:
@@ -435,12 +457,13 @@ def create_app(
         )
 
     @app.post("/api/systems/boot-entries", status_code=202)
-    async def boot_entries(body: ProbeBody):
+    async def boot_entries(body: BootEntriesBody):
         remember(body.ssh.model_dump(mode="json"))
         base = files.path(body.config_path).parent if body.config_path else files.base_dir
         resolve_ssh_paths(body.ssh, base)
         return operations.start(
-            "boot_entries", lambda: services.identify_boot_entries(body.ssh, body.connect_timeout)
+            "boot_entries",
+            lambda: services.identify_boot_entries(body.ssh, body.connect_timeout),
         )
 
     @app.post("/api/config/parse")

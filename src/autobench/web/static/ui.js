@@ -158,6 +158,7 @@ export function inputField(
     help = "",
     reset = false,
     nullable = false,
+    emptyValue = "",
     browse = null,
     width = "",
     required = false,
@@ -195,7 +196,7 @@ export function inputField(
       path,
       type === "number" && input.value !== ""
         ? Number(input.value)
-        : input.value,
+        : input.value === "" ? emptyValue : input.value,
     );
     wrap.classList.remove("invalid");
     input.removeAttribute("aria-invalid");
@@ -491,6 +492,8 @@ export function friendlyError(error) {
     return "标识只能使用字母、数字、下划线或连字符，且同组不能重复";
   if (error.message?.includes("UB_RESULTDIR"))
     return "UB_RESULTDIR 由工具管理，请移除此环境变量";
+  if (error.message?.includes("duplicate system boot_entry"))
+    return "共用 UEFI 启动项的系统需要分别设置不同的 GRUB 启动项。";
   if (error.message?.includes("boot_entry"))
     return "启动项需要是四位十六进制字符串";
   if (error.message?.includes("test names cannot"))

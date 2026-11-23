@@ -30,6 +30,8 @@ machines:
     systems:
       - id: ubuntu
         boot_entry: "0001"
+        # Optional one-time selection from the shared GRUB menu:
+        # grub_entry: "advanced-menu-id>kernel-entry-id"
         # Applied to both build and test processes; benchmark env overrides these values.
         env:
           PATH: /usr/local/bin:/usr/bin:/bin

@@ -11,6 +11,23 @@ import {
 
 const records = new WeakMap();
 const targets = new WeakMap();
+function detectedGrub(machine, system) {
+  return fresh(machine, system) ? records.get(system).grub ?? null : null;
+}
+function applyDetectedGrub(machine, system) {
+  const value = detectedGrub(machine, system)?.default_entry;
+  const record = records.get(system);
+  if (
+    !value || state.mode !== "form" || system.grub_entry === value ||
+    (system.grub_entry !== undefined && system.grub_entry !== record?.automatic)
+  )
+    return;
+  const mi = state.document.machines?.indexOf(machine) ?? -1;
+  const si = machine.systems.indexOf(system);
+  if (mi < 0 || si < 0) return;
+  record.automatic = value;
+  change(["machines", mi, "systems", si, "grub_entry"], value);
+}
 function fresh(machine, system) {
   const record = records.get(system);
   if (!record || record.invalidated) return false;
@@ -40,6 +57,8 @@ async function identify(machine, system) {
     ),
     epoch: state.epoch,
     entries: fresh(machine, system) ? previous?.entries : null,
+    grub: fresh(machine, system) ? previous?.grub : null,
+    automatic: previous?.automatic,
     error: null,
   };
   records.set(system, record);
@@ -55,8 +74,12 @@ async function identify(machine, system) {
       throw new Error(
         "未识别到 UEFI 启动项，请检查 efibootmgr 与非交互 sudo 权限。",
       );
-    if (records.get(system) === record && fresh(machine, system))
+    if (records.get(system) === record && fresh(machine, system)) {
       record.entries = result.entries;
+      record.grub = result.grub ?? null;
+      record.manual = false;
+      applyDetectedGrub(machine, system);
+    }
   } catch (error) {
     if (records.get(system) === record && fresh(machine, system))
       record.error = error.message;
@@ -66,7 +89,7 @@ async function identify(machine, system) {
   }
 }
 export function bootEntryField(machine, system, path) {
-  const field = inputField("启动项", path, {
+  const field = inputField("UEFI 启动项", path, {
     placeholder: "例如 0001",
     required: true,
     leadingIcon: "play",
@@ -102,12 +125,7 @@ export function bootEntryField(machine, system, path) {
         ),
       );
     select.value = selected?.id || value;
-    select.addEventListener("change", () => {
-      change(path, select.value);
-      field.classList.remove("invalid");
-      select.removeAttribute("aria-invalid");
-      field.querySelector(".field-error")?.remove();
-    });
+    select.addEventListener("change", () => change(path, select.value, true));
     input.replaceWith(select);
   }
   const identifyButton = button(
@@ -118,6 +136,62 @@ export function bootEntryField(machine, system, path) {
   identifyButton.prepend(icon("scan"));
   controls.append(identifyButton, statusIndicator("boot-entry-status"));
   updateField(field);
+  return field;
+}
+export function grubEntryField(machine, system, path) {
+  const record = records.get(system);
+  const menu = detectedGrub(machine, system);
+  const value = system.grub_entry ?? "";
+  const options = menu?.entries ?? [];
+  let help = "可选。留空时使用 UEFI 入口原有的启动行为。";
+  if (menu?.error) help = menu.error;
+  else if (menu && !menu.default_entry) help = "未能确认当前系统的默认项，请选择或手动填写。";
+  else if (menu?.boot_entry && menu.boot_entry !== String(system.boot_entry ?? "").toUpperCase())
+    help = `此菜单识别自 Boot${menu.boot_entry}，运行时会校验所选 UEFI 入口。`;
+  const field = inputField("GRUB 启动项", path, {
+    placeholder: "不指定",
+    nullable: true,
+    emptyValue: null,
+    help,
+  });
+  field.classList.add("grub-entry-field");
+  targets.set(field, { machine, system, path, menu });
+  const controls = field.querySelector(".input-controls");
+  const input = controls.querySelector("input");
+  controls.querySelector(".link-button").addEventListener("click", () => {
+    if (record) record.automatic = undefined;
+  });
+  input.addEventListener("input", () => {
+    if (record) record.automatic = undefined;
+  });
+  if (!options.length) return field;
+  if (!record.manual) {
+    const select = node("select");
+    select.id = input.id;
+    for (const attr of ["aria-invalid", "aria-describedby"])
+      if (input.hasAttribute(attr)) select.setAttribute(attr, input.getAttribute(attr));
+    select.add(new Option("不指定", ""));
+    if (value && !options.some((entry) => entry.id === value))
+      select.add(new Option(`${value}（手动填写）`, value));
+    for (const entry of options) {
+      const option = new Option(entry.label, entry.id);
+      option.disabled = !entry.selectable;
+      select.add(option);
+    }
+    select.value = value;
+    select.addEventListener("change", () => {
+      record.automatic = undefined;
+      change(path, select.value || null, true);
+    });
+    input.replaceWith(select);
+    controls.querySelector(".link-button").remove();
+  }
+  controls.append(
+    button(record.manual ? "选择已识别项" : "手动填写", () => {
+      record.manual = !record.manual;
+      emit(true);
+    }, "link-button"),
+  );
   return field;
 }
 function updateField(field) {
@@ -154,5 +228,10 @@ export function updateBootEntryFields() {
     if (!fresh(machine, system) && field.querySelector("select"))
       field.replaceWith(bootEntryField(machine, system, path));
     else updateField(field);
+  });
+  document.querySelectorAll(".grub-entry-field").forEach((field) => {
+    const { machine, system, path, menu } = targets.get(field);
+    if (menu !== detectedGrub(machine, system))
+      field.replaceWith(grubEntryField(machine, system, path));
   });
 }

@@ -3294,6 +3294,21 @@ body:has(#page-config:not([hidden]) .system-step) {
 .boot-entry-controls > :is([data-phase="error"], [data-phase="stale"]) {
   flex: 1 1 100%;
 }
+.grub-entry-field {
+  grid-column: 1 / -1;
+}
+.grub-entry-field :is(input, select) {
+  min-width: 0;
+}
+.review-boot-target,
+.plan-route .plan-boot-target {
+  overflow-wrap: anywhere;
+}
+.plan-route .plan-boot-target {
+  flex: 0 1 auto;
+  min-width: 0;
+  text-align: end;
+}
 .inherit-summary {
   display: flex;
   align-items: flex-start;

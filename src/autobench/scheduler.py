@@ -17,6 +17,7 @@ from autobench.errors import (
     RemoteError,
     UncertainSubmission,
 )
+from autobench.remote_runner import resolve_grub_entry
 from autobench.ssh import RemoteClient
 from autobench.storage import TERMINAL, Store
 
@@ -102,7 +103,7 @@ class Scheduler:
             seen.add(key)
             client = self.client(machine, system)
             try:
-                return client, await client.probe()
+                return client, await self.probe_system(client, preferred)
             except (AuthenticationFailed, ConnectionLost) as exc:
                 failures.append(exc)
         if failures and all(isinstance(exc, AuthenticationFailed) for exc in failures):
@@ -110,23 +111,89 @@ class Scheduler:
         raise ConnectionLost(f"no configured SSH profile reaches {machine.id}")
 
     @staticmethod
-    def is_target(probe: dict, system: System) -> bool:
-        return probe.get("efi", {}).get("current") == system.boot_entry
+    async def probe_system(client, system: System, requirements=None):
+        if system.grub_entry:
+            return await client.probe(requirements, grub=True, grub_boot_entry=system.boot_entry)
+        return await client.probe() if requirements is None else await client.probe(requirements)
+
+    @staticmethod
+    def is_target(probe: dict, system: System, grub=None) -> bool:
+        if probe.get("efi", {}).get("current") != system.boot_entry:
+            return False
+        if not system.grub_entry:
+            return True
+        menu = probe.get("grub", {})
+        if menu.get("boot_entry") != system.boot_entry:
+            return False
+        entries = menu.get("entries", [])
+        entry = resolve_grub_entry(entries, system.grub_entry)
+        if not entry or not entry.get("selectable") or not entry.get("matches_boot"):
+            return False
+        if grub is not None:
+            return (
+                grub["id"] == entry["id"]
+                and grub["signature"] == entry["signature"]
+                and grub["identity"] == menu["identity"]
+            )
+        return sum(bool(item.get("matches_boot")) for item in entries) == 1
+
+    @staticmethod
+    def grub_target(machine: Machine, system: System, probe: dict) -> dict:
+        menu = probe.get("grub")
+        if not menu or menu.get("boot_entry") != system.boot_entry:
+            reason = probe.get("grub_error", "the selected UEFI entry has no verified menu")
+            raise RemoteError(f"cannot read the GRUB menu for Boot{system.boot_entry}: {reason}")
+        entry = resolve_grub_entry(menu["entries"], system.grub_entry)
+        if not entry or not entry["selectable"]:
+            raise RemoteError(f"GRUB entry is missing or cannot be verified: {system.grub_entry}")
+        for other in machine.systems:
+            if other.id != system.id and other.boot_entry == system.boot_entry:
+                if resolve_grub_entry(menu["entries"], other.grub_entry) is entry:
+                    raise RemoteError(
+                        f"systems {system.id} and {other.id} select the same GRUB entry"
+                    )
+        return {
+            "id": entry["id"],
+            "signature": entry["signature"],
+            "identity": menu["identity"],
+        }
+
+    @classmethod
+    def switched_target(cls, probe: dict, system: System, switch: dict) -> bool:
+        menu = probe.get("grub", {})
+        return cls.is_target(probe, system, switch.get("grub")) and (
+            not system.grub_entry
+            or not (
+                menu.get("next_entry") or menu.get("prev_saved_entry") or probe["efi"].get("next")
+            )
+        )
 
     async def ensure_system(self, machine: Machine, system: System, job: dict):
         current, probe = await self.retry(lambda: self.find_current(machine, system))
         check_probe(probe)
         details = self.store.job(job["id"])["details"]
         switch = details.get("switch")
+        grub = None
         if switch:
+            grub = switch.get("grub")
             if probe["boot_id"] != switch["previous_boot_id"]:
-                if not self.is_target(probe, system):
-                    raise RemoteError("reboot reached an unexpected operating system")
+                if not self.switched_target(probe, system, switch):
+                    raise RemoteError("reboot reached an unexpected operating system or boot entry")
             else:
                 # A durable intent may mean the SSH request reached the remote host.
                 # Never send a second reboot; wait for or reconcile the original one.
                 probe = await self.wait_boot(machine, system, switch)
-        elif not self.is_target(probe, system):
+        else:
+            already_booted = self.is_target(probe, system)
+            if system.grub_entry:
+                grub = self.grub_target(machine, system, probe)
+                if not already_booted and self.is_target(probe, system, grub):
+                    evidence = {"boot_id": probe["boot_id"], "target": grub}
+                    already_booted = any(
+                        item["details"].get("grub_boot") == evidence
+                        for item in self.store.jobs(self.run_id, machine.id)
+                    )
+        if not switch and not already_booted:
             if probe.get("efi", {}).get("next"):
                 raise RemoteError("existing BootNext conflicts with automatic switching")
             entry = probe["efi"]["entries"].get(system.boot_entry)
@@ -137,11 +204,27 @@ class Scheduler:
                 "requested": time.time(),
                 "deadline": time.time() + self.config.policy.boot_timeout,
             }
+            if grub is not None:
+                menu = probe["grub"]
+                if not menu["one_shot"]:
+                    raise RemoteError("the shared GRUB environment does not support one-time boot")
+                if menu["next_entry"] or menu["prev_saved_entry"]:
+                    raise RemoteError(
+                        "existing GRUB boot selection conflicts with automatic switching"
+                    )
+                switch["grub"] = grub
             self.store.update(job["id"], "switching", switch=switch)
-            self.event(job, f"switching to Boot{system.boot_entry}")
+            destination = f"Boot{system.boot_entry}"
+            if grub:
+                destination += f" / GRUB {grub['id']}"
+            self.event(job, f"switching to {destination}")
             try:
                 await current.switch(
-                    current.root(probe), probe["boot_id"], system.boot_entry, job["id"]
+                    current.root(probe),
+                    probe["boot_id"],
+                    system.boot_entry,
+                    job["id"],
+                    **({"grub": grub} if grub is not None else {}),
                 )
             except ConnectionLost:
                 pass  # The reboot can close SSH before it acknowledges the request.
@@ -149,20 +232,25 @@ class Scheduler:
         # Use the target profile even if bootstrap credentials worked on the other OS.
         target = self.client(machine, system)
         requirements = requirements_for(self.config)
-        target_probe = await self.retry(lambda: target.probe(requirements))
-        if not self.is_target(target_probe, system) or target_probe["boot_id"] != probe["boot_id"]:
+        target_probe = await self.retry(lambda: self.probe_system(target, system, requirements))
+        if (
+            not self.is_target(target_probe, system, grub)
+            or target_probe["boot_id"] != probe["boot_id"]
+        ):
             raise RemoteError("system boot changed during preparation")
         check_probe(target_probe, requirements=requirements)
         # The detached worker waits after construction/preparation, before each test.
-        return target, target_probe
+        return target, target_probe, grub
 
     async def wait_boot(self, machine: Machine, system: System, switch: dict) -> dict:
         while time.time() < switch["deadline"]:
             try:
                 _, probe = await self.find_current(machine, system)
                 if probe["boot_id"] != switch["previous_boot_id"]:
-                    if not self.is_target(probe, system):
-                        raise RemoteError("boot ID changed but target UEFI entry did not match")
+                    if not self.switched_target(probe, system, switch):
+                        raise RemoteError(
+                            "boot ID changed but target UEFI or GRUB entry did not match"
+                        )
                     return probe
             except (ConnectionLost, AuthenticationFailed):
                 pass
@@ -218,8 +306,10 @@ class Scheduler:
         directory = details.get("remote_dir")
         if directory:
             client = self.client(machine, system)
-            probe = await self.retry(client.probe)
-            if not self.is_target(probe, system):
+            probe = await self.retry(lambda: self.probe_system(client, system))
+            evidence = details.get("grub_boot")
+            grub = evidence["target"] if evidence else None
+            if not self.is_target(probe, system, grub):
                 raise Paused("job OS is not currently booted; no automatic switch during recovery")
         elif fetch_only:
             return
@@ -227,7 +317,7 @@ class Scheduler:
             self.store.update(job["id"], "cancelled", reason="cancelled before remote staging")
             return
         else:
-            client, probe = await self.ensure_system(machine, system, job)
+            client, probe, grub = await self.ensure_system(machine, system, job)
             root = client.root(probe)
             directory = str(PurePosixPath(root) / "jobs" / job["id"])
             adapter = get_adapter(benchmark.type)
@@ -253,12 +343,17 @@ class Scheduler:
                 "tool": adapter.metadata(benchmark),
                 "settle_seconds": self.config.policy.settle_seconds,
             }
+            boot_details = {}
+            if grub is not None:
+                manifest["grub_entry"] = grub["id"]
+                boot_details["grub_boot"] = {"boot_id": probe["boot_id"], "target": grub}
             self.store.update(
                 job["id"],
                 "preparing",
                 remote_dir=directory,
                 manifest=manifest,
                 remote_boot_id=probe["boot_id"],
+                **boot_details,
             )
             details = self.store.job(job["id"])["details"]
         status = await self.retry(lambda: client.status(job["id"], directory))
@@ -394,7 +489,13 @@ async def inspect_machine(config: Config, machine: Machine) -> dict:
     """Read-only discovery/doctor: never boot other systems to inspect them."""
     requirements = requirements_for(config)
     client = RemoteClient(machine, None, config.policy)
-    probe = await client.probe(requirements)
+    grub_systems = {system.boot_entry: system for system in machine.systems if system.grub_entry}
+    if len(grub_systems) == 1:
+        probe = await Scheduler.probe_system(
+            client, next(iter(grub_systems.values())), requirements
+        )
+    else:
+        probe = await client.probe(requirements, grub=True)
     errors = []
     try:
         check_probe(probe, requirements=requirements)
@@ -406,12 +507,21 @@ async def inspect_machine(config: Config, machine: Machine) -> dict:
         current = Scheduler.is_target(probe, system)
         if not entry or not entry["active"]:
             errors.append(f"missing/inactive EFI entry for {system.id}")
+        checked = current
+        if system.grub_entry and (
+            len(grub_systems) == 1 or probe.get("efi", {}).get("current") == system.boot_entry
+        ):
+            try:
+                Scheduler.grub_target(machine, system, probe)
+                checked = True
+            except RemoteError as exc:
+                errors.append(str(exc))
         systems.append(
             {
                 "id": system.id,
                 "current": current,
                 "dependencies_checked": current,
-                "boot_entry_checked": current,
+                "boot_entry_checked": checked,
                 "configured_environment": {
                     b.id: merged_env({}, system.env, b.env) for b in config.benchmarks
                 },

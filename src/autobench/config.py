@@ -112,6 +112,7 @@ class SSHConfig(Model):
 class System(Model):
     id: str
     boot_entry: StrictStr
+    grub_entry: StrictStr | None = None
     ssh: SSHOverride = Field(default_factory=SSHOverride)
     env: Environment = Field(default_factory=dict)
 
@@ -126,6 +127,16 @@ class System(Model):
             )
         return value.upper()
 
+    @field_validator("grub_entry")
+    @classmethod
+    def grub_selector(cls, value):
+        if value is not None and (
+            any(not part.strip() for part in value.split(">"))
+            or any(ord(char) < 32 or ord(char) == 127 for char in value)
+        ):
+            raise ValueError("GRUB entry must be a nonempty menu selector")
+        return value
+
 
 class Machine(Model):
     id: str
@@ -135,10 +146,19 @@ class Machine(Model):
 
     @model_validator(mode="after")
     def unique_systems(self):
-        for field in ("id", "boot_entry"):
-            values = [getattr(item, field) for item in self.systems]
-            if len(set(values)) != len(values):
-                raise ValueError(f"duplicate system {field} in machine {self.id}")
+        if len({system.id for system in self.systems}) != len(self.systems):
+            raise ValueError(f"duplicate system id in machine {self.id}")
+        entries: dict[str, set[str | None]] = {}
+        for system in self.systems:
+            selectors = entries.setdefault(system.boot_entry, set())
+            if selectors and (
+                system.grub_entry is None or None in selectors or system.grub_entry in selectors
+            ):
+                raise ValueError(
+                    f"duplicate system boot_entry in machine {self.id}: "
+                    "systems sharing a UEFI entry require distinct GRUB entries"
+                )
+            selectors.add(system.grub_entry)
         if not self.remote_dir or "\x00" in self.remote_dir:
             raise ValueError("remote_dir cannot be empty or contain NUL")
         for system in self.systems:

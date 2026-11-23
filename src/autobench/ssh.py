@@ -118,8 +118,19 @@ class SSHClient:
             raise RemoteError(reply.get("error", "remote helper failed"))
         return reply["value"]
 
-    async def probe(self, requirements: list[str] | None = None) -> dict:
-        return await self.call("probe", {"requirements": requirements or []})
+    async def probe(
+        self,
+        requirements: list[str] | None = None,
+        *,
+        grub=False,
+        grub_boot_entry: str | None = None,
+    ) -> dict:
+        payload = {"requirements": requirements or []}
+        if grub:
+            payload["grub"] = True
+            if grub_boot_entry is not None:
+                payload["grub_boot_entry"] = grub_boot_entry
+        return await self.call("probe", payload)
 
 
 class RemoteClient(SSHClient):
@@ -185,16 +196,18 @@ class RemoteClient(SSHClient):
     async def acknowledge(self, job_id: str, directory: str):
         return await self.call("ack", self.payload(job_id, directory))
 
-    async def switch(self, root: str, previous_boot_id: str, boot_entry: str, token: str):
-        return await self.call(
-            "switch",
-            {
-                "root": root,
-                "previous_boot_id": previous_boot_id,
-                "boot_entry": boot_entry,
-                "token": token,
-            },
-        )
+    async def switch(
+        self, root: str, previous_boot_id: str, boot_entry: str, token: str, *, grub=None
+    ):
+        payload = {
+            "root": root,
+            "previous_boot_id": previous_boot_id,
+            "boot_entry": boot_entry,
+            "token": token,
+        }
+        if grub is not None:
+            payload["grub"] = grub
+        return await self.call("switch", payload)
 
     async def download(self, directory: str, inventory: dict, destination: Path):
         """Resume per-file offsets, verify every file, then commit the directory."""

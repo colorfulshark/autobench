@@ -2295,6 +2295,78 @@ def test_boot_entry_identification_failure_preserves_input_and_allows_retry(
     assert entry.evaluate("e => e.tagName") == "SELECT" and entry.input_value() == "00AB"
 
 
+@pytest.mark.parametrize("width", [1440, 390])
+@pytest.mark.parametrize("boot_entry", ["", "0002"])
+def test_grub_auto_default_manual_selection_and_clear(browser_page, ui_server, width, boot_entry):
+    page, server = browser_page, ui_server
+    document = yaml.safe_load(server.existing.read_text())
+    del document["machines"][0]["systems"][0]["grub_entry"]
+    document["machines"][0]["systems"][0]["boot_entry"] = boot_entry
+    server.existing.write_text(yaml.safe_dump(document))
+    ready(page, server)
+    page.set_viewport_size({"width": width, "height": 1000})
+    load_existing(page, server)
+    open_system(page, "os1")
+    match = "**/api/systems/boot-entries"
+    result = {
+        "entries": [
+            {"id": "0001", "label": "Shared GRUB", "active": True},
+            {"id": "0002", "label": "Other UEFI entry", "active": True},
+        ],
+        "grub": {
+            "boot_entry": "0001",
+            "default_entry": "linux-default",
+            "entries": [
+                {"id": "linux-default", "label": "Linux", "selectable": True},
+                {"id": "advanced>linux-old", "label": "高级选项 › 旧内核", "selectable": True},
+                {"id": "firmware", "label": "Firmware", "selectable": False},
+            ],
+            "error": None,
+        },
+    }
+
+    def identify(route):
+        assert "boot_entry" not in route.request.post_data_json
+        route.fulfill(json={"status": "completed", "result": result})
+
+    page.route(match, identify)
+    detect = page.get_by_role("button", name="自动识别", exact=True)
+    grub = page.get_by_label("GRUB 启动项", exact=True)
+    detect.click()
+    page.locator('.boot-entry-status[data-phase="success"]').wait_for()
+    uefi = page.locator("#input-machines-0-systems-0-boot_entry")
+    assert uefi.input_value() == boot_entry
+    assert grub.input_value() == "linux-default"
+    assert grub.locator("option[value=firmware]").is_disabled()
+    uefi.select_option("0001")
+    uefi.select_option("0002")
+    assert grub.input_value() == "linux-default"
+    grub.select_option("advanced>linux-old")
+    detect.click()
+    page.locator('.boot-entry-status[data-phase="success"]').wait_for()
+    assert grub.input_value() == "advanced>linux-old"
+    page.get_by_role("button", name="手动填写", exact=True).click()
+    grub.fill("advanced>linux-custom")
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    set_editor_mode(page, "yaml")
+    page.locator("#yaml-panel").wait_for()
+    config = yaml.safe_load(page.locator("#yaml-editor").input_value())
+    assert config["machines"][0]["systems"][0]["grub_entry"] == "advanced>linux-custom"
+    set_editor_mode(page, "form")
+    open_system(page, "os1")
+    detect.click()
+    page.locator('.boot-entry-status[data-phase="success"]').wait_for()
+    assert grub.input_value() == "advanced>linux-custom"
+    grub.select_option("")
+    detect.click()
+    page.locator('.boot-entry-status[data-phase="success"]').wait_for()
+    assert grub.input_value() == ""
+    set_editor_mode(page, "yaml")
+    page.locator("#yaml-panel").wait_for()
+    config = yaml.safe_load(page.locator("#yaml-editor").input_value())
+    assert config["machines"][0]["systems"][0]["grub_entry"] is None
+
+
 @pytest.mark.parametrize("old_failure", [False, True])
 def test_boot_entry_identification_uses_overrides_and_ignores_outdated_results(
     browser_page, ui_server, old_failure

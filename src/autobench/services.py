@@ -22,13 +22,22 @@ from autobench.ssh import SSHClient
 from autobench.storage import Store
 
 
-async def _probe_ssh(ssh: SSHConfig, connect_timeout: float, requirements: list[str]) -> dict:
+async def _probe_ssh(
+    ssh: SSHConfig,
+    connect_timeout: float,
+    requirements: list[str],
+    *,
+    grub=False,
+) -> dict:
     if ssh.verify_host_key and not ssh.known_hosts.is_file():
         raise AutoBenchError("主机密钥文件不存在，请在高级设置中选择已核验的 known_hosts 文件。")
     if any(not path.is_file() for path in ssh.client_keys):
         raise AutoBenchError("私钥文件不存在，请选择服务器上的私钥文件。")
     try:
-        return await SSHClient(ssh, Policy(connect_timeout=connect_timeout)).probe(requirements)
+        client = SSHClient(ssh, Policy(connect_timeout=connect_timeout))
+        if grub:
+            return await client.probe(requirements, grub=True)
+        return await client.probe(requirements)
     except AuthenticationFailed as exc:
         if isinstance(exc.__cause__, asyncssh.HostKeyNotVerifiable):
             message = "主机密钥校验失败，请核对指纹并更新已信任的主机密钥文件。"
@@ -46,8 +55,8 @@ async def _probe_ssh(ssh: SSHConfig, connect_timeout: float, requirements: list[
 
 
 async def identify_boot_entries(ssh: SSHConfig, connect_timeout: float = 15) -> dict:
-    """Read selectable UEFI entries without modifying boot state or configuration."""
-    probe = await _probe_ssh(ssh, connect_timeout, ["efibootmgr"])
+    """Read UEFI and GRUB entries without modifying boot state or configuration."""
+    probe = await _probe_ssh(ssh, connect_timeout, ["efibootmgr"], grub=True)
     entries = [
         {"id": entry.upper(), "label": item.get("label", ""), "active": bool(item.get("active"))}
         for entry, item in probe.get("efi", {}).get("entries", {}).items()
@@ -58,7 +67,30 @@ async def identify_boot_entries(ssh: SSHConfig, connect_timeout: float = 15) -> 
         if probe.get("efi_error"):
             message += " " + probe["efi_error"]
         raise AutoBenchError(message)
-    return {"entries": entries}
+    result = {"entries": entries}
+    menu = probe.get("grub")
+    if menu:
+        result["grub"] = {
+            "boot_entry": menu["boot_entry"],
+            "default_entry": menu["default_entry"],
+            "entries": [
+                {
+                    "id": entry["id"],
+                    "label": entry["label"],
+                    "selectable": entry["selectable"] and menu["one_shot"],
+                }
+                for entry in menu["entries"]
+            ],
+            "error": None if menu["one_shot"] else "此 GRUB 环境不支持一次性启动。",
+        }
+    elif probe.get("grub_error"):
+        result["grub"] = {
+            "boot_entry": probe.get("efi", {}).get("current"),
+            "default_entry": None,
+            "entries": [],
+            "error": "无法识别 GRUB 启动项。 " + probe["grub_error"],
+        }
+    return result
 
 
 async def probe_connection(ssh: SSHConfig, connect_timeout: float = 15) -> dict:

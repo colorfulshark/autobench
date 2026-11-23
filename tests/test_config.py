@@ -298,6 +298,20 @@ def test_duplicate_boot_entry_rejected(config, boot_entry):
         type(config).model_validate(value)
 
 
+def test_shared_uefi_entry_requires_distinct_grub_targets(config):
+    value = config.model_dump()
+    first, second = value["machines"][0]["systems"]
+    second["boot_entry"] = first["boot_entry"]
+    first["grub_entry"] = "advanced>first-kernel"
+    second["grub_entry"] = "second-kernel"
+    parsed = type(config).model_validate(value)
+    assert parsed.machines[0].systems[0].grub_entry == "advanced>first-kernel"
+    for invalid in (None, first["grub_entry"], "advanced>", 1, "bad\nentry"):
+        second["grub_entry"] = invalid
+        with pytest.raises(ValidationError):
+            type(config).model_validate(value)
+
+
 @pytest.mark.parametrize(
     "proxy",
     [

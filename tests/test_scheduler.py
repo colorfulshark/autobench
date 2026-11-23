@@ -49,9 +49,9 @@ class FakeRemote:
     def __init__(self, world, machine, system):
         self.world, self.machine, self.system = world, machine, system
 
-    async def probe(self, requirements=None):
+    async def probe(self, requirements=None, *, grub=False, grub_boot_entry=None):
         current = self.world.current[self.machine.id]
-        return {
+        reply = {
             "boot_id": self.world.boot[self.machine.id],
             "home": "/home/bench",
             "python": [3, 8, 0],
@@ -64,11 +64,33 @@ class FakeRemote:
                 "entries": {s.boot_entry: {"active": True} for s in self.machine.systems},
             },
         }
+        if grub and current.grub_entry:
+            boot_entry = grub_boot_entry or current.boot_entry
+            entries = [
+                {
+                    "id": system.grub_entry,
+                    "selectors": [[system.grub_entry, system.id, str(index)]],
+                    "signature": "signature-" + system.id,
+                    "selectable": True,
+                    "matches_boot": current.id == system.id,
+                }
+                for index, system in enumerate(self.machine.systems)
+                if system.grub_entry and system.boot_entry == boot_entry
+            ]
+            reply["grub"] = {
+                "boot_entry": boot_entry,
+                "identity": ["fs-uuid", "grub/grubenv"],
+                "one_shot": True,
+                "next_entry": None,
+                "prev_saved_entry": None,
+                "entries": entries,
+            }
+        return reply
 
     def root(self, probe):
         return "/home/bench/.local/state/autobench"
 
-    async def switch(self, root, previous_boot_id, boot_entry, token):
+    async def switch(self, root, previous_boot_id, boot_entry, token, *, grub=None):
         assert self.world.boot[self.machine.id] == previous_boot_id
         assert all(
             j.get("acked")
@@ -77,7 +99,9 @@ class FakeRemote:
         )
         self.world.events.append((self.machine.id, "switch"))
         self.world.current[self.machine.id] = next(
-            s for s in self.machine.systems if s.boot_entry == boot_entry
+            s
+            for s in self.machine.systems
+            if s.boot_entry == boot_entry and (grub is None or s.grub_entry == grub["id"])
         )
         self.world.boot[self.machine.id] += "-new"
         raise ConnectionLost("reboot dropped SSH")
@@ -439,6 +463,81 @@ async def test_wrong_boot_entry_never_runs(config, verify_host_key):
         assert store.jobs(run_id)[1]["status"] == "failed"
     finally:
         FakeRemote.switch = original_method
+        store.close()
+
+
+@pytest.fixture
+def shared_grub(config):
+    first, second = config.machines[0].systems
+    first.grub_entry = "kernel-one"
+    second.grub_entry = "kernel-two"
+    second.boot_entry = first.boot_entry
+    config.benchmarks[0].repetitions = 2
+    return config
+
+
+@pytest.mark.parametrize("outcome", ["normal", "wrong", "pending", "resume"])
+async def test_shared_grub_switch_checks_boot_and_reuses_proof(shared_grub, monkeypatch, outcome):
+    store, run_id, world = setup(shared_grub)
+    original_probe = FakeRemote.probe
+    original_switch = FakeRemote.switch
+
+    async def probe(self, requirements=None, *, grub=False, grub_boot_entry=None):
+        result = await original_probe(
+            self, requirements, grub=grub, grub_boot_entry=grub_boot_entry
+        )
+        if grub:
+            menu = result["grub"]
+            # The second entry has a menu alias with identical kernel and initrd.
+            alias = dict(menu["entries"][1], id="alias", selectors=[["alias", "Alias", "2"]])
+            menu["entries"].append(alias)
+            if outcome == "pending":
+                menu["next_entry"] = "someone-elses-selection"
+        return result
+
+    async def switch(self, *args, **kwargs):
+        try:
+            await original_switch(self, *args, **kwargs)
+        except ConnectionLost:
+            if outcome == "wrong":
+                self.world.current[self.machine.id] = self.machine.systems[0]
+            elif outcome == "resume":
+                raise asyncio.CancelledError()
+            raise
+
+    monkeypatch.setattr(FakeRemote, "probe", probe)
+    monkeypatch.setattr(FakeRemote, "switch", switch)
+    try:
+        status = await execute(store, run_id, world)
+        if outcome == "resume":
+            assert store.jobs(run_id)[2]["details"]["switch"]["grub"]["id"] == "kernel-two"
+            status = await execute(store, run_id, world)
+        assert world.events.count(("host1", "switch")) == (0 if outcome == "pending" else 1)
+        if outcome in ("normal", "resume"):
+            assert status == "succeeded"
+            assert len(world.starts) == 4
+            assert world.jobs[world.starts[-1]]["manifest"]["grub_entry"] == "kernel-two"
+        else:
+            assert status == "failed" and len(world.starts) == 2
+            reason = store.jobs(run_id)[2]["details"]["reason"]
+            assert (
+                "existing GRUB boot selection"
+                if outcome == "pending"
+                else "GRUB entry did not match"
+            ) in reason
+    finally:
+        store.close()
+
+
+async def test_grub_switch_from_firmware_disk_entry(shared_grub):
+    store, run_id, world = setup(shared_grub)
+    system = shared_grub.machines[0].systems[0]
+    world.current["host1"] = system.model_copy(update={"boot_entry": "0009"})
+    try:
+        assert await execute(store, run_id, world) == "succeeded"
+        assert world.events.count(("host1", "switch")) == 2
+        assert world.jobs[world.starts[0]]["manifest"]["efi"]["current"] == system.boot_entry
+    finally:
         store.close()
 
 

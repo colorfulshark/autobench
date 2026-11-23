@@ -45,7 +45,7 @@ import {
   table,
   friendlyError,
 } from "./ui.js";
-import { bootEntryField, updateBootEntryFields } from "./boot-entries.js";
+import { bootEntryField, grubEntryField, updateBootEntryFields } from "./boot-entries.js";
 import { chooseFile } from "./files.js";
 import { connectionTestPanel, updateConnectionTestPanels } from "./checks.js";
 import { unixbenchTestsEditor } from "./unixbench-tests.js";
@@ -632,6 +632,7 @@ function systemEditor(machine, mi, system, si) {
       leadingIcon: "database",
     }),
     bootEntryField(machine, system, [...path, "boot_entry"]),
+    grubEntryField(machine, system, [...path, "grub_entry"]),
   );
   const summary = node("div", "inherit-summary");
   const inherited = mergedSSH(machine);
@@ -739,7 +740,9 @@ function systemsBoard(machine, index) {
     );
     status.dataset.valid = String(validEntry);
     if (!validEntry) status.append(icon("warning"));
-    status.append(node("span", "", entryLabel));
+    const bootTarget = system.grub_entry ? `${entryLabel} / GRUB ${system.grub_entry}` : entryLabel;
+    status.title = bootTarget;
+    status.append(node("span", "", bootTarget));
     const identity = node("div", "system-identity");
     identity.append(
       node("span", "system-order mono", String(si + 1).padStart(2, "0")),
@@ -1016,6 +1019,9 @@ export function review() {
           node("span", "mono", m.id),
           node("span", "secondary", s.id),
         );
+        if (s.boot_entry)
+          scope.append(node("span", "secondary review-boot-target",
+            `Boot${s.boot_entry}${s.grub_entry ? ` / GRUB ${s.grub_entry}` : ""}`));
         rows.push([
           scope,
           b.id,
@@ -1411,6 +1417,15 @@ function stepProblems(step) {
             path: ["machines", i, "systems", j, "boot_entry"],
             message: "启动项应为四位十六进制字符串。",
           });
+        if (s?.grub_entry != null && (
+          typeof s.grub_entry !== "string" ||
+          s.grub_entry.split(">").some((part) => !part.trim()) ||
+          Array.from(s.grub_entry).some((char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127)
+        ))
+          problems.push({
+            path: ["machines", i, "systems", j, "grub_entry"],
+            message: "请填写有效的 GRUB 菜单项，或清除该字段。",
+          });
       });
     });
   if (step === 2) {
@@ -1439,7 +1454,8 @@ const fieldNames = {
   known_hosts: "主机校验",
   verify_host_key: "主机密钥检查",
   id: "标识",
-  boot_entry: "启动项",
+  boot_entry: "UEFI 启动项",
+  grub_entry: "GRUB 启动项",
   source_archive: "源码包",
   tests: "测试项",
   repetitions: "正式轮数",

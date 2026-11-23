@@ -303,6 +303,260 @@ def test_efi_parse_and_switch_guards(tmp_path, monkeypatch):
     assert commands == [["efibootmgr", "-n", "0002"], ["systemctl", "reboot", "--no-block"]]
 
 
+GRUB_HEADER = """\
+load_env
+if [ "${next_entry}" ]; then
+  set default="${next_entry}"
+  set next_entry=
+  save_env next_entry
+else
+  set default="${saved_entry}"
+fi
+"""
+GRUB_MENU = """\
+menuentry 'New Linux' $menuentry_id_option 'new' {
+  linux /vmlinuz-new root=UUID=current ro quiet $vt_handoff
+  initrd /initramfs-new
+}
+submenu 'Older versions' --id advanced {
+  menuentry 'Old Linux' --id=old {
+    linuxefi /vmlinuz-old root=UUID=current ro quiet
+    initrdefi /initramfs-old
+  }
+}
+menuentry 'Other Linux' --id other {
+  linux /vmlinuz-other root=UUID=other ro quiet
+}
+menuentry 'Firmware settings' --id setup {
+  fwsetup
+}
+"""
+
+
+def test_grub_tool_finds_admin_commands_with_unprivileged_login_path(monkeypatch):
+    monkeypatch.setenv("PATH", "/usr/bin")
+
+    def which(name, *, path):
+        return "/usr/sbin/grub2-probe" if name == "grub2-probe" and "/usr/sbin" in path else None
+
+    monkeypatch.setattr(shutil, "which", which)
+    assert rr.grub_tool("probe") == "/usr/sbin/grub2-probe"
+
+
+@pytest.fixture
+def grub_host(monkeypatch):
+    files = {}
+    state = {
+        "config": GRUB_HEADER + GRUB_MENU,
+        "env": "saved_entry=new\n",
+        "cmdline": "BOOT_IMAGE=/vmlinuz-old root=UUID=current ro quiet",
+        "grubby": "",
+    }
+
+    def command(argv, privileged=False, **kwargs):
+        assert privileged
+        if argv[0] == "realpath":
+            return argv[-1]
+        if argv[0] == "grub-editenv":
+            assert argv[-1] == "list"
+            return state["env"]
+        if argv[0] == "grubby":
+            return state["grubby"]
+        if argv[0] == "findmnt":
+            return "/boot /"
+        return {
+            "--target=fs": "ext2",
+            "--target=fs_uuid": "fs-uuid",
+            "--target=abstraction": "",
+        }[argv[1]]
+
+    def read_text(path, *args, **kwargs):
+        if str(path) == "/proc/cmdline":
+            return state["cmdline"]
+        if path.name.startswith("config-"):
+            return state.get("kernel_config", "")
+        raise AssertionError(path)
+
+    monkeypatch.setattr(rr.platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(rr, "grub_tool", lambda name: "grub-" + name)
+    monkeypatch.setattr(
+        rr,
+        "grub_config",
+        lambda number, loaders=None: (Path("/boot/grub2/grub.cfg"), state["config"]),
+    )
+    monkeypatch.setattr(rr, "command", command)
+    monkeypatch.setattr(rr, "boot_file", lambda path: files[str(path)])
+    monkeypatch.setattr(Path, "read_text", read_text)
+    return state, files
+
+
+@pytest.mark.parametrize(
+    "default, expected",
+    [
+        ("${saved_entry}", "new"),
+        ("1>0", "advanced>old"),
+        ("other", "advanced>old"),
+    ],
+)
+def test_grub_traditional_discovery_selects_default_for_current_linux(grub_host, default, expected):
+    state, _ = grub_host
+    state["config"] = state["config"].replace("${saved_entry}", default)
+    state["env"] += "next_entry=other\n"
+    menu, _, _ = rr.grub_boot_menu("0001")
+    assert menu["one_shot"] and menu["default_entry"] == expected
+    assert menu["next_entry"] == "other"
+    assert menu["identity"] == ["fs-uuid", "/grub2/grubenv"]
+    assert [entry["id"] for entry in menu["entries"]] == ["new", "advanced>old", "other", "setup"]
+    assert rr.resolve_grub_entry(menu["entries"], "Older versions>0")["matches_boot"]
+    assert not rr.resolve_grub_entry(menu["entries"], "setup")["selectable"]
+
+
+def test_grub_bls_entries_use_real_order_and_expand_kernelopts(grub_host):
+    state, files = grub_host
+    state.update(
+        config=GRUB_HEADER.replace("${saved_entry}", "0") + "blscfg\n",
+        grubby='index=0\nid="linux-10.1"\n\nindex=1\nid="linux-9.1"\n',
+        env="kernelopts=root=UUID=current ro quiet\n",
+        cmdline="driver_sync_probe=sd,nvme BOOT_IMAGE=(hd0,gpt2)/vmlinuz-9.1 root=UUID=current ro quiet",
+        kernel_config='CONFIG_CMDLINE_BOOL=y\nCONFIG_CMDLINE="driver_sync_probe=sd,nvme"\n',
+    )
+    for release in ("10.1", "9.1"):
+        files[f"/boot/loader/entries/linux-{release}.conf"] = (
+            f"title Linux {release}\nlinux /vmlinuz-{release}\n"
+            f"initrd /initramfs-{release}.img\noptions $kernelopts $tuned_params\n"
+        )
+    menu, _, _ = rr.grub_boot_menu("0001")
+    assert menu["one_shot"] and menu["default_entry"] == "linux-10.1"
+    assert [entry["id"] for entry in menu["entries"] if entry["matches_boot"]] == ["linux-9.1"]
+
+
+def test_grub_config_follows_only_matching_esp_stub(monkeypatch):
+    efi = "Boot0001* ubuntu HD(1,GPT,6ca3fd03-abd1-4197-97b5-088612d62512,0x800,0x80000)"
+    efi += r"/File(\EFI\ubuntu\shimx64.efi)"
+    stub = (
+        "search.fs_uuid 96e80efb-8b2b-415d-a20f-9aee60c71cef root hd0,gpt2\n"
+        "set prefix=($root)'/boot/grub'\nconfigfile $prefix/grub.cfg\n"
+    )
+    results = {
+        ("efibootmgr", "-v"): efi,
+        ("findmnt", "-nro", "SOURCE", "--mountpoint", "/boot/efi"): "/dev/sda1",
+        ("lsblk", "-ndo", "PARTUUID", "--", "/dev/sda1"): "6ca3fd03-abd1-4197-97b5-088612d62512",
+        (
+            "grub-probe",
+            "--target=fs_uuid",
+            "/boot/grub/grub.cfg",
+        ): "96e80efb-8b2b-415d-a20f-9aee60c71cef",
+        ("findmnt", "-nro", "TARGET,FSROOT", "--target", "/boot/grub/grub.cfg"): "/ /",
+    }
+    monkeypatch.setattr(rr, "grub_tool", lambda name: "grub-" + name)
+    monkeypatch.setattr(rr, "command", lambda argv, **kwargs: results[tuple(argv)])
+    files = {Path("/boot/efi/EFI/ubuntu/grub.cfg"): stub, Path("/boot/grub/grub.cfg"): GRUB_MENU}
+    monkeypatch.setattr(rr, "boot_file", files.__getitem__)
+    assert rr.grub_config("0001") == (Path("/boot/grub/grub.cfg"), GRUB_MENU)
+    with pytest.raises(RuntimeError, match="cannot locate"):
+        rr.grub_config("0002")
+
+
+@pytest.mark.parametrize("ambiguous", [False, True])
+def test_grub_discovery_uses_running_linux_when_firmware_entry_has_no_loader(
+    monkeypatch, ambiguous
+):
+    firmware = {
+        "current": "0002",
+        "entries": {entry: {"active": True} for entry in ("0002", "0004", "0005")},
+    }
+    loaders = {"0004": (), "0005": ()}
+    calls = []
+
+    def menu(number, loader_paths):
+        assert loader_paths is loaders
+        calls.append(number)
+        if number not in loader_paths:
+            raise RuntimeError("missing GRUB loader")
+        return (
+            {
+                "boot_entry": number,
+                "identity": [number, "/grub2/grubenv"],
+                "entries": [{"id": "linux", "matches_boot": number == "0004" or ambiguous}],
+            },
+            None,
+            None,
+        )
+
+    monkeypatch.setattr(rr, "grub_loaders", lambda: loaders)
+    monkeypatch.setattr(rr, "grub_boot_menu", menu)
+    if ambiguous:
+        with pytest.raises(RuntimeError, match="multiple GRUB menus"):
+            rr.current_grub_menu(firmware)
+    else:
+        assert rr.current_grub_menu(firmware)["boot_entry"] == "0004"
+    assert calls == ["0002", "0004", "0005"]
+
+
+@pytest.mark.parametrize("failure", [None, "pending", "efi", "reboot"])
+def test_grub_one_time_switch_and_rollback(tmp_path, monkeypatch, failure):
+    current = {"current": "0009", "next": None, "entries": {"0001": {"active": True}}}
+    env = {"saved_entry": "permanent"}
+    target = {"id": "advanced>old", "signature": "expected", "identity": ["fs", "grubenv"]}
+    menu = {
+        "identity": target["identity"],
+        "one_shot": True,
+        "entries": [
+            {
+                **target,
+                "selectors": [["advanced", "Advanced", "1"], ["old", "Old Linux", "0"]],
+                "selectable": True,
+            }
+        ],
+        "next_entry": "another" if failure == "pending" else None,
+        "prev_saved_entry": None,
+    }
+    calls = []
+
+    def command(argv, privileged=False):
+        assert privileged
+        calls.append(argv)
+        if argv[:2] == ["efibootmgr", "-n"]:
+            current["next"] = argv[2]
+            if failure == "efi":
+                raise RuntimeError("firmware failed to set BootNext")
+        elif argv == ["efibootmgr", "-N"]:
+            current["next"] = None
+        elif argv[2:3] == ["set"]:
+            env["next_entry"] = argv[3].split("=", 1)[1]
+        elif argv[2:3] == ["unset"]:
+            del env["next_entry"]
+        elif argv[0] == "systemctl" and failure == "reboot":
+            raise RuntimeError("systemd refused the request")
+        return ""
+
+    monkeypatch.setattr(rr, "efi", lambda: current.copy())
+    monkeypatch.setattr(rr, "grub_boot_menu", lambda *args: (menu, "grub-editenv", "/boot/grubenv"))
+    monkeypatch.setattr(rr, "grub_env", lambda *args: env.copy())
+    monkeypatch.setattr(rr, "command", command)
+    payload = {
+        "root": str(tmp_path),
+        "previous_boot_id": rr.boot_id(),
+        "boot_entry": "0001",
+        "token": "a" * 32,
+        "grub": target,
+    }
+    if failure:
+        with pytest.raises(RuntimeError):
+            rr.switch(payload)
+        assert env == {"saved_entry": "permanent"} and current["next"] is None
+        if failure == "pending":
+            assert not calls
+    else:
+        assert rr.switch(payload)["reboot_requested"]
+        assert env == {"saved_entry": "permanent", "next_entry": "advanced>old"}
+        assert calls == [
+            ["grub-editenv", "/boot/grubenv", "set", "next_entry=advanced>old"],
+            ["efibootmgr", "-n", "0001"],
+            ["systemctl", "reboot", "--no-block"],
+        ]
+
+
 def completed_worker(directory, expected=0, **kwargs):
     process = launch(directory, **kwargs)
     stdout, stderr = process.communicate(timeout=30)

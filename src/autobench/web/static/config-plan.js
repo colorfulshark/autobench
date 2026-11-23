@@ -54,7 +54,9 @@ export function renderPlan(stepLimit) {
         const item = node("li");
         item.append(
           node("span", "", system.id || "未命名系统"),
-          node("code", "", system.boot_entry || "未设启动项"),
+          node("code", system.grub_entry ? "plan-boot-target" : "", system.grub_entry
+            ? `${system.boot_entry || "未设启动项"} / GRUB ${system.grub_entry}`
+            : system.boot_entry || "未设启动项"),
         );
         route.append(item);
       }

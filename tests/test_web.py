@@ -751,17 +751,34 @@ def test_boot_entries_returns_only_choices_and_uses_connection_settings(
         def __init__(self, ssh, policy):
             received.append((ssh, policy))
 
-        async def probe(self, requirements):
+        async def probe(self, requirements, *, grub=False):
             assert requirements == ["efibootmgr"]
+            assert grub
             return {
                 "efi": {
                     "current": "0001",
                     "raw": "raw output",
                     "entries": {
                         "0001": {"label": "Ubuntu", "active": True},
+                        "00A4": {"label": "Linux on the mounted disk", "active": True},
                         "abcd": {"label": f"Firmware {password}", "active": False},
                         "invalid": {"label": "Invalid", "active": True},
                     },
+                },
+                "grub": {
+                    "boot_entry": "00A4",
+                    "default_entry": "some-entry",
+                    "entries": [
+                        {
+                            "id": "some-entry",
+                            "label": f"Linux {password}",
+                            "selectable": True,
+                            "signature": "only-for-scheduler",
+                        },
+                        {"id": f"maybe-{password}", "label": "Filtered", "selectable": True},
+                    ],
+                    "one_shot": True,
+                    "identity": ["some-uuid", "grub/grubenv"],
                 },
                 "hostname": "private-host",
                 "systemd_available": False,
@@ -787,6 +804,7 @@ def test_boot_entries_returns_only_choices_and_uses_connection_settings(
             },
             "config_path": "configs/new.yaml",
             "connect_timeout": 3,
+            "boot_entry": "abcd",
         },
     )
     assert response.status_code == 202
@@ -794,8 +812,15 @@ def test_boot_entries_returns_only_choices_and_uses_connection_settings(
     assert result == {
         "entries": [
             {"id": "0001", "label": "Ubuntu", "active": True},
+            {"id": "00A4", "label": "Linux on the mounted disk", "active": True},
             {"id": "ABCD", "label": "Firmware ********", "active": False},
-        ]
+        ],
+        "grub": {
+            "boot_entry": "00A4",
+            "default_entry": "some-entry",
+            "entries": [{"id": "some-entry", "label": "Linux ********", "selectable": True}],
+            "error": None,
+        },
     }
     ssh, policy = received[0]
     assert (ssh.host, ssh.username, ssh.password) == ("system-host", "system-user", password)
@@ -829,7 +854,7 @@ def test_boot_entries_reports_failures_without_leaking_credentials(
         def __init__(self, ssh, policy):
             pass
 
-        async def probe(self, requirements):
+        async def probe(self, requirements, *, grub=False):
             errors = {
                 "authentication": AuthenticationFailed,
                 "connection": ConnectionLost,

@@ -80,7 +80,7 @@ async def inspections(config: Path, selected: str | None):
 
 @app.command()
 def discover(config: Path, machine: Annotated[str | None, typer.Option()] = None):
-    """Read current UEFI entries and environment prerequisites without rebooting."""
+    """Read current UEFI and GRUB entries and environment prerequisites without rebooting."""
     with errors():
         result = asyncio.run(inspections(config, machine))
         typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
