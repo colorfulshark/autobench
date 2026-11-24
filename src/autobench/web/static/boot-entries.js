@@ -102,6 +102,14 @@ export function bootEntryField(machine, system, path) {
   if (fresh(machine, system) && record.entries?.length) {
     const input = controls.querySelector("input");
     const select = node("select");
+    if (
+      CSS.supports("appearance: base-select") &&
+      CSS.supports("selector(select::picker(select))")
+    ) {
+      const trigger = node("button");
+      trigger.append(node("selectedcontent"));
+      select.append(trigger);
+    }
     select.id = input.id;
     if (input.hasAttribute("aria-invalid"))
       select.setAttribute("aria-invalid", "true");

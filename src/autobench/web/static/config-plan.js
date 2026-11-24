@@ -56,14 +56,7 @@ export function renderPlan(stepLimit) {
     else {
       const route = node("ol", "plan-route");
       for (const system of systems.slice(0, 4)) {
-        const item = node("li");
-        item.append(
-          node("span", "", system.id || "未命名系统"),
-          node("code", system.grub_entry ? "plan-boot-target" : "", system.grub_entry
-            ? `${system.boot_entry || "未设启动项"} / GRUB ${system.grub_entry}`
-            : system.boot_entry || "未设启动项"),
-        );
-        route.append(item);
+        route.append(node("li", "", system.id || "未命名系统"));
       }
       group.append(route);
       if (systems.length > 4)

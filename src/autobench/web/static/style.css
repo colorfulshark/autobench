@@ -2004,10 +2004,6 @@ dialog input {
   border-left: 1px solid var(--ui-control-border);
 }
 .plan-route li {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
   position: relative;
   margin: 0 0 8px;
   font-size: var(--text-base);
@@ -2022,11 +2018,6 @@ dialog input {
   height: 7px;
   border-radius: 50%;
   background: var(--text-accent);
-}
-.plan-route code {
-  font-size: var(--text-xs);
-  color: var(--text-secondary);
-  flex: none;
 }
 .plan-section .text-button {
   font-size: var(--text-base);
@@ -3326,6 +3317,7 @@ main {
   color: var(--ui-primary-hover);
 }
 .machine-connection-fields {
+  --connection-status-space: calc(var(--ui-space-2) + var(--ui-icon-md));
   display: grid;
   grid-template-columns:
     minmax(0, 1fr) clamp(68px, 8cqw, 96px)
@@ -3333,10 +3325,10 @@ main {
       0,
       calc(
         var(--connection-right-column) - var(--connection-gap) -
-          var(--connection-action-width)
+          var(--connection-action-width) - var(--connection-status-space)
       )
     )
-    var(--connection-action-width);
+    calc(var(--connection-action-width) + var(--connection-status-space));
   gap: 10px var(--connection-gap);
 }
 .machine-connection .connection-test-panel,
@@ -3345,12 +3337,13 @@ main {
   display: contents;
 }
 .machine-connection .connection-test-actions {
-  position: relative;
+  align-items: center;
+  gap: var(--ui-space-2);
 }
 .machine-connection .connection-test-button {
-  width: 100%;
+  width: calc(100% - var(--connection-status-space));
   min-height: var(--connection-control-height);
-  margin-top: var(--connection-label-space);
+  margin-block-start: var(--connection-label-space);
   padding-inline: clamp(10px, 1.4cqw, 23px);
   border-radius: 10px;
   background: var(--ui-surface);
@@ -3364,17 +3357,13 @@ main {
 }
 .machine-connection
   .connection-test-status:not([data-phase="idle"], [data-phase="error"]) {
-  position: absolute;
-  inset-inline-start: calc(100% + var(--ui-space-2));
-  top: calc(
-    var(--connection-label-space) + var(--connection-control-height) / 2
-  );
+  margin-block-start: var(--connection-label-space);
   padding: 0;
-  transform: translateY(-50%);
 }
 .machine-connection .connection-test-status[data-phase="error"] {
   grid-column: 1 / -1;
   padding-top: 0;
+  padding-inline-start: var(--ui-space-2);
 }
 .machine-authentication {
   display: grid;
@@ -3472,7 +3461,9 @@ main {
 }
 @container (max-width: 600px) {
   .machine-connection-fields {
-    grid-template-columns: minmax(0, 1fr) 112px;
+    grid-template-columns: minmax(0, 1fr) calc(
+        112px + var(--connection-status-space)
+      );
     row-gap: 12px;
   }
   .machine-host-keys {
@@ -3488,9 +3479,10 @@ main {
     grid-template-columns: minmax(0, 1fr);
   }
 }
-@container (max-width: 409px) {
+@container (max-width: 25.5625rem) {
   .machine-connection-fields {
-    grid-template-columns: minmax(0, 1fr) 68px;
+    --connection-label-space: 0px;
+    grid-template-columns: minmax(0, 1fr) 4.25rem;
   }
   .machine-connection-fields > .user-field {
     grid-column: 1 / -1;
@@ -3502,12 +3494,6 @@ main {
   }
   .machine-connection .connection-test-button {
     width: auto;
-    margin-top: 0;
-  }
-  .machine-connection
-    .connection-test-status:not([data-phase="idle"], [data-phase="error"]) {
-    top: 50%;
-    inset-inline-start: calc(100% + 7px);
   }
 }
 
@@ -3727,6 +3713,15 @@ main {
   flex: 1 1 0;
   width: 0;
 }
+.boot-entry-controls select {
+  text-overflow: ellipsis;
+}
+.boot-entry-controls selectedcontent {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .boot-entry-identify {
   flex: none;
 }
@@ -3745,14 +3740,8 @@ main {
 .grub-entry-field :is(input, select) {
   min-width: 0;
 }
-.review-boot-target,
-.plan-route .plan-boot-target {
+.review-boot-target {
   overflow-wrap: anywhere;
-}
-.plan-route .plan-boot-target {
-  flex: 0 1 auto;
-  min-width: 0;
-  text-align: end;
 }
 .inherit-summary {
   display: flex;

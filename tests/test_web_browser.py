@@ -1714,6 +1714,7 @@ def test_connection_test_failure_summary_and_retry(browser_page, ui_server, widt
     pending = []
     page.route("**/api/operations/retry", lambda route: pending.append(route))
     connect = page.get_by_role("button", name="连接测试", exact=True)
+    fields = page.locator(".machine-connection-fields")
     connect.click()
     status = page.locator('.connection-test-status[data-phase="error"]')
     status.wait_for()
@@ -1732,9 +1733,15 @@ def test_connection_test_failure_summary_and_retry(browser_page, ui_server, widt
     button_box, status_box = connect.bounding_box(), status.bounding_box()
     assert status_box["y"] >= button_box["y"] + button_box["height"]
     assert status_box["width"] >= button_box["width"]
+    assert status.locator(".status-icon").bounding_box()["x"] >= status_box["x"] + 8
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     connect.click()
-    page.locator('.connection-test-status[data-phase="running"]').wait_for()
+    running = page.locator('.connection-test-status[data-phase="running"]')
+    running.wait_for()
+    spinner_box = running.bounding_box()
+    fields_box = fields.bounding_box()
+    assert spinner_box["x"] >= button_box["x"] + button_box["width"] + 8
+    assert spinner_box["x"] + spinner_box["width"] <= fields_box["x"] + fields_box["width"]
     assert page.locator(".status-message").count() == 0
     deadline = time.monotonic() + 5
     while not pending and time.monotonic() < deadline:
@@ -1746,7 +1753,9 @@ def test_connection_test_failure_summary_and_retry(browser_page, ui_server, widt
             "result": {"checks": [{"id": "connection", "status": "passed", "message": "通过"}]},
         }
     )
-    page.locator('.connection-test-status[data-phase="success"]').wait_for()
+    success = page.locator('.connection-test-status[data-phase="success"]')
+    success.wait_for()
+    assert success.bounding_box() == spinner_box
     assert not connect.is_disabled()
 
 
@@ -2202,16 +2211,20 @@ def test_plan_preview_tracks_systems_rounds_and_yaml_changes(browser_page, ui_se
     plan = page.locator("#config-plan")
     assert plan.locator(".plan-figure strong").text_content() == "0"
     raw = server.config.model_dump(mode="json")
+    raw["machines"][0]["systems"][0]["grub_entry"] = "advanced>linux-custom"
     raw["benchmarks"][0]["repetitions"] = 3
     other = {**raw["benchmarks"][0], "id": "second-benchmark", "repetitions": 2}
     raw["benchmarks"].append(other)
-    system_count = sum(len(machine["systems"]) for machine in raw["machines"])
+    systems = [system for machine in raw["machines"] for system in machine["systems"]]
+    system_count = len(systems)
     set_editor_mode(page, "yaml")
     page.locator("#yaml-editor").fill(yaml.safe_dump(raw))
     set_editor_mode(page, "form")
     plan.wait_for(state="visible")
     assert plan.locator(".plan-figure strong").text_content() == str(system_count * 5)
-    assert plan.locator(".plan-route li").count() == system_count
+    assert plan.locator(".plan-route").get_by_role("listitem").all_text_contents() == [
+        system["id"] for system in systems
+    ]
     assert plan.locator(".plan-test").count() == len(raw["benchmarks"])
     plan.get_by_role("button", name="编辑测试", exact=True).click()
     page.locator("#input-benchmarks-0-repetitions").fill("4")
@@ -2221,6 +2234,9 @@ def test_plan_preview_tracks_systems_rounds_and_yaml_changes(browser_page, ui_se
     assert plan.is_hidden()
     result = yaml.safe_load(page.locator("#yaml-editor").input_value())
     assert result["benchmarks"][0]["repetitions"] == 4
+    saved_system = result["machines"][0]["systems"][0]
+    assert saved_system["boot_entry"] == systems[0]["boot_entry"]
+    assert saved_system["grub_entry"] == systems[0]["grub_entry"]
     assert "plan" not in result
     set_editor_mode(page, "form")
     plan.wait_for(state="visible")
@@ -2545,6 +2561,62 @@ def test_boot_entry_identification_spinner_choices_and_selection(
         yaml.safe_load(server.existing.read_text())["machines"][0]["systems"][0]["boot_entry"]
         == "0001"
     )
+
+
+@pytest.mark.parametrize(
+    ("width", "text_size"), [(1440, 100), (390, 100), (320, 100), (1440, 200), (390, 200)]
+)
+def test_long_boot_entry_label_keeps_select_size(browser_page, ui_server, width, text_size):
+    from playwright.sync_api import expect
+
+    page, server = browser_page, ui_server
+    page.set_viewport_size({"width": width, "height": 1000})
+    page.emulate_media(reduced_motion="reduce")
+    if text_size == 200:
+
+        def apply_text_zoom(route):
+            response = route.fetch()
+            route.fulfill(response=response, body=response.text() + "\nhtml { font-size: 200%; }")
+
+        page.route("**/static/style.css", apply_text_zoom)
+    ready(page, server, startup_path=server.existing)
+    open_system(page, "os1")
+    label = "UEFI PXEv6 (MAC:001122334455) " + "Pci(0x0,0x0)/" * 16
+    page.route(
+        "**/api/systems/boot-entries",
+        lambda route: route.fulfill(
+            json={
+                "status": "completed",
+                "result": {
+                    "entries": [
+                        {"id": "0001", "label": "Linux", "active": True},
+                        {"id": "0002", "label": label, "active": True},
+                    ]
+                },
+            }
+        ),
+    )
+    identify = page.get_by_role("button", name="自动识别", exact=True)
+    identify.click()
+    entry = page.get_by_role("combobox", name="UEFI 启动项")
+    expect(entry).to_have_value("0001")
+    short_box = entry.bounding_box()
+    button_box = identify.bounding_box()
+    short_scroll_width = entry.evaluate("el => el.scrollWidth")
+    entry.click()
+    menu = page.get_by_role("listbox", name="UEFI 启动项")
+    option = (menu if menu.is_visible() else entry).get_by_role(
+        "option", name=f"Boot0002 · {label}", exact=True
+    )
+    expect(option).to_be_visible()
+    option.click()
+    expect(entry).to_have_value("0002")
+    long_box = entry.bounding_box()
+    assert long_box["width"] == short_box["width"]
+    assert long_box["height"] == short_box["height"]
+    assert identify.bounding_box() == button_box
+    assert entry.evaluate("el => el.scrollWidth") == short_scroll_width
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
 
 @pytest.mark.parametrize("failure", ["network", "request", "operation", "empty"])
