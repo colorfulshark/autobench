@@ -726,6 +726,22 @@ function artifactPanel(previous) {
   }
   return panel;
 }
+function renderPreviewPath(path, parts) {
+  const breadcrumb = $("preview-path");
+  const directoryIcons = ["server", "folder", "cube"];
+  breadcrumb.title = path;
+  breadcrumb.replaceChildren(...parts.map((part, index) => {
+    const segment = node("span", "preview-path-segment");
+    if (index) {
+      const slash = node("span", "visually-hidden", "/");
+      slash.setAttribute("aria-hidden", "true");
+      segment.append(slash, icon("chevronRight", "icon preview-path-separator"));
+    }
+    const symbol = index === parts.length - 1 ? "file" : directoryIcons[index] || "folder";
+    segment.append(icon(symbol), node("span", "", part));
+    return segment;
+  }));
+}
 async function preview(item) {
   const token = ++view.previewToken;
   const result = await api(
@@ -733,12 +749,15 @@ async function preview(item) {
   );
   if (token !== view.previewToken) return;
   view.previewPath = item.path;
-  $("preview-title").textContent = item.path.split("/").at(-1);
-  $("preview-path").textContent = item.path;
+  const parts = item.path.split("/");
+  $("preview-title").textContent = parts.at(-1);
+  renderPreviewPath(item.path, parts);
   $("artifact-preview").textContent =
     result.text +
     (result.truncated ? "\n\n仅预览前 256 KiB，请下载查看完整文件。" : "");
-  $("preview-drawer").showModal();
+  const drawer = $("preview-drawer");
+  drawer.showModal();
+  drawer.scrollTop = 0;
   $("preview-content").scrollTop = 0;
 }
 export function closePreview(restoreFocus = false) {
@@ -802,6 +821,7 @@ export async function initRuns() {
       return refreshRuns();
     }),
   );
+  $("preview-file-icon").append(icon("file"));
   $("close-preview").addEventListener("click", () => closePreview(true));
   const drawer = $("preview-drawer");
   drawer.addEventListener("cancel", (event) => {

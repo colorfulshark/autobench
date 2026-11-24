@@ -370,7 +370,10 @@
       aria-labelledby="preview-title"
     >
       <div class="section-heading">
-        <h2 id="preview-title"></h2>
+        <h2 class="icon-heading">
+          <span id="preview-file-icon" class="preview-file-icon" aria-hidden="true"></span>
+          <span id="preview-title"></span>
+        </h2>
         <button
           id="close-preview"
           class="icon-button"
@@ -379,6 +382,7 @@
           autofocus
         ></button>
       </div>
+      <div id="preview-path" class="preview-path" role="group" aria-label="文件路径"></div>
       <div
         id="preview-content"
         class="preview-content"
@@ -386,7 +390,6 @@
         role="region"
         aria-label="预览内容"
       >
-        <p id="preview-path" class="secondary mono"></p>
         <pre id="artifact-preview"></pre>
       </div>
     </dialog>

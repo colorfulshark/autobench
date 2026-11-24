@@ -865,8 +865,24 @@ def test_missing_or_invalid_page_defaults_to_config_with_saved_run(
     page.locator("#run-detail").get_by_text(run_id, exact=True).wait_for()
 
 
-@pytest.mark.parametrize("width", [1440, 390])
-def test_readable_run_names_and_nested_downloads(browser_page, ui_server, monkeypatch, width):
+def assert_log_preview_fills_drawer(drawer):
+    bottom_gap = drawer.evaluate(
+        """element => {
+            const log = element.querySelector('#preview-content');
+            const style = getComputedStyle(element);
+            return element.getBoundingClientRect().bottom - log.getBoundingClientRect().bottom
+                - parseFloat(style.paddingBottom) - parseFloat(style.borderBottomWidth);
+        }"""
+    )
+    assert bottom_gap == pytest.approx(0, abs=1)
+
+
+@pytest.mark.parametrize(("width", "text_size"), [(1440, 100), (390, 100), (320, 100), (1440, 200)])
+def test_readable_run_names_and_nested_downloads(
+    browser_page, ui_server, monkeypatch, width, text_size
+):
+    from playwright.sync_api import expect
+
     from autobench.storage import Store
 
     page, server = browser_page, ui_server
@@ -877,11 +893,20 @@ def test_readable_run_names_and_nested_downloads(browser_page, ui_server, monkey
         store.create(server.config)
         run_id = store.create(server.config)
         store.close()
-    relative = "server01/os1/ub/round-001/run.stdout"
+    filename = "localhost.localdomain-2026-11-05-01.log"
+    relative = f"server01/os1/ub/round-001/results/{filename}"
     result = server.config.policy.output_dir / run_id / relative
     result.parent.mkdir(parents=True)
     result.write_text("readable archive result\n" * 300)
     page.set_viewport_size({"width": width, "height": 844})
+    page.emulate_media(reduced_motion="no-preference")
+    if text_size == 200:
+
+        def apply_text_zoom(route):
+            response = route.fetch()
+            route.fulfill(response=response, body=response.text() + "\nhtml { font-size: 200%; }")
+
+        page.route("**/static/style.css", apply_text_zoom)
     ready(page, server)
     page.locator('[data-page="runs"]').click()
     page.locator("#runs-list").get_by_text(name, exact=True).wait_for()
@@ -890,23 +915,48 @@ def test_readable_run_names_and_nested_downloads(browser_page, ui_server, monkey
     row.get_by_role("button", name="查看详情", exact=True).click()
     page.locator("#run-detail").get_by_text(run_id, exact=True).wait_for()
     open_artifact_folder(page, PurePosixPath(relative).parent)
-    artifact = page.locator(".artifact-row").filter(has_text="run.stdout")
+    artifact = page.locator(".artifact-row").filter(has_text=filename)
     preview = artifact.get_by_role("button", name="预览", exact=True)
-    drawer = page.get_by_role("dialog", name="run.stdout")
+    drawer = page.get_by_role("dialog", name=filename)
     close = drawer.get_by_role("button", name="关闭预览", exact=True)
+    preview.scroll_into_view_if_needed()
+    tree = page.locator("#run-detail .artifact-panel")
+    tree_position = tree.bounding_box()
     preview.click()
-    page.locator("#preview-path").get_by_text(relative, exact=True).wait_for()
+    path = drawer.get_by_role("group", name="文件路径")
+    path.get_by_text(relative, exact=True).wait_for()
     log = drawer.locator("#artifact-preview")
     assert log.text_content() == result.read_text()
+    assert tree.bounding_box() == tree_position
+    assert drawer.locator(".artifact-panel").count() == 0
     drawer_position = drawer.bounding_box()
     close_position = close.bounding_box()
-    inside = (drawer_position["x"] + 48, 200)
+    path_position = path.bounding_box()
+    content = drawer.get_by_role("region", name="预览内容")
+    content_position = content.bounding_box()
+    assert drawer_position["y"] == pytest.approx(page.locator(".topbar").bounding_box()["height"])
+    assert drawer_position["x"] > 0
+    assert drawer_position["x"] + drawer_position["width"] <= width
+    assert_log_preview_fills_drawer(drawer)
+    assert drawer.evaluate("element => element.scrollWidth === element.clientWidth")
+    assert content.evaluate("element => element.scrollWidth === element.clientWidth")
+    assert (
+        log.evaluate("element => getComputedStyle(element).fontSize")
+        == f"{13 * text_size / 100:g}px"
+    )
+    if output := os.getenv("AUTOBENCH_UI_SCREENSHOTS"):
+        Path(output).mkdir(parents=True, exist_ok=True)
+        page.screenshot(
+            path=Path(output) / f"log-preview-{width}-{text_size}.png", animations="disabled"
+        )
+    inside = (content_position["x"] + 30, content_position["y"] + 30)
     outside = (drawer_position["x"] / 2, 200)
     page.mouse.click(*inside)
     assert drawer.is_visible()
     page.mouse.wheel(0, 3000)
     page.wait_for_function("() => document.querySelector('#preview-content').scrollTop > 0")
     assert close.bounding_box() == close_position
+    assert path.bounding_box() == path_position
     page.mouse.down()
     page.mouse.move(*outside, steps=4)
     page.mouse.up()
@@ -916,15 +966,44 @@ def test_readable_run_names_and_nested_downloads(browser_page, ui_server, monkey
     assert preview.evaluate("button => document.activeElement === button")
     preview.click()
     assert drawer.locator("#preview-content").evaluate("element => element.scrollTop") == 0
-    close.click()
+    expect(drawer).to_have_css("opacity", "1")
+    exit_frame = close.evaluate(
+        """button => {
+            const drawer = button.closest('dialog');
+            const bounds = () => Array.from(drawer.children, child => {
+                const { x, y, width, height } = child.getBoundingClientRect();
+                return [x, y, width, height];
+            });
+            const before = bounds();
+            button.click();
+            const fade = drawer.getAnimations().find(animation =>
+                animation.transitionProperty === 'opacity'
+            );
+            if (fade) fade.currentTime = fade.effect.getTiming().duration / 2;
+            return {
+                before,
+                during: bounds(),
+                opacity: Number(getComputedStyle(drawer).opacity),
+                supportsExit: CSS.supports('interactivity: inert') &&
+                    CSS.supports('overlay: auto') && CSS.supports('transition-behavior: allow-discrete'),
+            };
+        }"""
+    )
+    if exit_frame["supportsExit"]:
+        assert 0 < exit_frame["opacity"] < 1
+        for during, before in zip(exit_frame["during"], exit_frame["before"], strict=True):
+            assert during == pytest.approx(before, abs=1)
     drawer.wait_for(state="hidden")
+    expect(preview).to_be_focused()
+    page.emulate_media(reduced_motion="reduce")
     preview.click()
     close.wait_for()
+    assert not drawer.evaluate("element => element.getAnimations().length")
     page.keyboard.press("Escape")
     drawer.wait_for(state="hidden")
     with page.expect_download() as downloaded_file:
         artifact.get_by_role("link", name="下载", exact=True).click()
-    assert downloaded_file.value.suggested_filename == "run.stdout"
+    assert downloaded_file.value.suggested_filename == filename
     assert Path(downloaded_file.value.path()).read_text() == result.read_text()
     with page.expect_download() as downloaded_archive:
         page.get_by_role("link", name="下载完整归档", exact=True).click()
@@ -1003,6 +1082,7 @@ def test_run_artifact_tree_groups_file_paths_and_keeps_expansion(browser_page, u
     drawer.wait_for()
     assert drawer.locator("#artifact-preview").text_content() == "round two"
     assert drawer.locator("#preview-path").text_content() == f"{second}/run.stdout"
+    assert_log_preview_fills_drawer(drawer)
     page.keyboard.press("Escape")
     drawer.wait_for(state="hidden")
     with page.expect_download() as downloaded_file:
