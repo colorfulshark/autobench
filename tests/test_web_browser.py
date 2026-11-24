@@ -3482,7 +3482,7 @@ def test_guided_system_order_delete_and_readd(browser_page, ui_server, width):
     ]
 
 
-def report_history(server, *, empty=False):
+def report_history(server, *, empty=False, parallel_copies=64):
     from test_reports import TEST_ORDER, unixbench_text, write_round
 
     from autobench.storage import Store
@@ -3496,7 +3496,7 @@ def report_history(server, *, empty=False):
         for system, values in (("os1", (100, 200, 900)), ("os2", (480, 480, 480))):
             for repetition, value in enumerate(values, 1):
                 text = ""
-                for copies in (1, 64):
+                for copies in (1, parallel_copies):
                     extra = "".join(
                         f"{name}   1.0   10000.0   {value * copies}\n" for name in TEST_ORDER[2:]
                     )
@@ -3541,6 +3541,61 @@ def test_report_summary_rows_align_with_long_group_names(browser_page, ui_server
         assert abs(a["y"] - b["y"]) < 1
         assert abs(a["height"] - b["height"]) < 1
     assert extra.id in left.last.locator("td").first.get_attribute("title")
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+
+@pytest.mark.parametrize(
+    ("width", "text_size"),
+    [(1280, 100), (1440, 100), (1920, 100), (390, 100), (320, 100), (1440, 200), (390, 200)],
+)
+def test_report_copies_menu_displays_full_labels(browser_page, ui_server, width, text_size):
+    from playwright.sync_api import expect
+
+    page, server = browser_page, ui_server
+    page.set_viewport_size({"width": width, "height": 1000})
+    page.emulate_media(reduced_motion="reduce")
+    run_id = report_history(server, parallel_copies=128)
+    if text_size == 200:
+
+        def apply_text_zoom(route):
+            response = route.fetch()
+            route.fulfill(response=response, body=response.text() + "\nhtml { font-size: 200%; }")
+
+        page.route("**/static/style.css", apply_text_zoom)
+    open_report_history(page, server, run_id)
+    page.get_by_role("button", name="生成报告", exact=True).click()
+    copies = page.get_by_role("combobox", name="并发数", exact=True)
+    expect(copies).to_have_css("font-size", f"{14 * text_size / 100:g}px")
+    native_picker = page.evaluate("""CSS.supports("appearance: base-select") &&
+        CSS.supports("selector(select::picker(select))")""")
+    if native_picker:
+        options = copies.locator("option")
+    else:
+        options = page.get_by_role("listbox", name="并发数", exact=True).get_by_role("option")
+
+    copies.click()
+    expect(options.last).to_be_visible()
+    assert options.all_text_contents() == ["1 parallel copy", "128 parallel copies"]
+    assert options.evaluate_all("""options => options.every(option => {
+        const bounds = option.getBoundingClientRect();
+        const label = new Range();
+        label.selectNodeContents(option);
+        return option.scrollWidth <= option.clientWidth &&
+            [...label.getClientRects()].every(rect =>
+                rect.left >= bounds.left && rect.right <= bounds.right &&
+                rect.right <= document.documentElement.clientWidth);
+    })""")
+    options.last.click()
+    expect(copies).to_have_value("128")
+    expect(page.get_by_role("region", name="测试项对比表，可横向滚动")).to_contain_text(
+        "51200.00 (0.00%)"
+    )
+    copies.press("Space")
+    expect(options.first).to_be_visible()
+    page.keyboard.press("Escape")
+    expect(options.first).to_be_hidden()
+    expect(copies).to_be_focused()
+    expect(copies).to_have_value("128")
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
 

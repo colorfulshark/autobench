@@ -357,6 +357,7 @@ select:disabled {
     background: transparent;
     color: var(--text-primary);
     cursor: pointer;
+    white-space: normal;
     overflow-wrap: anywhere;
   }
   select option + option {
@@ -1460,6 +1461,9 @@ td .secondary {
 .report-detail-heading {
   justify-content: space-between;
   margin: 24px 0 12px;
+}
+.report-detail-heading .report-field {
+  min-inline-size: min(12rem, 100%);
 }
 .report-detail-heading .report-subheading {
   margin: 0 0 10px;
