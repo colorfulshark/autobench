@@ -141,6 +141,10 @@ class Scheduler:
     def grub_target(machine: Machine, system: System, probe: dict) -> dict:
         menu = probe.get("grub")
         if not menu or menu.get("boot_entry") != system.boot_entry:
+            if probe.get("grub_error_code") == "esp_unmounted":
+                raise RemoteError(
+                    f"无法读取 Boot{system.boot_entry} 的 GRUB 菜单。请在目标系统中挂载对应的 EFI 系统分区后重试。"
+                )
             reason = probe.get("grub_error", "the selected UEFI entry has no verified menu")
             raise RemoteError(f"cannot read the GRUB menu for Boot{system.boot_entry}: {reason}")
         entry = resolve_grub_entry(menu["entries"], system.grub_entry)
@@ -160,6 +164,9 @@ class Scheduler:
 
     @classmethod
     def switched_target(cls, probe: dict, system: System, switch: dict) -> bool:
+        if switch.get("efi_only"):
+            firmware = probe.get("efi", {})
+            return firmware.get("current") == system.boot_entry and not firmware.get("next")
         menu = probe.get("grub", {})
         return cls.is_target(probe, system, switch.get("grub")) and (
             not system.grub_entry
@@ -168,12 +175,70 @@ class Scheduler:
             )
         )
 
+    async def request_switch(self, current, probe, system, job, *, grub=None, efi_only=False):
+        if probe.get("efi", {}).get("next"):
+            raise RemoteError("existing BootNext conflicts with automatic switching")
+        entry = probe["efi"]["entries"].get(system.boot_entry)
+        if not entry or not entry["active"]:
+            raise RemoteError("target EFI entry is missing or inactive")
+        switch = {
+            "previous_boot_id": probe["boot_id"],
+            "requested": time.time(),
+            "deadline": time.time() + self.config.policy.boot_timeout,
+        }
+        if grub is not None:
+            menu = probe["grub"]
+            if not menu["one_shot"]:
+                raise RemoteError("the shared GRUB environment does not support one-time boot")
+            if menu["next_entry"] or menu["prev_saved_entry"]:
+                raise RemoteError("existing GRUB boot selection conflicts with automatic switching")
+            switch["grub"] = grub
+        key = "switch"
+        token = job["id"]
+        destination = f"switching to Boot{system.boot_entry}"
+        if efi_only:
+            switch["efi_only"] = True
+            key = "efi_bootstrap"
+            token += "-efi"
+            destination = (
+                f"Boot{system.boot_entry} 的 EFI 系统分区尚未挂载，先切换到该入口读取 GRUB"
+            )
+        elif grub is not None:
+            destination += f" / GRUB {grub['id']}"
+        self.store.update(job["id"], "switching", reason=None, **{key: switch})
+        self.event(job, destination)
+        try:
+            await current.switch(
+                current.root(probe),
+                probe["boot_id"],
+                system.boot_entry,
+                token,
+                **({"grub": grub} if grub is not None else {}),
+            )
+        except (ConnectionLost, UncertainSubmission):
+            self.event(job, "reboot acknowledgement lost; checking the original reboot")
+        return switch
+
     async def ensure_system(self, machine: Machine, system: System, job: dict):
         current, probe = await self.retry(lambda: self.find_current(machine, system))
         check_probe(probe)
         details = self.store.job(job["id"])["details"]
         switch = details.get("switch")
         grub = None
+        if not switch and system.grub_entry:
+            bootstrap = details.get("efi_bootstrap")
+            if (
+                not bootstrap
+                and probe["efi"].get("current") != system.boot_entry
+                and probe.get("grub_error_code") == "esp_unmounted"
+            ):
+                bootstrap = await self.request_switch(current, probe, system, job, efi_only=True)
+            if bootstrap:
+                if probe["boot_id"] == bootstrap["previous_boot_id"]:
+                    current, probe = await self.wait_boot(machine, system, bootstrap)
+                elif not self.switched_target(probe, system, bootstrap):
+                    raise RemoteError(f"重启后未确认已进入 UEFI 启动项 Boot{system.boot_entry}")
+                check_probe(probe)
         if switch:
             grub = switch.get("grub")
             if probe["boot_id"] != switch["previous_boot_id"]:
@@ -182,7 +247,7 @@ class Scheduler:
             else:
                 # A durable intent may mean the SSH request reached the remote host.
                 # Never send a second reboot; wait for or reconcile the original one.
-                probe = await self.wait_boot(machine, system, switch)
+                _, probe = await self.wait_boot(machine, system, switch)
         else:
             already_booted = self.is_target(probe, system)
             if system.grub_entry:
@@ -194,41 +259,8 @@ class Scheduler:
                         for item in self.store.jobs(self.run_id, machine.id)
                     )
         if not switch and not already_booted:
-            if probe.get("efi", {}).get("next"):
-                raise RemoteError("existing BootNext conflicts with automatic switching")
-            entry = probe["efi"]["entries"].get(system.boot_entry)
-            if not entry or not entry["active"]:
-                raise RemoteError("target EFI entry is missing or inactive")
-            switch = {
-                "previous_boot_id": probe["boot_id"],
-                "requested": time.time(),
-                "deadline": time.time() + self.config.policy.boot_timeout,
-            }
-            if grub is not None:
-                menu = probe["grub"]
-                if not menu["one_shot"]:
-                    raise RemoteError("the shared GRUB environment does not support one-time boot")
-                if menu["next_entry"] or menu["prev_saved_entry"]:
-                    raise RemoteError(
-                        "existing GRUB boot selection conflicts with automatic switching"
-                    )
-                switch["grub"] = grub
-            self.store.update(job["id"], "switching", switch=switch, reason=None)
-            destination = f"Boot{system.boot_entry}"
-            if grub:
-                destination += f" / GRUB {grub['id']}"
-            self.event(job, f"switching to {destination}")
-            try:
-                await current.switch(
-                    current.root(probe),
-                    probe["boot_id"],
-                    system.boot_entry,
-                    job["id"],
-                    **({"grub": grub} if grub is not None else {}),
-                )
-            except (ConnectionLost, UncertainSubmission):
-                self.event(job, "reboot acknowledgement lost; checking the original reboot")
-            probe = await self.wait_boot(machine, system, switch)
+            switch = await self.request_switch(current, probe, system, job, grub=grub)
+            _, probe = await self.wait_boot(machine, system, switch)
         # Use the target profile even if bootstrap credentials worked on the other OS.
         target = self.client(machine, system)
         requirements = requirements_for(self.config)
@@ -242,16 +274,20 @@ class Scheduler:
         # The detached worker waits after construction/preparation, before each test.
         return target, target_probe, grub
 
-    async def wait_boot(self, machine: Machine, system: System, switch: dict) -> dict:
+    async def wait_boot(self, machine: Machine, system: System, switch: dict):
         while time.time() < switch["deadline"]:
             try:
-                _, probe = await self.find_current(machine, system)
+                client, probe = await self.find_current(machine, system)
                 if probe["boot_id"] != switch["previous_boot_id"]:
                     if not self.switched_target(probe, system, switch):
+                        if switch.get("efi_only"):
+                            raise RemoteError(
+                                f"重启后未确认已进入 UEFI 启动项 Boot{system.boot_entry}"
+                            )
                         raise RemoteError(
                             "boot ID changed but target UEFI or GRUB entry did not match"
                         )
-                    return probe
+                    return client, probe
             except (ConnectionLost, AuthenticationFailed):
                 pass
             await asyncio.sleep(

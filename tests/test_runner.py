@@ -436,8 +436,18 @@ def test_grub_config_follows_only_matching_esp_stub(monkeypatch):
     )
     results = {
         ("efibootmgr", "-v"): efi,
-        ("findmnt", "-nro", "SOURCE", "--mountpoint", "/boot/efi"): "/dev/sda1",
-        ("lsblk", "-ndo", "PARTUUID", "--", "/dev/sda1"): "6ca3fd03-abd1-4197-97b5-088612d62512",
+        ("lsblk", "--json", "--list", "--output", "PARTUUID,MAJ:MIN"): json.dumps(
+            {
+                "blockdevices": [
+                    {"partuuid": "6ca3fd03-abd1-4197-97b5-088612d62512", "maj:min": "8:1"}
+                ],
+            }
+        ),
+        ("findmnt", "--json", "--list", "--output", "TARGET,FSROOT,MAJ:MIN"): json.dumps(
+            {
+                "filesystems": [{"target": "/mnt/esp", "fsroot": "/", "maj:min": "8:1"}],
+            }
+        ),
         (
             "grub-probe",
             "--target=fs_uuid",
@@ -447,11 +457,18 @@ def test_grub_config_follows_only_matching_esp_stub(monkeypatch):
     }
     monkeypatch.setattr(rr, "grub_tool", lambda name: "grub-" + name)
     monkeypatch.setattr(rr, "command", lambda argv, **kwargs: results[tuple(argv)])
-    files = {Path("/boot/efi/EFI/ubuntu/grub.cfg"): stub, Path("/boot/grub/grub.cfg"): GRUB_MENU}
+    files = {Path("/mnt/esp/EFI/ubuntu/grub.cfg"): stub, Path("/boot/grub/grub.cfg"): GRUB_MENU}
     monkeypatch.setattr(rr, "boot_file", files.__getitem__)
     assert rr.grub_config("0001") == (Path("/boot/grub/grub.cfg"), GRUB_MENU)
     with pytest.raises(RuntimeError, match="cannot locate"):
         rr.grub_config("0002")
+    results["findmnt", "--json", "--list", "--output", "TARGET,FSROOT,MAJ:MIN"] = json.dumps(
+        {
+            "filesystems": [{"target": "/boot/efi", "fsroot": "/", "maj:min": "8:4"}],
+        }
+    )
+    with pytest.raises(rr.GrubEspNotMounted, match="Boot0001"):
+        rr.grub_config("0001")
 
 
 @pytest.mark.parametrize("ambiguous", [False, True])

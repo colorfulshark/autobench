@@ -136,22 +136,48 @@ def grub_loaders():
     return loaders
 
 
+class GrubEspNotMounted(RuntimeError):
+    pass
+
+
+def grub_esp_mount(partition, boot_entry):
+    devices = json.loads(
+        command(["lsblk", "--json", "--list", "--output", "PARTUUID,MAJ:MIN"], privileged=True)
+    )["blockdevices"]
+    matching = [
+        device["maj:min"]
+        for device in devices
+        if (device.get("partuuid") or "").lower() == partition.lower()
+    ]
+    if len(matching) != 1:
+        raise RuntimeError(f"cannot identify a unique EFI system partition for Boot{boot_entry}")
+    filesystems = json.loads(
+        command(
+            ["findmnt", "--json", "--list", "--output", "TARGET,FSROOT,MAJ:MIN"], privileged=True
+        )
+    )["filesystems"]
+    mounts = {
+        Path(fs["target"])
+        for fs in filesystems
+        if fs["maj:min"] == matching[0] and fs["fsroot"] == "/"
+    }
+    if not mounts:
+        raise GrubEspNotMounted(
+            "the EFI system partition for Boot" + boot_entry + " is not mounted"
+        )
+    for path in (Path("/boot/efi"), Path("/efi"), Path("/boot")):
+        if path in mounts:
+            return path
+    return min(mounts)
+
+
 def grub_config(boot_entry, loaders=None):
     """Find the menu for an explicit loader, including its ESP forwarding stub."""
     loaders = grub_loaders() if loaders is None else loaders
     if boot_entry not in loaders:
         raise RuntimeError("cannot locate the GRUB loader for Boot" + boot_entry)
     partition, file = loaders[boot_entry]
-    for mount in (Path("/boot/efi"), Path("/efi"), Path("/boot")):
-        try:
-            source = command(["findmnt", "-nro", "SOURCE", "--mountpoint", str(mount)]).strip()
-            uuid = command(["lsblk", "-ndo", "PARTUUID", "--", source], privileged=True).strip()
-        except (OSError, RuntimeError):
-            continue
-        if uuid.lower() == partition.lower():
-            break
-    else:
-        raise RuntimeError("the EFI system partition for Boot" + boot_entry + " is not mounted")
+    mount = grub_esp_mount(partition, boot_entry)
     stub_path = mount.joinpath(*file.parent.parts, "grub.cfg")
     stub = boot_file(stub_path)
     if re.search(r"(?m)^\s*(?:menuentry|blscfg|load_env)\b", stub):
@@ -563,6 +589,9 @@ def probe(payload):
                 if grub_boot_entry not in firmware.get("entries", {}):
                     raise RuntimeError("Boot" + grub_boot_entry + " is missing")
                 result["grub"], _, _ = grub_boot_menu(grub_boot_entry)
+        except GrubEspNotMounted as exc:
+            result["grub_error"] = str(exc)
+            result["grub_error_code"] = "esp_unmounted"
         except Exception as exc:
             result["grub_error"] = str(exc)
     try:

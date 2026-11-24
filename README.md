@@ -44,7 +44,7 @@ autobench run examples/autobench.yaml
 
 在「选择系统」中点击「自动识别」会显示远端当前系统的 GRUB 菜单，UEFI 字段可以留空或选中任意入口。尚未填写的 GRUB 字段会自动使用能够确认的当前系统默认项。也可以从下拉菜单选择其他条目、手动填写或清除。YAML 中对应 `systems[].grub_entry`。同一个 `boot_entry` 可以用于不同测试系统，每个系统须填写不同的 GRUB 条目。建议使用条目 ID，子菜单以 `>` 分隔。条目没有 ID 时可以使用从 0 开始的菜单索引，也可使用唯一的菜单标题。
 
-各测试系统须能访问共享 GRUB 菜单和环境块，EFI 系统分区须挂载在 `/boot/efi`、`/efi` 或 `/boot`。切换时，调度器根据配置的 UEFI 入口确认目标 GRUB 菜单。支持常见布局中的 Linux 直启条目，包括传统 `grub.cfg` 和 BLS。常用的 GRUB 命令为 `grub-probe`、`grub-editenv` 或带 `grub2-` 前缀的版本。BLS 还需要 `grubby`。非 root 登录的系统需允许对 GRUB 文件和环境块执行非交互的管理命令。
+各测试系统须能访问共享 GRUB 菜单和环境块。调度器通过 UEFI 入口记录的分区标识查找 EFI 系统分区的挂载位置。从另一个 UEFI 入口启动时，如果目标 EFI 分区尚未挂载，调度器先用一次性 `BootNext` 进入目标入口，再读取目标 GRUB 菜单。目标 GRUB 条目需要单独切换时会发生第二次重启。支持常见布局中的 Linux 直启条目，包括传统 `grub.cfg` 和 BLS。常用的 GRUB 命令为 `grub-probe`、`grub-editenv` 或带 `grub2-` 前缀的版本。BLS 还需要 `grubby`。非 root 登录的系统需允许对 GRUB 文件和环境块执行非交互的管理命令。
 
 SSH 默认验证主机密钥。通过可信渠道核对各系统指纹后，将它们登记到指定的 `known_hosts`。同一 IP 对应多个系统时可以登记多个合法主机密钥，或为系统设置 `host_key_alias` 并分别登记对应别名。工具不自动接受新密钥，不读取用户 SSH config。
 

@@ -558,6 +558,50 @@ async def test_grub_switch_from_firmware_disk_entry(shared_grub):
         store.close()
 
 
+@pytest.mark.parametrize("reconnect", [False, True])
+async def test_grub_switch_bootstraps_unmounted_target_esp(shared_grub, monkeypatch, reconnect):
+    store, run_id, world = setup(shared_grub)
+    first, default = shared_grub.machines[0].systems
+    world.current["host1"] = first.model_copy(update={"boot_entry": "0009"})
+    original_probe, original_switch = FakeRemote.probe, FakeRemote.switch
+    tokens = []
+
+    async def probe(self, requirements=None, *, grub=False, grub_boot_entry=None):
+        result = await original_probe(
+            self, requirements, grub=grub, grub_boot_entry=grub_boot_entry
+        )
+        if grub and result["efi"]["current"] == "0009":
+            result.pop("grub", None)
+            result["grub_error_code"] = "esp_unmounted"
+        return result
+
+    async def switch(self, root, previous_boot_id, boot_entry, token, *, grub=None):
+        tokens.append(token)
+        try:
+            await original_switch(self, root, previous_boot_id, boot_entry, token, grub=grub)
+        except ConnectionLost:
+            if grub is None:
+                self.world.current[self.machine.id] = default
+                if reconnect:
+                    raise asyncio.CancelledError()
+            raise
+
+    monkeypatch.setattr(FakeRemote, "probe", probe)
+    monkeypatch.setattr(FakeRemote, "switch", switch)
+    try:
+        status = await execute(store, run_id, world)
+        first_id = store.jobs(run_id)[0]["id"]
+        if reconnect:
+            assert status == "paused" and tokens == [first_id + "-efi"]
+            status = await execute(store, run_id, world)
+        assert status == "succeeded"
+        assert tokens.count(first_id + "-efi") == 1
+        assert tokens[:2] == [first_id + "-efi", first_id]
+        assert world.jobs[world.starts[0]]["manifest"]["grub_entry"] == first.grub_entry
+    finally:
+        store.close()
+
+
 async def test_remote_reboot_recovered_as_interruption_not_rerun(config):
     store, run_id, world = setup(config)
     world.crash_controller = True

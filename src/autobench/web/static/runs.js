@@ -80,6 +80,10 @@ function jobReason(job) {
     .includes(job.phase || job.status)) return "";
   if (job.reason === "target boot verified after lost reboot acknowledgement; ready to resume")
     return "已确认目标系统启动，等待恢复控制。";
+  const esp = job.reason?.match(
+    /^cannot read the GRUB menu for (Boot[0-9A-F]{4}): the EFI system partition for \1 is not mounted$/,
+  );
+  if (esp) return `无法读取 ${esp[1]} 的 GRUB 菜单。目标 EFI 系统分区尚未挂载。`;
   return job.reason || "";
 }
 function selectRun(id, focus = false) {

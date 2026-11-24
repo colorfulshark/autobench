@@ -1932,6 +1932,48 @@ def test_warmup_alignment_and_pointer_vs_keyboard_focus(browser_page, ui_server,
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
 
+@pytest.mark.parametrize(
+    "width,text_size", [(1280, 100), (1440, 100), (1920, 100), (390, 100), (720, 200)]
+)
+def test_input_focus_uses_single_halo_and_other_controls_use_neutral_focus(
+    browser_page, ui_server, width, text_size
+):
+    from playwright.sync_api import expect
+
+    page = browser_page
+    page.set_viewport_size({"width": width, "height": 900})
+    if text_size != 100:
+        def apply_text_zoom(route):
+            response = route.fetch()
+            route.fulfill(
+                response=response,
+                body=response.text() + f"\nhtml {{ font-size: {text_size}%; }}",
+            )
+
+        page.route("**/static/style.css", apply_text_zoom)
+    ready(page, ui_server)
+    address = page.locator("#input-machines-0-ssh-host")
+    address.click()
+    expect(address).to_have_css("border-top-width", "1px")
+    expect(address).to_have_css("border-top-color", "rgb(77, 131, 220)")
+    expect(address).to_have_css("outline-style", "none")
+    expect(address).to_have_css("box-shadow", "rgba(59, 130, 246, 0.1) 0px 0px 0px 3px")
+    if (output := os.getenv("AUTOBENCH_UI_SCREENSHOTS")) and width == 1440:
+        Path(output).mkdir(parents=True, exist_ok=True)
+        page.screenshot(path=Path(output) / "input-focus.png", animations="disabled")
+
+    page.keyboard.press("Tab")
+    select = page.locator(".machine-connection select:enabled").first
+    select.focus()
+    expect(select).to_have_css("outline-color", "rgb(71, 85, 105)")
+    expect(select).to_have_css("outline-style", "solid")
+    expect(select).to_have_css("box-shadow", "none")
+    button = page.locator("#tab-runs")
+    button.focus()
+    expect(button).to_have_css("outline-color", "rgb(71, 85, 105)")
+    expect(button).to_have_css("outline-style", "solid")
+
+
 def test_warmup_status_shows_as_active_in_run_details(browser_page, ui_server):
     from autobench.storage import Store
 
@@ -1970,19 +2012,27 @@ def test_run_detail_hides_resolved_reason_and_translates_recovery(browser_page, 
         recovering, failed = store.jobs(run_id)
         store.set_run_status(run_id, "paused")
         store.update(recovering["id"], "paused", reason=english)
-        store.update(failed["id"], "failed", reason="实际失败")
+        esp_error = (
+            "cannot read the GRUB menu for Boot0029: "
+            "the EFI system partition for Boot0029 is not mounted"
+        )
+        store.update(failed["id"], "failed", reason=esp_error)
         ready(page, server)
         page.locator('[data-page="runs"]').click()
         page.get_by_role("button", name="查看详情", exact=True).click()
         detail = page.locator("#run-detail")
         notice = detail.locator(".run-reason").filter(has_text=translated)
         expect(notice).to_have_attribute("data-tone", "warning")
-        failure = detail.locator(".run-reason").filter(has_text="实际失败")
+        failure = detail.locator(".run-reason").filter(
+            has_text="无法读取 Boot0029 的 GRUB 菜单。目标 EFI 系统分区尚未挂载。"
+        )
         expect(failure).to_have_attribute("data-tone", "error")
+        expect(detail.get_by_text(esp_error, exact=True)).to_have_count(0)
         summary = detail.get_by_text("按机器与系统查看任务", exact=True)
         detail.get_by_role("button", name="复制完整运行 ID").press("Tab")
         expect(summary).to_be_focused()
         expect(summary).to_have_css("outline-style", "solid")
+        expect(summary).to_have_css("outline-color", "rgb(71, 85, 105)")
         summary.press("Enter")
         expect(detail.get_by_text(translated, exact=True)).to_be_visible()
         expect(detail.get_by_text(english)).to_have_count(0)
@@ -1999,6 +2049,9 @@ def test_run_detail_hides_resolved_reason_and_translates_recovery(browser_page, 
         }))"""
         first, second = headers.evaluate_all(column_edges)
         assert first == second
+        if (output := os.getenv("AUTOBENCH_UI_SCREENSHOTS")) and width == 1440:
+            Path(output).mkdir(parents=True, exist_ok=True)
+            page.screenshot(path=Path(output) / "run-table.png", animations="disabled")
 
         # An older controller can retain the previous reason while the job runs.
         store.update(recovering["id"], "running")

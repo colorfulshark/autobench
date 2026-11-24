@@ -204,12 +204,7 @@ select {
     var(--ui-icon-sm) no-repeat;
 }
 select:where(:enabled):hover {
-  border-color: var(--ui-focus);
-}
-select:enabled:where(:focus, :open, [aria-expanded="true"]) {
-  border-color: var(--ui-focus);
-  box-shadow: var(--ui-focus-ring);
-  outline: none;
+  border-color: var(--text-secondary);
 }
 select[aria-expanded="true"] {
   background-image: var(--select-chevron-up);
@@ -376,7 +371,7 @@ select:disabled {
     background: var(--ui-hover);
   }
   select option:enabled:not(:checked):focus-visible {
-    box-shadow: inset 2px 0 var(--ui-focus);
+    box-shadow: inset 2px 0 var(--text-secondary);
   }
   select option:disabled {
     cursor: not-allowed;
@@ -416,7 +411,7 @@ select:disabled {
   color: var(--ui-error);
 }
 :focus-visible {
-  outline: 2px solid var(--ui-primary-active);
+  outline: 2px solid var(--text-secondary);
   outline-offset: 2px;
 }
 :is(
@@ -435,23 +430,21 @@ select:disabled {
   border-color: var(--ui-control-border);
   border-radius: var(--ui-radius-md);
 
-  &:enabled:hover {
-    border-color: var(--ui-focus);
+  &:where(:enabled:hover:not(:focus)) {
+    border-color: var(--text-secondary);
   }
 
-  &:where(:focus) {
+  &:focus {
     outline: none;
     border-color: var(--ui-focus);
     box-shadow: var(--ui-focus-ring);
   }
 }
-:is(input, textarea, select):focus-visible {
-  border-color: var(--ui-primary-active);
-}
 :is(input, textarea, select)[aria-invalid="true"] {
   border-color: var(--ui-error);
 }
-:is(input, textarea, select)[aria-invalid="true"]:focus {
+:is(input, textarea)[aria-invalid="true"]:focus {
+  border-color: var(--ui-error);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--ui-error) 15%, transparent);
 }
 :is(input, textarea, select):disabled {
@@ -522,7 +515,7 @@ button:is(:disabled, [aria-disabled="true"]):is(.button, .icon-button, .browse-b
 .icon-button:enabled:hover,
 .browse-button:enabled:hover {
   background: var(--ui-hover);
-  border-color: var(--ui-primary-hover);
+  border-color: var(--text-secondary);
 }
 .button.secondary:not(:disabled):active,
 .icon-button:enabled:active,
@@ -2137,11 +2130,6 @@ textarea {
     box-shadow var(--ui-motion-focus) var(--ui-ease),
     color var(--ui-motion-fast) var(--ui-ease);
 }
-/* Keyboard focus has an immediate outline; only the supporting halo eases in. */
-:is(input:where(:not([type="checkbox"], [type="radio"], [type="file"])), textarea, select):focus-visible {
-  outline: 1px solid var(--ui-primary-active);
-  outline-offset: -1px;
-}
 .skip-link {
   position: fixed;
   left: 16px;
@@ -3182,7 +3170,7 @@ main {
   cursor: grabbing;
 }
 .object-tab.drop-target {
-  outline: 2px solid var(--ui-primary-active);
+  outline: 2px solid var(--text-secondary);
   outline-offset: 2px;
 }
 .object-tab > .chip-button > .icon {
