@@ -2623,6 +2623,26 @@ def test_step_actions_share_navigation_through_review(browser_page, ui_server, w
     assert group.get_by_role("button", name="开始测试", exact=True).is_visible()
 
 
+@pytest.mark.parametrize("width", [1440, 1024])
+def test_desktop_step_sidebar_stays_aligned_when_returning_from_bottom(
+    browser_page, ui_server, width
+):
+    page = browser_page
+    page.set_viewport_size({"width": width, "height": 720})
+    ready(page, ui_server, startup_path=ui_server.existing)
+    open_step(page, "设置测试")
+
+    sidebar = page.get_by_role("navigation", name="配置步骤")
+    top = sidebar.bounding_box()["y"]
+    page.evaluate("window.scrollTo(0, document.documentElement.scrollHeight)")
+    assert page.evaluate("scrollY") > 0
+    bottom = sidebar.bounding_box()["y"]
+    open_step(page, "连接机器")
+    assert page.evaluate("scrollY") == 0
+    assert bottom == pytest.approx(top, abs=1)
+    assert sidebar.bounding_box()["y"] == pytest.approx(bottom, abs=1)
+
+
 @pytest.mark.parametrize("width", [1440, 1101, 1100, 768, 700, 390, 320])
 def test_steps_beside_form_or_in_mobile_picker(browser_page, ui_server, width):
     page = browser_page
@@ -2633,6 +2653,9 @@ def test_steps_beside_form_or_in_mobile_picker(browser_page, ui_server, width):
     assert picker.is_visible() == (width < 768)
     for index in range(5):
         reveal_steps(page)
+        navigation.evaluate(
+            "el => Promise.all(el.getAnimations().map(animation => animation.finished))"
+        )
         nav_box = navigation.bounding_box()
         nav_step = navigation.locator(".wizard-step").nth(index)
         assert nav_step.bounding_box()["height"] >= 44
@@ -3772,6 +3795,62 @@ def test_motion_keeps_step_disclosure_and_switch_state_immediate(
         )
         assert accordion_duration == ("0s" if reduced_motion == "reduce" else "0.2s")
     assert not page.locator("#config-body").evaluate("el => el.getAnimations().length")
+
+
+@pytest.mark.parametrize(
+    "width,motion", [(1440, "no-preference"), (390, "no-preference"), (390, "reduce")]
+)
+def test_file_picker_fades_with_backdrop_and_keeps_layout(browser_page, ui_server, width, motion):
+    from playwright.sync_api import expect
+
+    page = browser_page
+    page.set_viewport_size({"width": width, "height": 720})
+    page.emulate_media(reduced_motion=motion)
+    ready(page, ui_server, startup_path=ui_server.existing)
+    page.get_by_role("tab", name="运行记录").click()
+    opener = page.get_by_role("button", name="更改位置…", exact=True)
+    opener.focus()
+
+    def sample_fade(trigger):
+        return trigger.evaluate(
+            """button => {
+                const dialog = document.getElementById('file-dialog');
+                button.click();
+                const fades = document.getAnimations().filter(animation =>
+                    animation.effect.target === dialog &&
+                    animation.transitionProperty === 'opacity'
+                );
+                for (const fade of fades) fade.currentTime = fade.effect.getTiming().duration / 2;
+                const backdrop = getComputedStyle(dialog, '::backdrop');
+                return {
+                    opacities: [Number(getComputedStyle(dialog).opacity), Number(backdrop.opacity)],
+                    hitTest: backdrop.pointerEvents,
+                    bounds: dialog.getBoundingClientRect().toJSON(),
+                };
+            }"""
+        )
+
+    opened = sample_fade(opener)
+    expect(page.get_by_role("button", name="选择目录", exact=True)).to_be_enabled()
+    dialog = page.locator("#file-dialog")
+    expect(dialog).to_have_css("opacity", "1")
+    bounds = dialog.bounding_box()
+    closed = sample_fade(dialog.get_by_role("button", name="取消", exact=True))
+
+    if motion == "reduce":
+        assert opened["opacities"] == [1, 1]
+        assert closed["opacities"] == [0, 0]
+        assert dialog.is_hidden()
+    else:
+        for sample in (opened, closed):
+            panel, backdrop = sample["opacities"]
+            assert 0 < panel < 1
+            assert backdrop == pytest.approx(panel, abs=0.02)
+        for key, value in bounds.items():
+            assert closed["bounds"][key] == pytest.approx(value, abs=1)
+        dialog.wait_for(state="hidden")
+    assert closed["hitTest"] == "none"
+    expect(opener).to_be_focused()
 
 
 def test_modal_exit_restores_focus_and_allows_immediate_reopen(browser_page, ui_server):

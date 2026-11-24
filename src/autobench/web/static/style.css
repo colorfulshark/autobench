@@ -1642,10 +1642,10 @@ td .secondary {
   border-left: 1px solid var(--ui-border-subtle);
   border-radius: 0;
   overflow: hidden;
+  flex-direction: column;
 }
 .preview-drawer[open] {
   display: flex;
-  flex-direction: column;
 }
 .preview-drawer .section-heading {
   flex-shrink: 0;
@@ -1683,35 +1683,44 @@ dialog {
   background: var(--ui-surface);
 }
 dialog::backdrop {
-  background: var(--ui-overlay);
+  background-color: var(--ui-overlay);
 }
 @media (prefers-reduced-motion: no-preference) {
-  dialog[open] {
-    animation: popover-enter var(--ui-motion-modal) var(--ui-ease);
+  dialog[open],
+  dialog[open]::backdrop {
+    animation: dialog-fade-in var(--ui-motion-modal) var(--ui-ease);
+  }
+}
+@keyframes dialog-fade-in {
+  from {
+    opacity: 0;
   }
 }
 @supports (interactivity: inert) and (overlay: auto) and (transition-behavior: allow-discrete) {
-  dialog {
+  dialog,
+  dialog::backdrop {
     opacity: 0;
-    interactivity: inert;
     pointer-events: none;
     transition: opacity var(--ui-motion-modal-exit) var(--ui-ease-exit),
       display var(--ui-motion-modal-exit) allow-discrete,
       overlay var(--ui-motion-modal-exit) allow-discrete;
   }
-  dialog:not([open])::backdrop {
-    pointer-events: none;
-    background-color: transparent;
+  dialog {
+    interactivity: inert;
   }
-  dialog[open] {
+  dialog[open],
+  dialog[open]::backdrop {
     opacity: 1;
-    interactivity: auto;
     pointer-events: auto;
     transition: opacity var(--ui-motion-modal) var(--ui-ease);
     animation: none;
   }
+  dialog[open] {
+    interactivity: auto;
+  }
   @starting-style {
-    dialog[open] {
+    dialog[open],
+    dialog[open]::backdrop {
       opacity: 0;
     }
   }
@@ -1747,10 +1756,10 @@ dialog input {
 }
 .file-dialog {
   width: min(48rem, calc(100% - 2rem));
+  flex-direction: column;
 }
 .file-dialog[open] {
   display: flex;
-  flex-direction: column;
 }
 .file-dialog > :not(.file-list) {
   flex: none;
@@ -2435,9 +2444,10 @@ main {
   min-height: calc(100vh - var(--header-offset, var(--ui-header-height)));
 }
 .page {
+  --page-top-padding: clamp(20px, 2.1vw, 34px);
   width: min(var(--workspace-width), 100% - var(--ui-page-padding) * 2);
   margin-inline: auto;
-  padding-block: clamp(20px, 2.1vw, 34px) 24px;
+  padding-block: var(--page-top-padding) 24px;
 }
 #page-config {
   padding-bottom: calc(16px + env(safe-area-inset-bottom));
@@ -2607,6 +2617,7 @@ main {
   display: none;
 }
 .config-workspace {
+  --config-sticky-top: calc(var(--header-offset, var(--ui-header-height)) + var(--page-top-padding));
   display: grid;
   grid-template-columns: minmax(12rem, var(--ui-sidebar-width)) minmax(0, 1fr);
   gap: var(--ui-shell-gap);
@@ -2617,7 +2628,7 @@ main {
 }
 .wizard-steps {
   position: sticky;
-  top: calc(var(--header-offset, var(--ui-header-height)) + 12px);
+  top: var(--config-sticky-top);
   display: grid;
   gap: 10px;
   padding: clamp(10px, 1vw, 16px);
@@ -2730,7 +2741,7 @@ main {
 .config-plan {
   --plan-padding: clamp(14px, 1.5vw, 24px);
   position: sticky;
-  top: calc(var(--header-offset, var(--ui-header-height)) + 12px);
+  top: var(--config-sticky-top);
   min-width: 0;
   padding: 0 var(--plan-padding) var(--plan-padding);
   margin-bottom: 24px;
