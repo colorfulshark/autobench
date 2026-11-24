@@ -1454,22 +1454,37 @@ def test_auth_menu_expands_below_select(browser_page, ui_server, fallback, width
             response = route.fetch()
             route.fulfill(
                 response=response,
-                body=response.text() + "\nselect, select::picker(select) { appearance: none; }",
+                body=response.text().replace(
+                    "@supports (appearance: base-select)", "@supports (appearance: unsupported)"
+                ),
             )
 
         page.route("**/static/style.css", disable_native_picker)
     ready(page, ui_server)
-    auth = page.get_by_label("认证方式", exact=True)
+    auth = page.get_by_role("combobox", name="认证方式", exact=True)
     if fallback:
-        option = page.locator("#select-menu").get_by_text("密钥认证", exact=True)
+        menu = page.get_by_role("listbox", name="认证方式", exact=True)
+        option = menu.get_by_role("option", name="密钥认证", exact=True)
+        selected = menu.get_by_role("option", name="密码认证", exact=True)
     else:
         option = auth.locator('option[value="key"]')
+        selected = auth.locator('option[value="password"]')
+        expect(auth).to_have_css("align-items", "center")
 
+    expect(auth).to_have_css("border-color", "rgb(196, 211, 232)")
+    expect(auth).to_have_css("border-radius", "10px")
     auth.click()
     expect(option).to_be_visible()
     trigger, row = auth.bounding_box(), option.bounding_box()
     assert row["y"] >= trigger["y"] + trigger["height"]
     expect(auth).to_have_css("outline-style", "none")
+    expect(auth).to_have_css("border-color", "rgb(127, 168, 237)")
+    expect(auth).to_have_css("box-shadow", "rgba(59, 130, 246, 0.1) 0px 0px 0px 3px")
+    expect(selected).to_have_css("background-color", "rgb(232, 241, 255)")
+    expect(selected).to_have_css("border-radius", "8px")
+    assert "data:image/svg+xml" in selected.evaluate("e => getComputedStyle(e).backgroundImage")
+    option.hover()
+    expect(option).to_have_css("background-color", "rgb(241, 246, 255)")
     option.click()
     expect(auth).to_have_value("key")
 
@@ -1480,9 +1495,20 @@ def test_auth_menu_expands_below_select(browser_page, ui_server, fallback, width
     expect(auth).to_have_value("key")
 
     auth.press("Space")
-    page.keyboard.press("Home")
+    expect(option).to_be_visible()
+    page.get_by_role("heading", name="身份认证", exact=True).click()
+    expect(option).to_be_hidden()
+    auth.press("Space")
+    page.keyboard.press("ArrowUp")
     page.keyboard.press("Enter")
     expect(auth).to_have_value("password")
+
+    trigger = auth.bounding_box()
+    page.set_viewport_size({"width": width, "height": int(trigger["y"] + trigger["height"]) + 36})
+    auth.click()
+    expect(option).to_be_visible()
+    trigger, row = auth.bounding_box(), option.bounding_box()
+    assert row["y"] + row["height"] <= trigger["y"]
 
 
 def test_existing_advanced_values_and_comments_survive_viewing_and_editing(browser_page, ui_server):
@@ -2553,13 +2579,18 @@ def test_step_actions_share_navigation_through_review(browser_page, ui_server, w
     page.evaluate("window.scrollTo(0, document.documentElement.scrollHeight)")
     reveal_steps(page)
     back = group.get_by_role("button", name="上一步", exact=True).bounding_box()
-    next_step = group.get_by_role("button", name="下一步 →", exact=True).bounding_box()
+    next_button = group.get_by_role("button", name="下一步 →", exact=True)
+    next_step = next_button.bounding_box()
     nav_box = nav.bounding_box()
     assert back["y"] == next_step["y"]
     assert back["x"] + back["width"] <= next_step["x"]
     assert next_step["x"] + next_step["width"] <= nav_box["x"] + nav_box["width"]
     assert next_step["height"] >= 44
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+    gradient = next_button.evaluate("button => getComputedStyle(button).backgroundImage")
+    next_button.hover()
+    assert next_button.evaluate("button => getComputedStyle(button).backgroundImage") == gradient
 
     open_step(page, "检查运行")
     click_primary(page)

@@ -57,15 +57,22 @@ export function initSelectMenus() {
     }));
 
     const rect = select.getBoundingClientRect();
-    const below = innerHeight - rect.bottom - 4;
-    const above = rect.top - 4;
     menu.style.left = `${rect.left}px`;
     menu.style.width = `${rect.width}px`;
+    menu.style.removeProperty("max-height");
     menu.hidden = false;
-    const placeBelow = below >= Math.min(280, menu.scrollHeight) || below >= above;
-    menu.style.maxHeight = `${Math.min(280, Math.max(0, placeBelow ? below : above))}px`;
-    menu.style.top = placeBelow ? `${rect.bottom + 4}px` : "auto";
-    menu.style.bottom = placeBelow ? "auto" : `${innerHeight - rect.top + 4}px`;
+    const styles = getComputedStyle(menu);
+    const gap = Number.parseFloat(styles.getPropertyValue("--select-menu-gap"));
+    const below = innerHeight - rect.bottom - gap;
+    const above = rect.top - gap;
+    const placeBelow = menu.offsetHeight <= below || below >= above;
+    const available = Math.max(0, placeBelow ? below : above);
+    menu.style.maxHeight = `${Math.min(Number.parseFloat(styles.maxHeight), available)}px`;
+    menu.style.top = placeBelow ? `${rect.bottom + gap}px` : "auto";
+    menu.style.bottom = placeBelow ? "auto" : `${innerHeight - rect.top + gap}px`;
+    const label = select.getAttribute("aria-label") || select.labels?.[0]?.textContent;
+    if (label) menu.setAttribute("aria-label", label);
+    else menu.removeAttribute("aria-label");
     select.setAttribute("aria-controls", menu.id);
     select.setAttribute("aria-expanded", "true");
     const indices = enabledIndices();
