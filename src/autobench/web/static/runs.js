@@ -22,11 +22,15 @@ const view = {
   listKey: null,
   listReady: false,
   listError: "",
+  listSynced: 0,
+  listScroll: 0,
   detail: null,
   detailError: "",
+  detailSynced: 0,
   detailRequest: null,
   after: 0,
   events: [],
+  eventError: "",
   artifacts: [],
   artifactKey: null,
   artifactError: "",
@@ -41,6 +45,10 @@ const view = {
   previewToken: 0,
   previewPath: null,
 };
+const pollInterval = 2000;
+const terminalRunStatuses = ["succeeded", "failed", "cancelled"];
+let pollTimer;
+let pollDelay = pollInterval;
 export const directory = () => view.directory || state.info.state_dir;
 const query = (extra) =>
   new URLSearchParams({ state_dir: directory(), ...extra });
@@ -61,6 +69,8 @@ function changeDirectory(path) {
     view.list = [];
     view.listReady = false;
     view.listError = "";
+    view.listSynced = 0;
+    view.listScroll = 0;
     view.listRequest = null;
   }
   view.directory = path;
@@ -73,13 +83,16 @@ function jobReason(job) {
   return job.reason || "";
 }
 function selectRun(id, focus = false) {
+  if (!view.selected && id && state.page === "runs") view.listScroll = window.scrollY;
   view.selected = id;
   view.detail = null;
   view.detailError = "";
+  view.detailSynced = 0;
   view.report = null;
   view.renderKey = null;
   view.after = 0;
   view.events = [];
+  view.eventError = "";
   view.artifacts = [];
   view.artifactKey = null;
   view.artifactError = "";
@@ -139,6 +152,7 @@ async function control(action) {
   } finally {
     view.control = false;
     await refreshDetail();
+    renderDetail();
   }
 }
 export async function refreshRuns() {
@@ -151,6 +165,7 @@ export async function refreshRuns() {
     view.list = list;
     view.listReady = true;
     view.listError = "";
+    view.listSynced = Date.now();
   } catch (error) {
     if (view.listRequest !== request) return;
     view.listError = error.message;
@@ -179,15 +194,26 @@ async function readDetail(token) {
   const detail = await api(url());
   if (token !== view.token) return;
   view.detail = detail;
-  const events = await api(url("/events", { after: view.after }));
-  if (token !== view.token) return;
-  for (const event of events) {
-    if (event.sequence <= view.after) continue;
-    view.after = event.sequence;
-    view.events.push(event);
+  view.detailSynced = Date.now();
+  view.detailError = "";
+  renderDetail();
+  renderSelection();
+  try {
+    const events = await api(url("/events", { after: view.after }));
+    if (token !== view.token) return;
+    for (const event of events) {
+      if (event.sequence <= view.after) continue;
+      view.after = event.sequence;
+      view.events.push(event);
+    }
+    view.events = view.events.slice(-5000);
+    view.eventError = "";
+  } catch (error) {
+    if (token !== view.token) return;
+    view.eventError = error.message;
   }
-  view.events = view.events.slice(-5000);
-  if (Date.now() - view.artifactsAt > 8000) {
+  updateEvents();
+  if (Date.now() - view.artifactsAt > 8000 || terminalDetail()) {
     view.artifactsAt = Date.now();
     try {
       const artifacts = await api(url("/artifacts"));
@@ -202,9 +228,14 @@ async function readDetail(token) {
           : error.message;
     }
   }
-  view.detailError = "";
   renderDetail();
-  renderSelection();
+}
+function terminalDetail() {
+  return view.detail && !view.detail.controller_active &&
+    terminalRunStatuses.includes(view.detail.status);
+}
+function syncMessage(error, synced) {
+  return synced ? `同步失败，数据可能已过期。上次同步：${date(synced / 1000)}。 ${error}` : error;
 }
 function renderList() {
   $("state-location").textContent = directory();
@@ -228,7 +259,7 @@ function renderList() {
   view.listKey = key;
   $("run-count").textContent = view.listReady ? `${list.length} 次运行` : "运行记录";
   const root = $("runs-list");
-  if (view.listError) {
+  if (view.listError && !view.listReady) {
     root.replaceChildren(
       empty(
         "无法加载运行记录",
@@ -244,6 +275,10 @@ function renderList() {
     root.replaceChildren(message);
     return;
   }
+  const stale = view.listError
+    ? node("p", "callout warning", syncMessage(view.listError, view.listSynced))
+    : null;
+  stale?.setAttribute("role", "status");
   if (!list.length) {
     const filtered = Boolean(view.search || view.filter);
     root.replaceChildren(
@@ -273,6 +308,7 @@ function renderList() {
             ),
       ),
     );
+    if (stale) root.prepend(stale);
     return;
   }
   const focusedRun =
@@ -296,13 +332,14 @@ function renderList() {
       }),
     ),
   );
+  if (stale) root.prepend(stale);
   if (focusedRun) focusRun(focusedRun);
 }
-function focusRun(id) {
+function focusRun(id, preventScroll = false) {
   const row = [...$("runs-list").querySelectorAll("[data-run]")].find(
     (control) => control.dataset.run === id,
   );
-  (row || $("run-search")).focus();
+  (row || $("run-search")).focus({ preventScroll });
 }
 function renderSelection() {
   const selected = Boolean(view.selected);
@@ -311,8 +348,11 @@ function renderSelection() {
   $("header-runs").hidden = selected || state.page !== "runs";
   const status = $("run-detail-status");
   status.hidden = !selected || (Boolean(view.detail) && !view.detailError);
-  status.textContent = view.detailError || "正在加载运行详情…";
-  status.classList.toggle("error", Boolean(view.detailError));
+  const text = view.detailError
+    ? syncMessage(view.detailError, view.detailSynced)
+    : "正在加载运行详情…";
+  if (status.textContent !== text) status.textContent = text;
+  status.classList.toggle("warning", Boolean(view.detailError));
 }
 function outcomeHint(detail) {
   if (
@@ -343,22 +383,15 @@ function renderDetail() {
     return;
   }
   root.hidden = false;
-  const renderKey = JSON.stringify([d, view.after, view.control]);
+  const renderKey = JSON.stringify([d, view.control, Boolean(view.artifacts.length)]);
   const artifactKey = JSON.stringify([view.artifacts, view.artifactError]);
   if (view.renderKey === renderKey && view.artifactKey === artifactKey) return;
+  if (view.renderKey === renderKey && view.report?.isConnected) {
+    root.lastElementChild.replaceWith(artifactPanel(root.lastElementChild));
+    view.artifactKey = artifactKey;
+    return;
+  }
   view.renderKey = renderKey;
-  const previousLog = root.querySelector(".event-log");
-  const logScroll = previousLog
-    ? {
-        top: previousLog.scrollTop,
-        bottom:
-          previousLog.scrollHeight -
-            previousLog.scrollTop -
-            previousLog.clientHeight <
-          40,
-      }
-    : null;
-  const oldEvents = root.querySelector("details[data-events]")?.open || false;
   const oldMatrix = root.querySelector("details[data-matrix]")?.open || false;
   const previousTaskTables = view.report?.isConnected
     ? root.querySelector(".run-task-tables")
@@ -386,6 +419,12 @@ function renderDetail() {
     actions.append(
       button("取消运行", () => control("cancel"), "button danger"),
     );
+  for (const controlButton of actions.querySelectorAll("button"))
+    controlButton.dataset.runControl = controlButton.textContent;
+  const oldFocus = document.activeElement;
+  const actionName = root.contains(oldFocus) ? oldFocus.dataset.runControl : null;
+  const matrixFocused = oldFocus.matches("details[data-matrix] > summary");
+  const copyFocused = oldFocus.matches(".run-copy-id");
   if (view.control)
     actions.querySelectorAll("button").forEach((b) => (b.disabled = true));
   const archive = node("a", "button secondary", "下载完整归档");
@@ -394,7 +433,10 @@ function renderDetail() {
   archive.download = "";
   if (view.artifacts.length) actions.append(archive);
   panel.append(
-    heading("运行详情", d.run_id, badge(d.status), "layers"),
+    heading("运行详情", d.run_id, badge(
+      d.cancel_requested && d.controller_active && !terminalRunStatuses.includes(d.status)
+        ? "cancel_pending" : d.status,
+    ), "layers"),
     node(
       "p",
       "callout " + (["failed", "paused"].includes(d.status) ? "warning" : ""),
@@ -437,9 +479,11 @@ function renderDetail() {
   }
   panel.append(stats);
   const progress = node("progress", "run-progress");
-  progress.max = d.jobs.length || 1;
-  progress.value = complete;
-  progress.setAttribute("aria-label", "已完成任务");
+  if (d.jobs.length) {
+    progress.max = d.jobs.length;
+    progress.value = complete;
+  }
+  progress.setAttribute("aria-label", "已结束任务");
   panel.append(progress);
   const current = d.jobs.filter((j) =>
     [
@@ -520,22 +564,6 @@ function renderDetail() {
   }
   if (grouped.size) matrix.append(taskTables);
   panel.append(matrix);
-  const events = node("details", "technical");
-  events.dataset.events = "true";
-  events.open = oldEvents;
-  const eventsTitle = node("summary", "", "原始运行事件");
-  eventsTitle.prepend(icon("code"));
-  events.append(
-    eventsTitle,
-    node(
-      "pre",
-      "event-log",
-      view.events
-        .map((event) => `${date(event.time)}  ${event.message}`)
-        .join("\n") || "暂无事件",
-    ),
-  );
-  panel.append(events);
   if (view.report?.isConnected) {
     root.firstElementChild.replaceWith(panel);
     if (view.artifactKey !== artifactKey) {
@@ -544,15 +572,75 @@ function renderDetail() {
     }
   } else {
     view.report = createReportPanel(url("/report"));
-    root.replaceChildren(panel, view.report, artifactPanel());
+    root.replaceChildren(panel, eventPanel(), view.report, artifactPanel());
   }
   taskTables.scrollLeft = taskScrollLeft;
   if (taskTablesFocused) taskTables.focus({ preventScroll: true });
+  if (matrixFocused) matrixTitle.focus({ preventScroll: true });
+  if (copyFocused) copyId.focus({ preventScroll: true });
+  if (actionName) {
+    const replacement = [...actions.querySelectorAll("[data-run-control]")].find(
+      (controlButton) => controlButton.dataset.runControl === actionName && !controlButton.disabled,
+    );
+    (replacement || copyId).focus({ preventScroll: true });
+  }
   view.artifactKey = artifactKey;
-  const log = root.querySelector(".event-log");
-  if (log) {
-    log.scrollTop =
-      !logScroll || logScroll.bottom ? log.scrollHeight : logScroll.top;
+}
+function eventPanel() {
+  const events = node("details", "panel technical run-events");
+  events.dataset.events = "true";
+  const title = node("summary", "", "原始运行事件");
+  title.prepend(icon("code"));
+  const notice = node("p", "callout warning");
+  notice.id = "run-event-notice";
+  notice.setAttribute("role", "status");
+  notice.hidden = true;
+  const log = node("pre", "event-log", "正在加载运行事件…");
+  log.tabIndex = 0;
+  log.setAttribute("aria-label", "运行事件日志");
+  const follow = button("回到底部", () => {
+    log.scrollTop = log.scrollHeight;
+    log.focus({ preventScroll: true });
+  }, "text-button");
+  follow.id = "follow-events";
+  follow.hidden = true;
+  log.addEventListener("scroll", () => { follow.hidden = nearLogEnd(log); });
+  events.addEventListener("toggle", () => {
+    if (events.open && follow.hidden) log.scrollTop = log.scrollHeight;
+  });
+  events.append(title, notice, log, follow);
+  return events;
+}
+const nearLogEnd = (log) => log.scrollHeight - log.scrollTop - log.clientHeight < 24;
+function updateEvents() {
+  const log = $("run-detail").querySelector(".event-log");
+  const notice = $("run-event-notice");
+  if (!log || !notice) return;
+  notice.hidden = !view.eventError;
+  if (notice.textContent !== view.eventError) notice.textContent = view.eventError;
+  if (view.eventError && !log.dataset.lastSequence) {
+    log.textContent = "尚未读取运行事件";
+    return;
+  }
+  const lastSequence = Number(log.dataset.lastSequence || 0);
+  if (lastSequence !== view.after || !log.dataset.lastSequence) {
+    const selection = window.getSelection();
+    const selecting = selection && !selection.isCollapsed && log.contains(selection.anchorNode);
+    const follow = nearLogEnd(log) && !selecting;
+    const format = (event) => `${date(event.time)}  ${event.message}\n`;
+    if (lastSequence && view.events[0]?.sequence <= lastSequence && !(
+      log.dataset.firstSequence && Number(log.dataset.firstSequence) < view.events[0].sequence
+    )) {
+      log.append(view.events.filter((event) => event.sequence > lastSequence).map(format).join(""));
+    } else {
+      const scrollTop = log.scrollTop;
+      log.textContent = view.events.map(format).join("") || "暂无事件";
+      log.scrollTop = scrollTop;
+    }
+    log.dataset.firstSequence = view.events[0]?.sequence || 0;
+    log.dataset.lastSequence = view.after;
+    if (follow) log.scrollTop = log.scrollHeight;
+    $("follow-events").hidden = nearLogEnd(log);
   }
 }
 function artifactRow(item, basename) {
@@ -675,13 +763,19 @@ export async function initRuns() {
   $("back-to-runs").addEventListener("click", () => {
     const id = view.selected;
     selectRun(null);
-    window.scrollTo(0, 0);
-    focusRun(id);
+    window.scrollTo(0, view.listScroll);
+    focusRun(id, true);
+    refreshRuns();
   });
-  $("run-search").addEventListener("input", () => {
-    view.search = $("run-search").value;
+  const search = $("run-search");
+  function applySearch() {
+    view.search = search.value;
     renderList();
+  }
+  search.addEventListener("input", (event) => {
+    if (!event.isComposing) applySearch();
   });
+  search.addEventListener("compositionend", applySearch);
   $("run-filter").addEventListener("change", () => {
     view.filter = $("run-filter").value;
     renderList();
@@ -736,9 +830,20 @@ export async function initRuns() {
     sessionStorage.removeItem("autobench-selection");
     view.selected = null;
   }
-  setInterval(() => {
-    if (state.page === "runs" && !document.hidden)
-      refreshRuns().catch((error) => show(error.message, "error"));
-  }, 2000);
+  async function poll() {
+    if (state.page === "runs" && !document.hidden) {
+      if (!view.selected) await refreshRuns();
+      else if (!terminalDetail() || view.detailError || view.eventError)
+        await refreshDetail();
+      const failed = view.selected ? view.detailError || view.eventError : view.listError;
+      pollDelay = failed ? Math.min(pollDelay * 2, 30000) : pollInterval;
+    }
+    clearTimeout(pollTimer);
+    pollTimer = setTimeout(poll, pollDelay);
+  }
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && state.page === "runs") poll();
+  });
+  pollTimer = setTimeout(poll, pollInterval);
   return view.selected;
 }

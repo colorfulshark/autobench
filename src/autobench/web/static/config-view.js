@@ -710,9 +710,10 @@ function systemsBoard(machine, index) {
   header.append(
     title,
     button(
-      "＋ 手动添加系统",
+      "手动添加系统",
       () => addSystem(machine, index),
       "button secondary system-action system-add",
+      "plus",
     ),
   );
   board.append(header);
@@ -1055,10 +1056,11 @@ export function review() {
     rows.length ? wrap : hint("配置机器、系统和测试后，此处会列出测试任务。"),
   );
   const resultPath = node("div", "review-paths");
+  const outputDir = state.document.policy?.output_dir ?? "results";
   resultPath.append(
     icon("folder"),
-    node("strong", "", "结果目录"),
-    node("span", "", state.document.policy?.output_dir ?? "results"),
+    node("strong", "", "结果输出目录"),
+    node("span", "", typeof outputDir === "string" ? fileStart(outputDir) : "—"),
   );
   panel.append(resultPath);
   return panel;
@@ -1158,7 +1160,31 @@ function objectTabs({
     }
     e.append(tab);
   });
-  if (editable) e.append(button(`＋ 添加${label}`, onAdd, "text-button"));
+  if (editable) {
+    const add = button(`添加${label}`, onAdd, "text-button");
+    add.prepend(icon("plus"));
+    e.append(add);
+    if (items.length > 1) {
+      const item = items[selected];
+      const name = item.id || `${label} ${selected + 1}`;
+      const order = node("div", "object-order-actions");
+      order.setAttribute("role", "group");
+      order.setAttribute("aria-label", `调整${label}顺序`);
+      for (const [offset, text, symbol] of [
+        [-1, "上移", "arrowUp"],
+        [1, "下移", "arrowDown"],
+      ]) {
+        const target = selected + offset;
+        const move = button("", () => onMove(item, target), "icon-button");
+        move.append(icon(symbol));
+        move.setAttribute("aria-label", `${text}${label} ${name}`);
+        move.title = `${text}${label} ${name}`;
+        move.disabled = target < 0 || target >= items.length;
+        order.append(move);
+      }
+      e.append(order);
+    }
+  }
   return e;
 }
 function machineTabs() {
@@ -1214,16 +1240,21 @@ export function renderConfig() {
   $("step-picker-label").textContent = stepName;
   $("step-picker-count").textContent = progress;
   if (sourceMode) setStepPicker(false);
-  $("wizard-options").replaceChildren(
-    ...configSteps.map((text, index) => {
-      const b = button("", () => goToStep(index), "wizard-step");
-      b.id = `wizard-step-${index}`;
-      if (index === state.step) b.setAttribute("aria-current", "step");
-      const number = node("span", "step-number", index + 1);
-      b.append(number, node("span", "", text));
-      return b;
-    }),
-  );
+  const options = $("wizard-options");
+  if (!options.firstElementChild) {
+    options.append(
+      ...configSteps.map((text, index) => {
+        const option = button("", () => goToStep(index), "wizard-step");
+        option.id = `wizard-step-${index}`;
+        option.append(node("span", "step-number", index + 1), node("span", "", text));
+        return option;
+      }),
+    );
+  }
+  for (const [index, option] of [...options.children].entries()) {
+    if (index === state.step) option.setAttribute("aria-current", "step");
+    else option.removeAttribute("aria-current");
+  }
   $("yaml-panel").hidden = !sourceMode;
   container.hidden = sourceMode;
   if (sourceMode) return;
@@ -1272,7 +1303,6 @@ export function renderConfig() {
         : empty(
             "添加第一台机器",
             "填写连接信息后可测试连接及运行环境。",
-            button("添加机器", addMachine, "button primary"),
           ),
     );
   if (state.step === 1) {
@@ -1285,12 +1315,13 @@ export function renderConfig() {
         const frame = node("div", "panel system-editor-frame");
         frame.append(
           button(
-            "← 返回系统列表",
+            "返回系统列表",
             () => {
               state.system = null;
               emit(true);
             },
             "text-button system-back",
+            "arrowLeft",
           ),
           editor,
         );
@@ -1537,8 +1568,8 @@ export async function focusError(error) {
     if (field) {
       for (let p = field.parentElement; p; p = p.parentElement)
         if (p.tagName === "DETAILS") p.open = true;
-      field.scrollIntoView({ block: "center", behavior: "smooth" });
-      field.querySelector("input,textarea,select")?.focus();
+      field.scrollIntoView({ block: "center" });
+      field.querySelector("input,textarea,select")?.focus({ preventScroll: true });
     } else if (
       path[0] === "machines" &&
       path.length === 3 &&

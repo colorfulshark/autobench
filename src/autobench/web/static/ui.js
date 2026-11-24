@@ -4,9 +4,12 @@ export const $ = (id) => document.getElementById(id);
 export function icon(name, cls = "icon") {
   const paths = {
     arrowDown: "M12 4v16m-6-6 6 6 6-6",
+    arrowLeft: "M20 12H4m6-6-6 6 6 6",
+    arrowRight: "M4 12h16m-6-6 6 6-6 6",
     arrowUp: "M12 20V4m-6 6 6-6 6 6",
     calendar: "M4 5h16v16H4zM8 3v4m8-4v4M4 10h16m-11 4h2m2 0h2m-6 3h2",
     chart: "M4 13h3v8H4zm6-4h3v12h-3zm6-5h3v17h-3z",
+    chevronRight: "m9 6 6 6-6 6",
     chain:
       "M10 13a4 4 0 0 0 6 .5l4-4a4 4 0 0 0-5.7-5.7L12 6m2 5a4 4 0 0 0-6-.5l-4 4a4 4 0 0 0 5.7 5.7L12 18",
     check: "M5 12l4 4L19 6",
@@ -40,6 +43,7 @@ export function icon(name, cls = "icon") {
     pending: "M12 5v7l4 2",
     pause: "M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0ZM10 8v8m4-8v8",
     play: "M6 3l15 9-15 9Z",
+    plus: "M12 5v14M5 12h14",
     scan: "M3 8V4h4m10 0h4v4m0 8v4h-4m-10 0H3v-4m4-4h10",
     server: "M3 3h18v8H3zm0 10h18v8H3zm4-6h.01m-.01 10h.01m4-10h6m-6 10h6",
     timer: "M21 13a9 9 0 1 1-9-9m4 0h5v5M12 8v5l3 2",
@@ -74,21 +78,25 @@ export function node(tag, cls, text) {
   if (text !== undefined) e.textContent = text;
   return e;
 }
-export function button(text, fn, cls = "button") {
+export function button(text, fn, cls = "button", symbol) {
   const e = node("button", cls, text);
   e.type = "button";
+  if (symbol) e.prepend(icon(symbol));
   if (fn) e.addEventListener("click", () => perform(e, fn));
   return e;
 }
 export async function perform(element, fn) {
-  element.disabled = true;
+  if (element.matches(":disabled, [aria-disabled=true]")) return;
+  element.setAttribute("aria-disabled", "true");
+  element.setAttribute("aria-busy", "true");
   element.classList.add("busy");
   try {
     return await fn();
   } catch (error) {
     show(error.message, "error");
   } finally {
-    element.disabled = false;
+    element.removeAttribute("aria-disabled");
+    element.removeAttribute("aria-busy");
     element.classList.remove("busy");
   }
 }
@@ -119,8 +127,10 @@ export function updateStatusIndicator(
     if (symbol) mark.append(icon(symbol));
     status.append(mark);
   }
-  if (phase === "error" || (phase === "stale" && !symbol))
-    status.append(node("span", "status-message", message));
+  if (phase !== "idle") {
+    const visible = phase === "error" || (phase === "stale" && !symbol);
+    status.append(node("span", visible ? "status-message" : "visually-hidden", message));
+  }
 }
 export function pill(text, tone = "neutral") {
   const e = node("span", "pill", text);
@@ -128,7 +138,9 @@ export function pill(text, tone = "neutral") {
   return e;
 }
 export const badge = (status) =>
-  pill(statusLabels[status] || status, statusTone(status));
+  Object.hasOwn(statusLabels, status)
+    ? pill(statusLabels[status], statusTone(status))
+    : pill(status ? `状态未知（${status}）` : "状态未知", "warning");
 export function row(...children) {
   const e = node("div", "field-row");
   e.append(...children);
@@ -156,7 +168,7 @@ export function advanced(title, paths, build, key = title) {
     (path) => at(state.document, path) !== undefined,
   ).length;
   const s = node("summary");
-  s.append(node("span", "", title));
+  s.append(icon("chevronRight", "icon disclosure-chevron"), node("span", "", title));
   if (count) s.append(node("span", "advanced-count", `已配置 ${count} 项`));
   const content = node("div", "advanced-body");
   build(content);
@@ -215,6 +227,7 @@ export function inputField(
   input.placeholder = placeholder;
   input.spellcheck = false;
   input.autocomplete = type === "password" ? "new-password" : "off";
+  if (required) input.setAttribute("aria-required", "true");
   if (type === "number") input.step = "any";
   input.addEventListener("input", () => {
     change(
@@ -226,6 +239,8 @@ export function inputField(
     wrap.classList.remove("invalid");
     input.removeAttribute("aria-invalid");
     wrap.querySelector(".field-error")?.remove();
+    if (help) input.setAttribute("aria-describedby", id + "-help");
+    else input.removeAttribute("aria-describedby");
   });
   if (leadingIcon) {
     controls.classList.add("with-input-icon");
@@ -241,13 +256,12 @@ export function inputField(
         if (leadingIcon)
           reveal.replaceChildren(icon(visible ? "eyeOff" : "eye"));
         else reveal.textContent = visible ? "隐藏" : "显示";
-        reveal.setAttribute("aria-pressed", String(visible));
+        reveal.setAttribute("aria-label", `${visible ? "隐藏" : "显示"}${label}`);
       },
       "icon-button reveal",
     );
     if (leadingIcon) reveal.append(icon("eye"));
-    reveal.setAttribute("aria-label", "显示或隐藏" + label);
-    reveal.setAttribute("aria-pressed", "false");
+    reveal.setAttribute("aria-label", "显示" + label);
     controls.append(reveal);
   }
   if (browse)
@@ -271,7 +285,10 @@ export function inputField(
   if (errors.length) {
     wrap.classList.add("invalid");
     input.setAttribute("aria-invalid", "true");
-    wrap.append(node("p", "field-error", errors.map(friendlyError).join("；")));
+    const message = node("p", "field-error", errors.map(friendlyError).join("；"));
+    message.id = id + "-error";
+    input.setAttribute("aria-describedby", help ? `${message.id} ${id}-help` : message.id);
+    wrap.append(message);
   }
   if (
     raw !== undefined &&
@@ -286,11 +303,8 @@ export function select(label, options, current, onChange, id) {
   const wrap = node("div", "field");
   const lab = node("label", "field-label", label);
   const input = node("select");
-  if (id) {
-    input.id = id;
-    lab.htmlFor = id;
-  }
-  input.setAttribute("aria-label", label);
+  input.id = id;
+  lab.htmlFor = id;
   for (const [key, text] of options) input.add(new Option(text, key));
   input.value = current;
   input.addEventListener("change", () => onChange(input.value));
@@ -308,7 +322,7 @@ export function toggle(label, checked, onChange) {
 }
 export function empty(title, text, action) {
   const e = node("div", "empty");
-  e.append(node("span", "empty-icon", "＋"), node("h3", "", title), hint(text));
+  e.append(icon("info", "icon empty-icon"), node("h3", "", title), hint(text));
   if (action) e.append(action);
   return e;
 }
@@ -357,43 +371,45 @@ export function listEditor(
         ),
       );
     const up = button(
-      "↑",
+      "",
       () => {
         [items[index - 1], items[index]] = [items[index], items[index - 1]];
         dirty(true);
       },
       "icon-button",
+      "arrowUp",
     );
     up.disabled = index === 0;
     up.setAttribute("aria-label", `${label}上移第 ${index + 1} 项`);
     const down = button(
-      "↓",
+      "",
       () => {
         [items[index + 1], items[index]] = [items[index], items[index + 1]];
         dirty(true);
       },
       "icon-button",
+      "arrowDown",
     );
     down.disabled = index === items.length - 1;
-    r.append(
-      up,
-      down,
-      button(
-        "×",
-        () => {
-          items.splice(index, 1);
-          dirty(true);
-        },
-        "icon-button",
-      ),
+    const remove = button(
+      "",
+      () => {
+        items.splice(index, 1);
+        dirty(true);
+      },
+      "icon-button",
+      "trash",
     );
+    remove.setAttribute("aria-label", `删除${label}第 ${index + 1} 项`);
+    r.append(up, down, remove);
     e.append(r);
   });
   e.append(
     button(
-      "＋ 添加一项",
+      "添加一项",
       () => change(path, [...items, ""], true),
       "text-button",
+      "plus",
     ),
   );
   if (help) e.append(hint(help));
@@ -431,18 +447,17 @@ export function envEditor(path, { showTitle = true } = {}) {
       put(entries, key, v.value);
       dirty();
     });
-    r.append(
-      k,
-      v,
-      button(
-        "×",
-        () => {
-          delete entries[key];
-          dirty(true);
-        },
-        "icon-button",
-      ),
+    const remove = button(
+      "",
+      () => {
+        delete entries[key];
+        dirty(true);
+      },
+      "icon-button",
+      "trash",
     );
+    remove.setAttribute("aria-label", `删除环境变量 ${key}`);
+    r.append(k, v, remove);
     e.append(r);
     if (typeof val !== "string")
       e.append(hint(`${key} 的原始值不是字符串；修改值后会按字符串保存。`));
@@ -450,7 +465,7 @@ export function envEditor(path, { showTitle = true } = {}) {
   const actions = node("div", "env-actions");
   actions.append(
     button(
-      "＋ 添加变量",
+      "添加变量",
       () => {
         let key = "NEW_VAR";
         while (own(entries, key)) key += "_";
@@ -458,6 +473,7 @@ export function envEditor(path, { showTitle = true } = {}) {
         change(path, entries, true);
       },
       "text-button",
+      "plus",
     ),
     hint("值按字面字符串传入；测试级变量覆盖系统级变量。"),
   );
@@ -468,7 +484,11 @@ export function table(headers, rows) {
   const e = node("table");
   const thead = node("thead"),
     tr = node("tr");
-  for (const title of headers) tr.append(node("th", "", title));
+  for (const title of headers) {
+    const cell = node("th", "", title);
+    cell.scope = "col";
+    tr.append(cell);
+  }
   thead.append(tr);
   e.append(thead);
   const body = node("tbody");
@@ -492,10 +512,17 @@ export function table(headers, rows) {
   }
   return e;
 }
+const dateFormat = new Intl.DateTimeFormat("sv-SE", {
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  timeZoneName: "longOffset",
+});
 export const date = (timestamp) =>
-  timestamp
-    ? new Date(timestamp * 1000).toLocaleString("zh-CN", { hour12: false })
-    : "—";
+  timestamp ? dateFormat.format(timestamp * 1000).replace("−", "-") : "—";
 
 export function friendlyError(error) {
   const messages = {

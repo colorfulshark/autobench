@@ -8,10 +8,13 @@ export function initSelectMenus() {
   menu.id = "select-menu";
   menu.setAttribute("role", "listbox");
   menu.hidden = true;
+  menu.inert = true;
   document.body.append(menu);
 
   let select = null;
   let activeIndex = -1;
+  let typed = "";
+  let typedAt = 0;
 
   function close() {
     if (!select) return;
@@ -19,6 +22,8 @@ export function initSelectMenus() {
       select.removeAttribute(attr);
     select = null;
     activeIndex = -1;
+    typed = "";
+    menu.inert = true;
     menu.hidden = true;
   }
 
@@ -29,7 +34,10 @@ export function initSelectMenus() {
     const option = menu.children[index];
     option.classList.add("active");
     select.setAttribute("aria-activedescendant", option.id);
-    option.scrollIntoView({ block: "nearest" });
+    const optionRect = option.getBoundingClientRect();
+    const menuRect = menu.getBoundingClientRect();
+    if (optionRect.top < menuRect.top) menu.scrollTop += optionRect.top - menuRect.top;
+    else if (optionRect.bottom > menuRect.bottom) menu.scrollTop += optionRect.bottom - menuRect.bottom;
   }
 
   function enabledIndices() {
@@ -57,8 +65,10 @@ export function initSelectMenus() {
     }));
 
     const rect = select.getBoundingClientRect();
-    menu.style.left = `${rect.left}px`;
-    menu.style.width = `${rect.width}px`;
+    const viewport = document.documentElement.clientWidth;
+    const width = Math.min(rect.width, viewport - 16);
+    menu.style.left = `${Math.max(8, Math.min(rect.left, viewport - width - 8))}px`;
+    menu.style.width = `${width}px`;
     menu.style.removeProperty("max-height");
     menu.hidden = false;
     const styles = getComputedStyle(menu);
@@ -67,6 +77,7 @@ export function initSelectMenus() {
     const above = rect.top - gap;
     const placeBelow = menu.offsetHeight <= below || below >= above;
     const available = Math.max(0, placeBelow ? below : above);
+    menu.dataset.placement = placeBelow ? "below" : "above";
     menu.style.maxHeight = `${Math.min(Number.parseFloat(styles.maxHeight), available)}px`;
     menu.style.top = placeBelow ? `${rect.bottom + gap}px` : "auto";
     menu.style.bottom = placeBelow ? "auto" : `${innerHeight - rect.top + gap}px`;
@@ -75,6 +86,7 @@ export function initSelectMenus() {
     else menu.removeAttribute("aria-label");
     select.setAttribute("aria-controls", menu.id);
     select.setAttribute("aria-expanded", "true");
+    menu.inert = false;
     const indices = enabledIndices();
     highlight(indices.includes(select.selectedIndex) ? select.selectedIndex : (indices[0] ?? -1));
   }
@@ -118,7 +130,7 @@ export function initSelectMenus() {
 
   document.addEventListener("keydown", (event) => {
     const target = targetSelect(event.target);
-    if (!target || event.metaKey || event.ctrlKey) return;
+    if (!target || event.metaKey || event.ctrlKey || event.isComposing) return;
     const key = event.key;
     const opening = ["Enter", " ", "ArrowDown", "ArrowUp"].includes(key);
     if (!select) {
@@ -139,6 +151,20 @@ export function initSelectMenus() {
       const offset = indices.indexOf(activeIndex) + (key === "ArrowDown" ? 1 : -1);
       const index = key === "Home" ? 0 : key === "End" ? indices.length - 1 : offset;
       highlight(indices[index] ?? activeIndex);
+    } else if (key.length === 1 && !event.altKey) {
+      event.preventDefault();
+      const now = performance.now();
+      typed = (now - typedAt < 600 ? typed : "") + key.toLocaleLowerCase();
+      typedAt = now;
+      const indices = enabledIndices();
+      const start = Math.max(0, indices.indexOf(activeIndex));
+      const label = (index) => menu.children[index].textContent.trim().toLocaleLowerCase();
+      const repeated = [...typed].every((char) => char === typed[0]);
+      const offset = repeated ? start + 1 : start;
+      const match = [...indices.slice(offset), ...indices.slice(0, offset)].find(
+        (index) => label(index).startsWith(repeated ? typed[0] : typed),
+      );
+      if (match !== undefined) highlight(match);
     }
   });
   window.addEventListener("resize", close);

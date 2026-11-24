@@ -20,10 +20,7 @@ export function renderPlan(stepLimit) {
   const header = node("div", "plan-heading");
   const title = node("h2", "icon-heading", "测试计划");
   title.prepend(icon("calendar"));
-  const layers = node("span", "plan-layers");
-  layers.setAttribute("aria-hidden", "true");
-  layers.append(node("span"), node("span"), node("span"));
-  header.append(title, layers);
+  header.append(title);
   const figure = node("div", "plan-figure");
   figure.append(
     node("strong", "", totals.jobs.toLocaleString("zh-CN")),
@@ -38,6 +35,7 @@ export function renderPlan(stepLimit) {
   root.append(header);
   const editStep = (label, index) => {
     const edit = button(label, () => goToStep(index, true), "text-button");
+    edit.append(icon("arrowRight"));
     edit.disabled = !canGoToStep(index, stepLimit);
     if (edit.disabled) edit.title = `请先完成「${configSteps[stepLimit]}」`;
     return edit;
@@ -81,7 +79,7 @@ export function renderPlan(stepLimit) {
     sequence.append(
       node("p", "secondary", `另有 ${machines.length - 3} 台机器`),
     );
-  sequence.append(editStep("编辑系统 →", 1));
+  sequence.append(editStep("编辑系统", 1));
   root.append(sequence);
 
   const tests = node("section", "plan-section");
@@ -111,6 +109,6 @@ export function renderPlan(stepLimit) {
     tests.append(
       node("p", "secondary", `另有 ${benchmarks.length - 3} 项测试`),
     );
-  tests.append(editStep("编辑测试 →", 2));
+  tests.append(editStep("编辑测试", 2));
   root.append(tests);
 }

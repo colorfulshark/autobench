@@ -61,14 +61,16 @@ export function show(message, tone = "success") {
   clearTimeout(noticeTimer);
   clearTimeout(noticeHideTimer);
   const notice = document.getElementById("notice");
-  notice.textContent = message;
+  if (notice.textContent !== message) notice.textContent = message;
   notice.dataset.tone = tone;
   notice.dataset.phase = "visible";
+  notice.inert = false;
   notice.hidden = false;
   noticeTimer = setTimeout(
     () => {
       noticeTimer = undefined;
       notice.dataset.phase = "closing";
+      notice.inert = true;
       const hide = () => {
         notice.hidden = true;
         notice.textContent = "";
@@ -77,7 +79,7 @@ export function show(message, tone = "success") {
       };
       const duration =
         parseFloat(
-          getComputedStyle(notice).getPropertyValue("--notice-exit-duration"),
+          getComputedStyle(notice).getPropertyValue("--ui-motion-exit"),
         ) || 0;
       if (duration) noticeHideTimer = setTimeout(hide, duration);
       else hide();

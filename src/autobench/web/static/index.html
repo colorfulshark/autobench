@@ -7,7 +7,7 @@
       name="description"
       content="配置 Linux 性能测试，查看运行进度和 UnixBench 报告。"
     />
-    <meta name="theme-color" content="#e6effc" />
+    <meta name="theme-color" content="#eaf1fc" />
     <meta name="page-type" content="software" />
     <meta name="site-kind" content="software" />
     <title>AutoBench · 测试工作台</title>
@@ -117,8 +117,10 @@
           </button>
           <details id="file-menu" class="menu">
             <summary
+              role="button"
               aria-label="文件操作"
               aria-describedby="file-name save-state"
+              aria-expanded="false"
             >
               <span id="active-config"></span>
               <svg
@@ -205,6 +207,7 @@
           tabindex="0"
           hidden
         >
+          <h1 class="visually-hidden">测试配置</h1>
           <div class="config-workspace">
             <nav id="wizard-steps" class="wizard-steps" aria-label="配置步骤">
               <div id="wizard-options"></div>
@@ -221,14 +224,14 @@
                   aria-label="上一步"
                   hidden
                 >
-                  <span aria-hidden="true">←</span> 上一步
+                  上一步
                 </button>
                 <button
                   id="primary-action"
                   class="button primary"
                   type="button"
                 >
-                  下一步 →
+                  下一步
                 </button>
               </div>
             </nav>
@@ -282,6 +285,7 @@
           tabindex="0"
           hidden
         >
+          <h1 class="visually-hidden">运行记录</h1>
           <div
             id="header-runs"
             class="history-location"
@@ -352,7 +356,7 @@
           </div>
           <div id="run-selection" hidden>
             <button id="back-to-runs" class="text-button" type="button">
-              ← 返回运行列表
+              返回运行列表
             </button>
             <p id="run-detail-status" class="callout" role="status" hidden></p>
             <div id="run-detail" hidden></div>
@@ -371,10 +375,9 @@
           id="close-preview"
           class="icon-button"
           aria-label="关闭预览"
+          type="button"
           autofocus
-        >
-          ×
-        </button>
+        ></button>
       </div>
       <div
         id="preview-content"

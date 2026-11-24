@@ -88,10 +88,11 @@ export function unixbenchTestsEditor(path) {
       const item = node("li");
       item.dataset.fieldPath = JSON.stringify([...path, index]);
       const remove = button(
-        "×",
+        "",
         () => change(path, selected.filter((_, i) => i !== index), true),
         "icon-button",
       );
+      remove.append(icon("error"));
       remove.setAttribute("aria-label", `移除测试项 ${name}`);
       item.append(node("span", "", String(name)), remove);
       list.append(item);
@@ -123,7 +124,7 @@ export function unixbenchTestsEditor(path) {
     else input.value = "";
   };
   input.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") {
+    if (event.key === "Enter" && !event.isComposing) {
       event.preventDefault();
       add();
     }

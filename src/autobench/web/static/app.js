@@ -17,7 +17,7 @@ import {
   accept,
 } from "./state.js";
 import { pathParent } from "./model.js";
-import { $, node, button, perform, friendlyError, jsonDetails } from "./ui.js";
+import { $, node, button, icon, perform, friendlyError, jsonDetails } from "./ui.js";
 import { initFiles, chooseFile } from "./files.js";
 import { initSelectMenus } from "./select-menus.js";
 import {
@@ -47,6 +47,7 @@ function setPage(page) {
   if (!Object.hasOwn(titles, page)) page = "config";
   const changed = state.page !== page;
   state.page = page;
+  document.title = `AutoBench · ${titles[page]}`;
   sessionStorage.setItem("autobench-page", page);
   for (const key of Object.keys(titles)) {
     $("page-" + key).hidden = key !== page;
@@ -92,14 +93,13 @@ function chrome() {
   if (!reviewing) renderPlan(stepLimit);
   $("prev-step").hidden = state.step === 0 || state.mode === "yaml";
   const checked = isChecked();
-  $("primary-action").textContent =
-    state.step < reviewStep && state.mode === "form"
-      ? "下一步 →"
-      : checked
-        ? "开始测试 →"
-        : saved
-          ? "检查配置"
-          : "保存并检查";
+  const next = state.step < reviewStep && state.mode === "form";
+  const primaryAction = $("primary-action");
+  primaryAction.classList.toggle("emphasized", next || checked);
+  primaryAction.replaceChildren(
+    next ? "下一步" : checked ? "开始测试" : saved ? "检查配置" : "保存并检查",
+  );
+  if (next || checked) primaryAction.append(icon("arrowRight"));
   $("yaml-meta").textContent =
     `${$("yaml-editor").value.split("\n").length} 行 · UTF-8`;
   $("config-errors").hidden = !state.errors.length;
@@ -116,9 +116,8 @@ function chrome() {
           "error-link",
         ),
       );
-  }
-  if (state.errors.length)
     $("config-errors").append(jsonDetails("原始错误详情", state.errors));
+  }
   $("validation-result").hidden = !checked || !reviewing;
   if (checked)
     $("validation-result").textContent =
@@ -167,7 +166,14 @@ function openPath(action = "save") {
         ? "保存并检查"
         : "保存配置";
   $("path-error").hidden = true;
-  $("path-dialog").showModal();
+  const dialog = $("path-dialog");
+  const opener = document.activeElement;
+  dialog.addEventListener("close", () => {
+    if (dialog.open || document.activeElement !== document.body) return;
+    const menu = opener?.closest("#file-menu");
+    (menu && !menu.open ? menu.querySelector("summary") : opener)?.focus({ preventScroll: true });
+  }, { once: true });
+  dialog.showModal();
 }
 function isSaved() {
   return Boolean(state.path && !state.dirty && state.target === state.path);
@@ -286,6 +292,13 @@ function selectStartupProject(initialPath) {
   });
 }
 function initWorkspace() {
+  const topbar = document.querySelector(".topbar");
+  new ResizeObserver(() => {
+    document.documentElement.style.setProperty("--header-offset", `${topbar.offsetHeight}px`);
+  }).observe(topbar);
+  $("prev-step").prepend(icon("arrowLeft"));
+  $("back-to-runs").prepend(icon("arrowLeft"));
+  $("close-preview").append(icon("error"));
   const tabs = [...document.querySelectorAll("[data-page]")];
   tabs.forEach((tab, index) => {
     tab.addEventListener("click", () => setPage(tab.dataset.page));
@@ -320,7 +333,13 @@ function initWorkspace() {
     $("file-menu").open = false;
   });
   document.querySelector(".menu-items").addEventListener("click", (event) => {
-    if (event.target.closest("button")) $("file-menu").open = false;
+    if (!event.target.closest("button")) return;
+    const menu = $("file-menu");
+    if (menu.contains(document.activeElement)) menu.querySelector("summary").focus();
+    menu.open = false;
+  });
+  $("file-menu").addEventListener("toggle", ({ currentTarget }) => {
+    currentTarget.querySelector("summary").setAttribute("aria-expanded", String(currentTarget.open));
   });
   document.addEventListener("click", (event) => {
     if (!$("file-menu").contains(event.target)) $("file-menu").open = false;
@@ -349,11 +368,11 @@ function initWorkspace() {
       !document.querySelector("dialog[open]")
     ) {
       event.preventDefault();
-      if (!event.repeat && !$("primary-action").disabled)
+      if (!event.repeat && $("primary-action").getAttribute("aria-busy") !== "true")
         $("secondary-action").click();
       return;
     }
-    if (event.key !== "Escape") return;
+    if (event.key !== "Escape" || event.defaultPrevented || document.querySelector("dialog[open]")) return;
     if (picker.getAttribute("aria-expanded") === "true") {
       event.preventDefault();
       setStepPicker(false, true);

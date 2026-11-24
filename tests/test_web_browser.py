@@ -31,9 +31,11 @@ pytestmark = [
 def browser_page():
     playwright = pytest.importorskip("playwright.sync_api")
     with playwright.sync_playwright() as runtime:
-        browser = runtime.chromium.launch(
-            executable_path=os.getenv("AUTOBENCH_CHROMIUM_EXECUTABLE")
-        )
+        engine = os.getenv("AUTOBENCH_BROWSER_ENGINE", "chromium")
+        executable = os.getenv("AUTOBENCH_BROWSER_EXECUTABLE")
+        if engine == "chromium" and not executable:
+            executable = os.getenv("AUTOBENCH_CHROMIUM_EXECUTABLE")
+        browser = getattr(runtime, engine).launch(executable_path=executable)
         page = browser.new_page(viewport={"width": 1440, "height": 1000})
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
@@ -190,7 +192,8 @@ def test_startup_blocks_workbench_until_new_config_is_saved(browser_page, ui_ser
     assert not target.exists()
     pending[0].continue_()
     assert_current_page(page, "config")
-    assert dialog.is_hidden()
+    assert not page.locator("#startup-dialog").evaluate("el => el.open")
+    dialog.wait_for(state="hidden")
     assert page.locator("#save-state").text_content() == "已保存"
     assert page.locator(".wizard-step[aria-current=step]").text_content() == "1连接机器"
     assert yaml.safe_load(target.read_text())["machines"][0]["id"] == "server01"
@@ -420,7 +423,7 @@ def set_editor_mode(page, mode, *, succeeds=True):
         reveal_file_menu(page)
         toggle.click()
     if not succeeds:
-        page.wait_for_function("() => !document.querySelector('#mode-toggle').disabled")
+        page.wait_for_function("() => !document.querySelector('#mode-toggle').hasAttribute('aria-busy')")
         assert toggle.get_attribute("aria-checked") != checked
         assert page.locator('#notice[data-tone="error"]').is_visible()
         return
@@ -501,7 +504,8 @@ def test_notices_auto_dismiss(browser_page, ui_server, width, tone, duration, re
     if reduced_motion == "no-preference":
         assert notice.get_attribute("data-phase") == "closing"
         assert notice.text_content() == "操作提示"
-        page.clock.run_for(140)
+        assert notice.evaluate("el => el.inert")
+        page.clock.run_for(120)
     assert notice.is_hidden()
     assert notice.text_content() == ""
     assert notice.bounding_box() is None
@@ -545,7 +549,7 @@ def test_new_notice_restarts_dismiss_timer(
     assert notice.get_attribute("data-tone") == second_tone
     page.clock.run_for(1)
     assert notice.get_attribute("data-phase") == "closing"
-    page.clock.run_for(140)
+    page.clock.run_for(120)
     assert notice.is_hidden()
     assert notice.text_content() == ""
 
@@ -570,16 +574,16 @@ def test_notice_enter_and_exit_animations(browser_page, ui_server, width):
                 name: animation.animationName,
                 duration: animation.effect.getTiming().duration,
                 opacity: Number(getComputedStyle(notice).opacity),
-                transform: getComputedStyle(notice).transform,
+                translate: getComputedStyle(notice).translate,
             };
             animation.finish();
             return result;
         }"""
     )
-    assert entrance["name"] == "notice-enter"
-    assert entrance["duration"] == 200
+    assert entrance["name"] == "popover-enter"
+    assert entrance["duration"] == 180
     assert 0 < entrance["opacity"] < 1
-    assert entrance["transform"] != "matrix(1, 0, 0, 1, 0, 0)"
+    assert entrance["translate"] != "none"
     page.clock.run_for(3000)
     exit_state = page.locator("#notice").evaluate(
         """notice => {
@@ -594,9 +598,9 @@ def test_notice_enter_and_exit_animations(browser_page, ui_server, width):
         }"""
     )
     assert exit_state["name"] == "notice-exit"
-    assert exit_state["duration"] == 140
+    assert exit_state["duration"] == 120
     assert 0 < exit_state["opacity"] < 1
-    page.clock.run_for(140)
+    page.clock.run_for(120)
     assert page.locator("#notice").is_hidden()
 
 
@@ -642,7 +646,7 @@ def test_save_draft_notice_dismisses_and_keeps_saved_state(browser_page, ui_serv
     assert page.locator("#notice").is_visible()
     page.clock.run_for(1)
     assert page.locator("#notice").get_attribute("data-phase") == "closing"
-    page.clock.run_for(140)
+    page.clock.run_for(120)
     assert page.locator("#notice").is_hidden()
     assert page.locator("#save-state").text_content() == "已保存"
     assert server.existing.is_file()
@@ -667,8 +671,8 @@ def assert_current_page(page, key):
     )
     assert page.get_by_role("tabpanel").count() == 1
     assert (
-        page.get_by_role("tabpanel").get_by_role("heading", name=titles[key], exact=True).count()
-        == 0
+        page.get_by_role("tabpanel").get_by_role("heading", name=titles[key], level=1, exact=True).count()
+        == 1
     )
     assert page.get_by_role("tab", selected=False).get_attribute("tabindex") == "-1"
     for other in titles.keys() - {key}:
@@ -1091,7 +1095,7 @@ def test_header_files_layout_and_independent_locations(browser_page, ui_server, 
         assert_current_page(page, key)
         page.wait_for_function(
             """() => Math.abs(parseFloat(getComputedStyle(document.documentElement)
-                .getPropertyValue('--topbar-height')) -
+                .getPropertyValue('--header-offset')) -
                 document.querySelector('.topbar').getBoundingClientRect().height) < 1"""
         )
         header = page.locator(f"#header-{key}").bounding_box()
@@ -1188,7 +1192,9 @@ def test_header_mode_switch_waits_for_parse_before_updating(browser_page, ui_ser
     toggle = page.locator("#mode-toggle")
     reveal_file_menu(page)
     toggle.click()
-    page.wait_for_function("() => document.querySelector('#mode-toggle').disabled")
+    page.wait_for_function(
+        "() => document.querySelector('#mode-toggle').getAttribute('aria-busy') === 'true'"
+    )
     assert len(pending) == 1
     assert toggle.get_attribute("aria-checked") == "true"
     assert page.locator("#yaml-panel").is_visible()
@@ -1242,7 +1248,7 @@ def test_incomplete_prerequisites_disable_steps_before_and_after_reload(
     errors = page.locator("#config-errors")
     active_step = page.locator(".wizard-step[aria-current=step]")
     steps = page.locator(".wizard-step")
-    edit_tests = page.get_by_role("button", name="编辑测试 →", exact=True)
+    edit_tests = page.get_by_role("button", name="编辑测试", exact=True)
 
     reveal_steps(page)
     assert steps.nth(1).is_disabled()
@@ -1284,7 +1290,7 @@ def test_incomplete_prerequisites_disable_steps_before_and_after_reload(
     click_primary(page)
     assert "添加至少一个系统" in errors.inner_text()
 
-    page.get_by_role("button", name="＋ 手动添加系统", exact=True).click()
+    page.get_by_role("button", name="手动添加系统", exact=True).click()
     page.locator("#input-machines-0-systems-0-boot_entry").fill("0001")
     assert steps.nth(2).is_enabled()
     assert steps.nth(3).is_disabled()
@@ -1358,7 +1364,7 @@ def test_wizard_password_connection_test_manual_system_files_save_run_and_cancel
     click_primary(page)
     assert page.get_by_role("button", name="连接测试", exact=True).count() == 0
     assert page.get_by_text("检查连接及运行环境，不提交测试，也不切换操作系统。").count() == 0
-    page.get_by_role("button", name="＋ 手动添加系统", exact=True).click()
+    page.get_by_role("button", name="手动添加系统", exact=True).click()
     page.locator("#input-machines-0-systems-0-boot_entry").fill("0001")
     click_primary(page)
     page.locator('[data-field-path=\'["benchmarks",0,"source_archive"]\']').get_by_role(
@@ -1471,14 +1477,17 @@ def test_auth_menu_expands_below_select(browser_page, ui_server, fallback, width
         selected = auth.locator('option[value="password"]')
         expect(auth).to_have_css("align-items", "center")
 
-    expect(auth).to_have_css("border-color", "rgb(196, 211, 232)")
+    expect(auth).to_have_css("border-color", "rgb(118, 137, 166)")
     expect(auth).to_have_css("border-radius", "10px")
     auth.click()
     expect(option).to_be_visible()
     trigger, row = auth.bounding_box(), option.bounding_box()
     assert row["y"] >= trigger["y"] + trigger["height"]
-    expect(auth).to_have_css("outline-style", "none")
-    expect(auth).to_have_css("border-color", "rgb(127, 168, 237)")
+    keyboard_focus = auth.evaluate("el => el.matches(':focus-visible')")
+    expect(auth).to_have_css("outline-style", "solid" if keyboard_focus else "none")
+    expect(auth).to_have_css(
+        "border-color", "rgb(30, 64, 175)" if keyboard_focus else "rgb(77, 131, 220)"
+    )
     expect(auth).to_have_css("box-shadow", "rgba(59, 130, 246, 0.1) 0px 0px 0px 3px")
     expect(selected).to_have_css("background-color", "rgb(232, 241, 255)")
     expect(selected).to_have_css("border-radius", "8px")
@@ -1491,7 +1500,13 @@ def test_auth_menu_expands_below_select(browser_page, ui_server, fallback, width
     auth.press("Space")
     expect(option).to_be_visible()
     page.keyboard.press("Escape")
+    if fallback:
+        assert page.locator("#select-menu").evaluate("el => el.inert && el.hidden")
+        assert auth.get_attribute("aria-expanded") is None
+    else:
+        assert not auth.evaluate("el => el.matches(':open')")
     expect(option).to_be_hidden()
+    expect(auth).to_be_focused()
     expect(auth).to_have_value("key")
 
     auth.press("Space")
@@ -1576,7 +1591,7 @@ def test_connection_test_spinner_success_and_configuration_invalidation(browser_
     status = page.locator('.connection-test-status[data-phase="success"]')
     status.wait_for()
     assert status.locator(".status-icon svg[aria-hidden=true]").count() == 1
-    assert status.evaluate("e => getComputedStyle(e).color") == "rgb(32, 101, 76)"
+    assert status.evaluate("e => getComputedStyle(e).color") == "rgb(22, 101, 52)"
     assert not connect.is_disabled()
     assert page.locator(".connection-test-panel button").count() == 1
     assert page.locator(".connection-test-panel > *").count() == 1
@@ -1623,7 +1638,7 @@ def test_connection_test_failure_summary_and_retry(browser_page, ui_server, widt
     status = page.locator('.connection-test-status[data-phase="error"]')
     status.wait_for()
     assert status.locator(".status-icon svg[aria-hidden=true]").count() == 1
-    assert status.evaluate("e => getComputedStyle(e).color") == "rgb(165, 62, 53)"
+    assert status.evaluate("e => getComputedStyle(e).color") == "rgb(180, 35, 24)"
     labels = {
         "connection": "SSH 连接",
         "uefi": "UEFI 启动项",
@@ -1816,15 +1831,16 @@ def test_warmup_alignment_and_pointer_vs_keyboard_focus(browser_page, ui_server,
 
     formal.focus()
     expect(formal).to_have_css("border-width", "1px")
-    expect(formal).to_have_css("border-color", "rgb(127, 168, 237)")
+    expect(formal).to_have_css("border-color", "rgb(30, 64, 175)")
     expect(formal).to_have_css("border-radius", "10px")
     expect(formal).to_have_css("box-shadow", "rgba(59, 130, 246, 0.1) 0px 0px 0px 3px")
-    expect(formal).to_have_css("outline-style", "none")
+    expect(formal).to_have_css("outline-style", "solid")
+    expect(formal).to_have_css("outline-offset", "-1px")
     page.keyboard.press("Tab")
     assert control.evaluate("input => document.activeElement === input")
     assert control.evaluate("input => input.matches(':focus-visible')")
-    expect(control).to_have_css("outline-style", "none")
-    expect(formal).to_have_css("border-color", "rgb(196, 211, 232)")
+    expect(control).to_have_css("outline-style", "solid")
+    expect(formal).to_have_css("border-color", "rgb(118, 137, 166)")
     expect(formal).to_have_css("box-shadow", "none")
     control.press("Space")
     assert not control.is_checked()
@@ -1886,7 +1902,7 @@ def test_run_detail_hides_resolved_reason_and_translates_recovery(browser_page, 
         summary = detail.get_by_text("按机器与系统查看任务", exact=True)
         detail.get_by_role("button", name="复制完整运行 ID").press("Tab")
         expect(summary).to_be_focused()
-        expect(summary).to_have_css("outline-style", "none")
+        expect(summary).to_have_css("outline-style", "solid")
         summary.press("Enter")
         expect(detail.get_by_text(translated, exact=True)).to_be_visible()
         expect(detail.get_by_text(english)).to_have_count(0)
@@ -1929,7 +1945,7 @@ def test_unixbench_tests_selection_save_reload_and_yaml_roundtrip(browser_page, 
     load_existing(page, server)
     open_step(page, "设置测试")
     selected = page.get_by_role("list", name="已选测试项")
-    assert selected.text_content() == "custom-test×"
+    assert selected.get_by_role("listitem").all_text_contents() == ["custom-test"]
     page.get_by_role("checkbox", name="execl · 程序替换吞吐量", exact=True).check()
     page.get_by_role("checkbox", name="shell · shell1、shell8、shell16", exact=True).check()
     page.get_by_label("其他测试名", exact=True).fill("hanoi")
@@ -1954,7 +1970,9 @@ def test_unixbench_tests_selection_save_reload_and_yaml_roundtrip(browser_page, 
     shell = page.get_by_role("checkbox", name="shell · shell1、shell8、shell16")
     shell.wait_for()
     assert shell.is_checked()
-    assert page.get_by_role("list", name="已选测试项").text_content() == "execl×shell×hanoi×"
+    assert page.get_by_role("list", name="已选测试项").get_by_role(
+        "listitem"
+    ).all_text_contents() == ["execl", "shell", "hanoi"]
     page.set_viewport_size({"width": 390, "height": 844})
     assert page.evaluate("() => document.documentElement.scrollWidth <= innerWidth")
     page.get_by_role("checkbox", name="execl · 程序替换吞吐量", exact=True).uncheck()
@@ -2031,7 +2049,7 @@ def test_mobile_and_validation_field_navigation(browser_page, ui_server):
     page.locator("#config-errors").wait_for()
     page.locator(".error-link").first.click()
     assert page.locator("#input-machines-0-ssh-port").get_attribute("aria-invalid") == "true"
-    page.clock.run_for(5140)
+    page.clock.run_for(5160)
     assert page.locator("#notice").is_hidden()
     assert page.locator("#config-errors").is_visible()
     assert page.locator(".field-error").is_visible()
@@ -2062,7 +2080,7 @@ def test_plan_preview_tracks_systems_rounds_and_yaml_changes(browser_page, ui_se
     assert plan.locator(".plan-figure strong").text_content() == str(system_count * 5)
     assert plan.locator(".plan-route li").count() == system_count
     assert plan.locator(".plan-test").count() == len(raw["benchmarks"])
-    plan.get_by_role("button", name="编辑测试 →", exact=True).click()
+    plan.get_by_role("button", name="编辑测试", exact=True).click()
     page.locator("#input-benchmarks-0-repetitions").fill("4")
     assert plan.locator(".plan-figure strong").text_content() == str(system_count * 6)
     set_editor_mode(page, "yaml")
@@ -2373,7 +2391,7 @@ def test_boot_entry_identification_spinner_choices_and_selection(
     status = page.locator('.boot-entry-status[data-phase="success"]')
     status.wait_for()
     assert status.locator(".status-icon svg[aria-hidden=true]").count() == 1
-    assert status.evaluate("e => getComputedStyle(e).color") == "rgb(32, 101, 76)"
+    assert status.evaluate("e => getComputedStyle(e).color") == "rgb(22, 101, 52)"
     assert entry.evaluate("e => e.tagName") == "SELECT"
     assert entry.input_value() == value
     assert entry.locator("option:enabled").evaluate_all("items => items.map(e => e.value)") == [
@@ -2425,7 +2443,7 @@ def test_boot_entry_identification_failure_preserves_input_and_allows_retry(
     status = page.locator('.boot-entry-status[data-phase="error"]')
     status.wait_for()
     assert status.locator(".status-icon svg[aria-hidden=true]").count() == 1
-    assert status.evaluate("e => getComputedStyle(e).color") == "rgb(165, 62, 53)"
+    assert status.evaluate("e => getComputedStyle(e).color") == "rgb(180, 35, 24)"
     assert status.locator(".status-message").text_content()
     assert entry.evaluate("e => e.tagName") == "INPUT" and entry.input_value() == "00AB"
     assert not identify.is_disabled()
@@ -2578,8 +2596,9 @@ def test_step_actions_share_navigation_through_review(browser_page, ui_server, w
     open_step(page, "选择系统")
     page.evaluate("window.scrollTo(0, document.documentElement.scrollHeight)")
     reveal_steps(page)
+    nav.evaluate("el => Promise.all(el.getAnimations().map(animation => animation.finished))")
     back = group.get_by_role("button", name="上一步", exact=True).bounding_box()
-    next_button = group.get_by_role("button", name="下一步 →", exact=True)
+    next_button = group.get_by_role("button", name="下一步", exact=True)
     next_step = next_button.bounding_box()
     nav_box = nav.bounding_box()
     assert back["y"] == next_step["y"]
@@ -2588,9 +2607,12 @@ def test_step_actions_share_navigation_through_review(browser_page, ui_server, w
     assert next_step["height"] >= 44
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
-    gradient = next_button.evaluate("button => getComputedStyle(button).backgroundImage")
+    page.mouse.move(0, 0)
+    assert next_button.evaluate(
+        "button => getComputedStyle(button).backgroundImage.startsWith('linear-gradient')"
+    )
     next_button.hover()
-    assert next_button.evaluate("button => getComputedStyle(button).backgroundImage") == gradient
+    assert next_button.evaluate("button => getComputedStyle(button).backgroundImage") == "none"
 
     open_step(page, "检查运行")
     click_primary(page)
@@ -2598,7 +2620,7 @@ def test_step_actions_share_navigation_through_review(browser_page, ui_server, w
         "() => document.querySelector('#primary-action').textContent.includes('开始测试')"
     )
     reveal_steps(page)
-    assert group.get_by_role("button", name="开始测试 →", exact=True).is_visible()
+    assert group.get_by_role("button", name="开始测试", exact=True).is_visible()
 
 
 @pytest.mark.parametrize("width", [1440, 1101, 1100, 768, 700, 390, 320])
@@ -2608,13 +2630,13 @@ def test_steps_beside_form_or_in_mobile_picker(browser_page, ui_server, width):
     ready(page, ui_server, startup_path=ui_server.existing)
     picker = page.locator(".topbar #step-picker")
     navigation = page.locator("#wizard-steps")
-    assert picker.is_visible() == (width <= 700)
+    assert picker.is_visible() == (width < 768)
     for index in range(5):
         reveal_steps(page)
         nav_box = navigation.bounding_box()
         nav_step = navigation.locator(".wizard-step").nth(index)
         assert nav_step.bounding_box()["height"] >= 44
-        if width <= 700:
+        if width < 768:
             picker_box = picker.bounding_box()
             assert nav_box["y"] > picker_box["y"] + picker_box["height"]
             assert (
@@ -2628,7 +2650,7 @@ def test_steps_beside_form_or_in_mobile_picker(browser_page, ui_server, width):
             assert nav_box["y"] == pytest.approx(form["y"], abs=1)
         nav_step.click()
         assert navigation.locator(".wizard-step[aria-current=step]").count() == 1
-        assert navigation.is_visible() == (width > 700)
+        assert navigation.is_visible() == (width >= 768)
         assert picker.get_attribute("aria-expanded") == "false"
         assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
@@ -2721,14 +2743,14 @@ def test_five_steps_preserve_existing_config_and_fit_viewport(browser_page, ui_s
         assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
         assert (page.locator("#prev-step").get_attribute("hidden") is None) == (index > 0)
         assert page.locator("#primary-action").text_content().strip() == (
-            "下一步 →" if index < 4 else "检查配置"
+            "下一步" if index < 4 else "检查配置"
         )
         if name == "设置测试":
             assert page.locator("#input-policy-output_dir").count() == 0
         if name == "运行设置":
             page.get_by_text("高级调度设置", exact=True).click()
             assert page.locator("#input-policy-output_dir").is_visible()
-            assert page.locator("#input-version").is_visible()
+            page.locator("#input-version").wait_for(state="visible")
     save_draft(page)
     page.wait_for_function(
         "() => !document.querySelector('#secondary-action').classList.contains('busy')"
@@ -2740,7 +2762,7 @@ def test_five_steps_preserve_existing_config_and_fit_viewport(browser_page, ui_s
     assert page.locator(".wizard-step").count() == 5
 
 
-@pytest.mark.parametrize("width", [1440, 851, 850])
+@pytest.mark.parametrize("width", [1920, 1440, 1280, 1279, 1024, 768])
 def test_plan_aligns_with_each_wizard_card(browser_page, ui_server, width):
     page = browser_page
     page.set_viewport_size({"width": width, "height": 900})
@@ -2751,7 +2773,7 @@ def test_plan_aligns_with_each_wizard_card(browser_page, ui_server, width):
     def assert_plan_alignment():
         card_box = card.bounding_box()
         plan_box = plan.bounding_box()
-        if width > 850:
+        if width >= 1280:
             assert plan_box["y"] == pytest.approx(card_box["y"], abs=1)
             assert plan_box["x"] > card_box["x"] + card_box["width"]
         else:
@@ -2769,10 +2791,7 @@ def test_plan_aligns_with_each_wizard_card(browser_page, ui_server, width):
 
     open_step(page, "连接机器")
     for _ in range(2):
-        page.get_by_role("button", name="＋ 添加机器", exact=True).click()
-    if width == 851:
-        tabs = page.locator(".machine-picker .machine-tab")
-        assert tabs.first.bounding_box()["y"] < tabs.last.bounding_box()["y"]
+        page.get_by_role("button", name="添加机器", exact=True).click()
     assert_plan_alignment()
 
 
@@ -2806,7 +2825,7 @@ def test_machine_drag_and_keyboard_sort_preserve_config(browser_page, ui_server,
     load_existing(page, server)
     original_machine = yaml.safe_load(server.existing.read_text())["machines"][0]
     for number in [2, 3]:
-        page.get_by_role("button", name="＋ 添加机器", exact=True).click()
+        page.get_by_role("button", name="添加机器", exact=True).click()
         page.locator(f"#input-machines-{number - 1}-ssh-host").fill(f"host-{number}")
     tabs = page.locator(".machine-picker .chip-button")
     assert page.locator(".object-controls").count() == 0
@@ -2851,7 +2870,7 @@ def test_machine_drag_across_rows_and_cancel(browser_page, ui_server, width):
     ready(page, server)
     load_existing(page, server)
     for _ in range(13):
-        page.get_by_role("button", name="＋ 添加机器", exact=True).click()
+        page.get_by_role("button", name="添加机器", exact=True).click()
     tabs = page.locator(".machine-picker .chip-button")
     before = tabs.all_text_contents()
     assert tabs.nth(0).bounding_box()["y"] < tabs.nth(13).bounding_box()["y"]
@@ -2860,7 +2879,7 @@ def test_machine_drag_across_rows_and_cancel(browser_page, ui_server, width):
     assert page.locator(".machine-picker .active").text_content() == "server14"
     save_draft(page)
     page.wait_for_function("() => document.querySelector('#save-state').textContent === '已保存'")
-    page.wait_for_function("() => !document.querySelector('#secondary-action').disabled")
+    page.wait_for_function("() => !document.querySelector('#secondary-action').hasAttribute('aria-busy')")
     page.locator("#notice").wait_for(state="hidden")
     before = tabs.all_text_contents()
     tabs.nth(0).hover()
@@ -2883,7 +2902,7 @@ def test_machine_tab_delete_preserves_selection(browser_page, ui_server, selecte
     ready(page, server)
     load_existing(page, server)
     for _ in range(2):
-        page.get_by_role("button", name="＋ 添加机器", exact=True).click()
+        page.get_by_role("button", name="添加机器", exact=True).click()
     tabs = page.locator(".machine-picker .chip-button")
     names = tabs.all_text_contents()
     tabs.nth(selected).click()
@@ -2919,7 +2938,7 @@ def test_machine_tab_inline_keyboard_delete_and_empty_state(browser_page, ui_ser
     page, server = browser_page, ui_server
     page.set_viewport_size({"width": width, "height": 1000})
     ready(page, server)
-    page.get_by_role("button", name="＋ 添加机器", exact=True).click()
+    page.get_by_role("button", name="添加机器", exact=True).click()
     corner = page.get_by_role("button", name="删除机器 server01", exact=True)
     page.mouse.move(0, 0)
     first = page.locator(".machine-picker .chip-button").nth(0)
@@ -2933,7 +2952,7 @@ def test_machine_tab_inline_keyboard_delete_and_empty_state(browser_page, ui_ser
     corner.hover()
     page.wait_for_function(
         "() => getComputedStyle(document.querySelector('.machine-remove')).backgroundColor === "
-        "'rgb(220, 232, 252)'"
+        "'rgb(241, 246, 255)'"
     )
     first.focus()
     first.press("Tab")
@@ -2945,16 +2964,16 @@ def test_machine_tab_inline_keyboard_delete_and_empty_state(browser_page, ui_ser
     page.get_by_role("button", name="删除机器 server02", exact=True).press("Space")
     assert page.locator(".machine-picker .chip-button").count() == 0
     assert page.get_by_text("添加第一台机器", exact=True).is_visible()
-    assert page.get_by_role("button", name="＋ 添加机器", exact=True).evaluate(
+    assert page.get_by_role("button", name="添加机器", exact=True).evaluate(
         "e => e === document.activeElement"
     )
     assert page.locator("#wizard-step-1").is_disabled()
     click_primary(page)
     assert page.locator("#wizard-step-0").get_attribute("aria-current") == "step"
     assert page.get_by_role("button", name="机器：请添加至少一台机器。", exact=True).is_visible()
-    page.get_by_role("button", name="＋ 添加机器", exact=True).click()
+    page.get_by_role("button", name="添加机器", exact=True).click()
     assert page.locator(".machine-picker .active").text_content() == "server01"
-    page.get_by_role("button", name="＋ 添加机器", exact=True).click()
+    page.get_by_role("button", name="添加机器", exact=True).click()
     set_editor_mode(page, "yaml")
     result = yaml.safe_load(page.locator("#yaml-editor").input_value())
     assert [m["id"] for m in result["machines"]] == ["server01", "server02"]
@@ -2965,7 +2984,7 @@ def test_machine_tab_renames_only_target_and_preserves_selection(browser_page, u
     page, server = browser_page, ui_server
     ready(page, server)
     load_existing(page, server)
-    page.get_by_role("button", name="＋ 添加机器", exact=True).click()
+    page.get_by_role("button", name="添加机器", exact=True).click()
     tabs = page.locator(".machine-picker .chip-button")
     original_width = page.locator(".machine-tab").first.bounding_box()["width"]
     edit = page.get_by_role("button", name="修改机器标识 server01", exact=True)
@@ -2984,7 +3003,7 @@ def test_machine_tab_renames_only_target_and_preserves_selection(browser_page, u
     assert value.evaluate("e => e.validity.patternMismatch")
     value.fill("discarded")
     value.press("Escape")
-    assert dialog.is_hidden()
+    assert not page.locator("#id-dialog").evaluate("el => el.open")
     assert tabs.all_text_contents() == ["server01", "server02"]
     tabs.first.focus()
     page.keyboard.press("Tab")
@@ -2992,7 +3011,7 @@ def test_machine_tab_renames_only_target_and_preserves_selection(browser_page, u
     edit.press("Enter")
     value.fill("bench-host_01")
     value.press("Enter")
-    assert dialog.is_hidden()
+    assert not page.locator("#id-dialog").evaluate("el => el.open")
     assert tabs.all_text_contents() == ["bench-host_01", "server02"]
     assert page.locator(".machine-tab").first.bounding_box()["width"] > original_width
     assert page.locator(".machine-picker .active").text_content() == "server02"
@@ -3014,7 +3033,7 @@ def test_system_step_only_selects_existing_machines(browser_page, ui_server):
     ready(page, server)
     load_existing(page, server)
     for _ in range(2):
-        page.get_by_role("button", name="＋ 添加机器", exact=True).click()
+        page.get_by_role("button", name="添加机器", exact=True).click()
     for index in (1, 2):
         page.locator(".machine-picker .chip-button").nth(index).click()
         page.locator(f"#input-machines-{index}-ssh-host").fill("localhost")
@@ -3042,7 +3061,7 @@ def test_system_step_only_selects_existing_machines(browser_page, ui_server):
         assert system_frame[0] < connection_frame[0]
         assert system_frame[1:] == connection_frame[1:]
     assert tabs.all_text_contents() == ["server01", "server03", "server02"]
-    assert page.get_by_role("button", name="＋ 添加机器", exact=True).count() == 0
+    assert page.get_by_role("button", name="添加机器", exact=True).count() == 0
     assert page.get_by_role("button", name="上移机器", exact=True).count() == 0
     assert page.get_by_role("button", name="下移机器", exact=True).count() == 0
     assert page.get_by_role("button", name="移除此机器", exact=True).count() == 0
@@ -3061,7 +3080,7 @@ def test_system_step_only_selects_existing_machines(browser_page, ui_server):
     assert page.locator(".system-item").count() == 0
     assert server.existing.read_text() == original
     open_step(page, "连接机器")
-    assert page.get_by_role("button", name="＋ 添加机器", exact=True).is_visible()
+    assert page.get_by_role("button", name="添加机器", exact=True).is_visible()
     assert page.locator(".machine-remove").count() == 3
 
 
@@ -3161,7 +3180,7 @@ def test_benchmark_drag_across_rows_and_cancel(browser_page, ui_server, width):
     assert page.locator(".benchmark-picker .active").text_content() == "unixbench14"
     save_draft(page)
     page.wait_for_function("() => document.querySelector('#save-state').textContent === '已保存'")
-    page.wait_for_function("() => !document.querySelector('#secondary-action').disabled")
+    page.wait_for_function("() => !document.querySelector('#secondary-action').hasAttribute('aria-busy')")
     page.locator("#notice").wait_for(state="hidden")
     before = tabs.all_text_contents()
     tabs.nth(0).hover()
@@ -3235,13 +3254,13 @@ def test_benchmark_tab_inline_keyboard_delete_and_empty_state(browser_page, ui_s
     page.get_by_role("button", name="删除测试 unixbench02", exact=True).press("Space")
     assert tabs.count() == 0
     assert page.locator(".benchmark-remove").count() == 0
-    assert page.get_by_role("button", name="＋ 添加测试", exact=True).evaluate(
+    assert page.get_by_role("button", name="添加测试", exact=True).evaluate(
         "e => e === document.activeElement"
     )
     assert page.get_by_text("尚未添加测试", exact=True).is_visible()
     click_primary(page)
     assert page.get_by_role("button", name="测试：请添加至少一项测试。", exact=True).is_visible()
-    page.get_by_role("button", name="＋ 添加测试", exact=True).click()
+    page.get_by_role("button", name="添加测试", exact=True).click()
     assert page.locator("#input-benchmarks-0-source_archive").input_value() == ""
     assert page.locator(".benchmark-picker .active").text_content() == "unixbench01"
 
@@ -3259,7 +3278,7 @@ def test_run_settings_error_navigation_and_validation_invalidation(
         "() => document.querySelector('#primary-action').textContent.includes('开始测试')"
     )
     open_step(page, "运行设置")
-    assert page.locator("#primary-action").text_content() == "下一步 →"
+    assert page.locator("#primary-action").text_content() == "下一步"
     page.get_by_text("高级调度设置", exact=True).click()
     control = page.locator("#input-" + field)
     original = control.input_value()
@@ -3325,7 +3344,7 @@ def test_guided_system_order_delete_and_readd(browser_page, ui_server, width):
     )""")
     second_row.get_by_role("button", name="编辑系统配置 os2", exact=True).click()
     assert page.get_by_label("系统标识 *", exact=True).input_value() == "os2"
-    page.get_by_role("button", name="← 返回系统列表", exact=True).click()
+    page.get_by_role("button", name="返回系统列表", exact=True).click()
     page.get_by_role("button", name="下移系统 os1", exact=True).click()
     assert page.locator(".system-item .object-title").all_text_contents() == ["os2", "os1"]
     page.get_by_role("button", name="上移系统 os1", exact=True).click()
@@ -3334,23 +3353,23 @@ def test_guided_system_order_delete_and_readd(browser_page, ui_server, width):
         item = page.locator(".system-item").first
         item.get_by_role("button", name="删除系统", exact=False).click()
     assert page.get_by_role("heading", name="尚未添加系统", exact=True).is_visible()
-    page.get_by_role("button", name="＋ 手动添加系统", exact=True).click()
+    page.get_by_role("button", name="手动添加系统", exact=True).click()
     editor = page.locator(".system-editor")
     assert editor.get_by_role("heading").all_text_contents() == ["基本信息", "配置选项", "环境变量"]
-    editor.get_by_role("button", name="＋ 添加变量", exact=True).click()
+    editor.get_by_role("button", name="添加变量", exact=True).click()
     editor.get_by_role("textbox", name="NEW_VAR的值", exact=True).fill("value")
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
-    page.get_by_role("button", name="← 返回系统列表", exact=True).click()
+    page.get_by_role("button", name="返回系统列表", exact=True).click()
     assert page.get_by_text("待填写启动项", exact=True).is_visible()
     page.locator(".systems-board").get_by_role("button", name="linux01", exact=True).click()
     page.locator("#input-machines-0-systems-0-boot_entry").fill("00AB")
-    page.get_by_role("button", name="← 返回系统列表", exact=True).click()
+    page.get_by_role("button", name="返回系统列表", exact=True).click()
     assert page.locator(".system-item .object-title").all_text_contents() == ["linux01"]
     assert page.get_by_text("Boot00AB", exact=True).is_visible()
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     page.get_by_role("button", name="编辑系统配置 linux01", exact=True).click()
     page.get_by_label("系统标识 *", exact=True).fill("linux-new")
-    page.get_by_role("button", name="← 返回系统列表", exact=True).click()
+    page.get_by_role("button", name="返回系统列表", exact=True).click()
     assert page.locator(".system-item .object-title").all_text_contents() == ["linux-new"]
     set_editor_mode(page, "yaml")
     page.locator("#yaml-panel").wait_for()
@@ -3543,3 +3562,279 @@ def test_report_stale_response_does_not_leak_into_another_run(browser_page, ui_s
     page.wait_for_timeout(150)
     assert page.locator("#generate-report").text_content() == "生成报告"
     assert "400.00" not in page.locator(".report-panel").text_content()
+
+
+@pytest.mark.parametrize("mode", ["reflow", "text-zoom", "text-spacing"])
+def test_accessible_workbench_layout(browser_page, ui_server, mode):
+    from playwright.sync_api import expect
+
+    page, server = browser_page, ui_server
+    page.set_viewport_size({"width": 320 if mode == "reflow" else 1440, "height": 900})
+    page.emulate_media(reduced_motion="reduce")
+    override = ""
+    if mode == "text-zoom":
+        override = "html { font-size: 200% !important; }"
+    if mode == "text-spacing":
+        override = """
+          * { line-height: 1.5 !important; letter-spacing: .12em !important;
+              word-spacing: .16em !important; }
+          p { margin-bottom: 2em !important; }
+        """
+    if override:
+        def apply_user_styles(route):
+            response = route.fetch()
+            route.fulfill(response=response, body=response.text() + "\n" + override)
+
+        page.route("**/static/style.css", apply_user_styles)
+    ready(page, server, startup_path=server.existing)
+    scale = 2 if mode == "text-zoom" else 1
+    host = page.locator("#input-machines-0-ssh-host")
+    expect(host).to_have_css("font-size", f"{14 * scale}px")
+    auth = page.get_by_role("combobox", name="认证方式", exact=True)
+    expect(auth).to_have_css("font-size", f"{14 * scale}px")
+    for step in ["连接机器", "选择系统", "设置测试", "运行设置", "检查运行"]:
+        open_step(page, step)
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), step
+    expect(page.locator(".review-panel h2")).to_have_css("font-size", f"{20 * scale}px")
+    expect(page.locator(".review-panel .stat strong").first).to_have_css(
+        "font-size", f"{32 * scale}px"
+    )
+    page.get_by_role("tab", name="运行记录").click()
+    page.get_by_role("button", name="更改位置…").click()
+    confirm = page.get_by_role("button", name="选择目录", exact=True)
+    expect(confirm).to_be_enabled()
+    box = page.locator("#file-dialog").bounding_box()
+    assert box["x"] >= 0 and box["x"] + box["width"] <= page.viewport_size["width"]
+    page.keyboard.press("Escape")
+    expect(page.get_by_role("button", name="更改位置…")).to_be_focused()
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+
+def test_file_picker_keeps_keyboard_selection_and_restores_focus(browser_page, ui_server):
+    from playwright.sync_api import expect
+
+    page = browser_page
+    ready(page, ui_server, startup_path=ui_server.existing)
+    page.locator("#file-menu summary").click()
+    page.get_by_role("button", name="打开服务器配置…").press("Enter")
+    entry = page.get_by_role("button", name="existing.yaml 文件", exact=True)
+    entry.press("Space")
+    expect(entry).to_be_focused()
+    expect(entry).to_have_attribute("aria-pressed", "true")
+    expect(page.get_by_role("button", name="选择文件", exact=True)).to_be_enabled()
+    page.keyboard.press("Escape")
+    expect(page.get_by_role("button", name="文件操作")).to_be_focused()
+
+
+def test_runs_retry_retains_last_known_list(browser_page, ui_server):
+    from playwright.sync_api import expect
+
+    page, server = browser_page, ui_server
+    run_id = report_history(server)
+    ready(page, server, startup_path=server.existing)
+    page.get_by_role("tab", name="运行记录").click()
+    page.get_by_text(run_id, exact=True).wait_for()
+    page.route("**/api/runs?*", lambda route: route.fulfill(
+        status=503, json={"detail": "服务暂时不可用"}
+    ))
+    expect(page.get_by_role("status").filter(has_text="数据可能已过期")).to_be_visible()
+    expect(page.get_by_text(run_id, exact=True)).to_be_visible()
+    page.unroute("**/api/runs?*")
+    expect(page.get_by_role("status").filter(has_text="数据可能已过期")).to_be_hidden()
+
+
+@pytest.mark.skipif(
+    not os.getenv("AUTOBENCH_UI_SCREENSHOTS"),
+    reason="set AUTOBENCH_UI_SCREENSHOTS to capture Chromium reference screenshots",
+)
+def test_capture_workbench_reference_screens(browser_page, ui_server):
+    from playwright.sync_api import expect
+
+    page, server = browser_page, ui_server
+    output = Path(os.environ["AUTOBENCH_UI_SCREENSHOTS"])
+    output.mkdir(parents=True, exist_ok=True)
+    page.emulate_media(reduced_motion="reduce")
+    page.set_viewport_size({"width": 1440, "height": 900})
+    run_id = report_history(server)
+    ready(page, server, startup_path=server.existing)
+
+    def capture(name):
+        page.screenshot(path=output / f"{name}.png", animations="disabled", full_page=True)
+
+    capture("01-connection")
+    page.get_by_role("combobox", name="认证方式", exact=True).press("Space")
+    page.get_by_role("option", name="密钥认证", exact=True).wait_for()
+    capture("02-select-focus")
+    page.keyboard.press("Escape")
+    open_step(page, "选择系统")
+    capture("03-systems")
+    page.get_by_role("button", name="编辑系统配置 os1", exact=True).click()
+    capture("04-system")
+    open_step(page, "设置测试")
+    capture("05-benchmarks")
+    open_step(page, "运行设置")
+    capture("06-settings")
+    open_step(page, "检查运行")
+    capture("07-review")
+    page.get_by_role("tab", name="运行记录").click()
+    page.get_by_text(run_id, exact=True).wait_for()
+    capture("08-history")
+    page.get_by_role("button", name="查看详情", exact=True).first.click()
+    expect(page.get_by_role("heading", name="运行详情", exact=True)).to_be_visible()
+    capture("09-run")
+    page.locator("#back-to-runs").click()
+    page.get_by_role("button", name="更改位置…").click()
+    expect(page.get_by_role("button", name="选择目录", exact=True)).to_be_enabled()
+    capture("10-picker")
+    page.route("**/api/files?*", lambda route: route.fulfill(
+        status=403, json={"detail": "无权读取此目录"}
+    ))
+    page.get_by_role("button", name="前往", exact=True).click()
+    page.get_by_role("alert").filter(has_text="无权读取此目录").wait_for()
+    capture("11-picker-error")
+    page.keyboard.press("Escape")
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.get_by_role("tab", name="测试配置").click()
+    open_step(page, "连接机器")
+    capture("12-connection-mobile")
+
+
+def test_forced_colors_keeps_keyboard_focus_visible(browser_page, ui_server):
+    from playwright.sync_api import expect
+
+    page = browser_page
+    page.emulate_media(forced_colors="active", reduced_motion="reduce")
+    ready(page, ui_server, startup_path=ui_server.existing)
+    host = page.locator("#input-machines-0-ssh-host")
+    host.focus()
+    expect(host).to_have_css("outline-style", "solid")
+    expect(host).to_have_css("outline-width", "2px")
+    page.keyboard.press("Tab")
+    port = page.get_by_role("spinbutton", name="端口")
+    expect(port).to_be_focused()
+    expect(port).to_have_css("outline-style", "solid")
+    for selector in ["body", ".topbar", ".brand-mark", ".plan-heading", "#primary-action"]:
+        expect(page.locator(selector)).to_have_css("background-image", "none")
+    auth = page.get_by_role("combobox", name="认证方式", exact=True)
+    auth.press("Space")
+    expect(auth.locator("option:checked")).to_have_css("outline-style", "solid")
+    page.keyboard.press("Escape")
+    expect(auth).to_be_focused()
+
+
+@pytest.mark.parametrize("reduced_motion", ["no-preference", "reduce"])
+def test_motion_keeps_step_disclosure_and_switch_state_immediate(
+    browser_page, ui_server, reduced_motion
+):
+    from playwright.sync_api import expect
+
+    page = browser_page
+    page.emulate_media(reduced_motion=reduced_motion)
+    ready(page, ui_server, startup_path=ui_server.existing)
+    duration = "0s" if reduced_motion == "reduce" else "0.16s"
+
+    settings = page.get_by_role("button", name="运行设置")
+    settings.evaluate("el => window.originalStep = el")
+    open_step(page, "设置测试")
+    warmup = page.get_by_role("checkbox", name="预热", exact=True)
+    initial_checked = warmup.is_checked()
+    warmup.press("Space")
+    assert warmup.is_checked() != initial_checked
+    warmup.press("Space")
+    assert warmup.is_checked() == initial_checked
+    assert warmup.evaluate("el => getComputedStyle(el, '::before').transitionDuration") == duration
+
+    settings.press("Space")
+    assert settings.evaluate("el => el === window.originalStep")
+    expect(settings).to_have_attribute("aria-current", "step")
+    step_number = settings.locator(".step-number")
+    assert step_number.evaluate("el => getComputedStyle(el).transitionDuration.split(', ')[0]") == (
+        duration
+    )
+    policy = page.get_by_text("高级调度设置", exact=True)
+    accordion = page.locator("details").filter(has=policy)
+    summary = accordion.locator("summary")
+    policy_open = accordion.evaluate("el => el.open")
+    if not policy_open:
+        summary.press("Space")
+    interval = page.get_by_label("轮询间隔（秒）", exact=True)
+    interval.fill("4")
+    summary.press("Space")
+    assert not accordion.evaluate("el => el.open")
+    assert interval.evaluate("el => { el.focus(); return document.activeElement !== el; }")
+    summary.press("Space")
+    assert accordion.evaluate("el => el.open")
+    expect(interval).to_have_value("4")
+    expect(accordion.locator(".disclosure-chevron")).to_have_css("rotate", "90deg")
+    if page.evaluate("CSS.supports('interpolate-size: allow-keywords')"):
+        accordion_duration = accordion.evaluate(
+            "el => getComputedStyle(el, '::details-content').transitionDuration.split(', ')[0]"
+        )
+        assert accordion_duration == ("0s" if reduced_motion == "reduce" else "0.2s")
+    assert not page.locator("#config-body").evaluate("el => el.getAnimations().length")
+
+
+def test_modal_exit_restores_focus_and_allows_immediate_reopen(browser_page, ui_server):
+    from playwright.sync_api import expect
+
+    page = browser_page
+    ready(page, ui_server, startup_path=ui_server.existing)
+    page.get_by_role("tab", name="运行记录").click()
+    opener = page.get_by_role("button", name="更改位置…", exact=True)
+    opener.click()
+    dialog = page.locator("#file-dialog")
+    expect(page.get_by_role("button", name="选择目录", exact=True)).to_be_enabled()
+    page.keyboard.press("Escape")
+    assert not dialog.evaluate("el => el.open")
+    expect(opener).to_be_focused()
+    assert dialog.evaluate(
+        "el => { el.querySelector('input').focus(); return !el.contains(document.activeElement); }"
+    )
+    point = opener.bounding_box()
+    page.mouse.click(point["x"] + point["width"] / 2, point["y"] + point["height"] / 2)
+    expect(page.get_by_role("button", name="选择目录", exact=True)).to_be_enabled()
+    page.keyboard.press("Escape")
+    dialog.wait_for(state="hidden")
+    expect(opener).to_be_focused()
+
+
+def test_run_events_keep_focused_log_and_scroll_position(browser_page, ui_server):
+    from playwright.sync_api import expect
+
+    from autobench.storage import Store
+
+    page, server = browser_page, ui_server
+    store = Store(server.config.policy.state_dir)
+    run_id = store.create(server.config)
+    store.close()
+    events = [
+        {"sequence": i, "time": 1700000000, "message": f"采集测试事件 {i:03d}"}
+        for i in range(1, 81)
+    ]
+
+    def event_response(route):
+        after = int(route.request.url.split("after=")[-1])
+        route.fulfill(json=[event for event in events if event["sequence"] > after])
+
+    page.route(f"**/api/runs/{run_id}/events?*", event_response)
+    ready(page, server, startup_path=server.existing)
+    page.get_by_role("tab", name="运行记录").click()
+    page.get_by_role("button", name="查看详情", exact=True).click()
+    page.get_by_text("原始运行事件", exact=True).click()
+    log = page.get_by_label("运行事件日志")
+    expect(log).to_contain_text("采集测试事件 080")
+    log.evaluate("el => { el.scrollTop = 0; el.focus({preventScroll: true}); }")
+    expect(page.get_by_role("button", name="回到底部", exact=True)).to_be_visible()
+    page.locator("#run-detail").evaluate(
+        """el => {
+            el.addEventListener('animationstart', () => el.dataset.pollAnimation = 'true');
+        }"""
+    )
+    events.append({"sequence": 81, "time": 1700000000, "message": "新事件 081"})
+    expect(log).to_contain_text("新事件 081")
+    expect(log).to_be_focused()
+    assert log.evaluate("el => el.scrollTop") == 0
+    assert page.locator("#run-detail").get_attribute("data-poll-animation") is None
+    page.get_by_role("button", name="回到底部", exact=True).click()
+    expect(log).to_be_focused()
+    assert log.evaluate("el => el.scrollHeight - el.scrollTop - el.clientHeight < 24")
