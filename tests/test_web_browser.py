@@ -3607,7 +3607,7 @@ def test_guided_system_order_delete_and_readd(browser_page, ui_server, width):
     ]
 
 
-def report_history(server, *, empty=False, parallel_copies=64):
+def report_history(server, *, empty=False, parallel_copies=64, extra_copies=()):
     from test_reports import TEST_ORDER, unixbench_text, write_round
 
     from autobench.storage import Store
@@ -3621,7 +3621,7 @@ def report_history(server, *, empty=False, parallel_copies=64):
         for system, values in (("os1", (100, 200, 900)), ("os2", (480, 480, 480))):
             for repetition, value in enumerate(values, 1):
                 text = ""
-                for copies in (1, parallel_copies):
+                for copies in (1, parallel_copies, *extra_copies):
                     extra = "".join(
                         f"{name}   1.0   10000.0   {value * copies}\n" for name in TEST_ORDER[2:]
                     )
@@ -3645,28 +3645,56 @@ def open_report_history(page, server, run_id):
     page.locator("#generate-report").wait_for()
 
 
-@pytest.mark.parametrize("width", [1101, 1440, 1800])
-def test_report_summary_rows_align_with_long_group_names(browser_page, ui_server, width):
+@pytest.mark.parametrize("width", [1280, 1440, 1920, 390, 320])
+def test_report_combines_scores_and_round_counts_for_each_group(browser_page, ui_server, width):
+    from test_reports import write_round
+
     page, server = browser_page, ui_server
     extra = server.config.machines[0].systems[0].model_copy(deep=True)
     extra.id = "system_" + "longname_" * 6
     extra.boot_entry = "0003"
     server.config.machines[0].systems.append(extra)
-    run_id = report_history(server)
+    run_id = report_history(server, parallel_copies=8, extra_copies=(128, 256))
+    write_round(
+        server.config.policy.output_dir / run_id, extra.id, 1, "invalid", machine="server01"
+    )
     page.set_viewport_size({"width": width, "height": 900})
     open_report_history(page, server, run_id)
     page.locator("#generate-report").click()
     page.locator("#download-report").wait_for()
-    left = page.locator(".report-rounds tbody tr")
-    right = page.locator(".report-overall tbody tr")
-    assert left.count() == right.count() == 3
-    for index in range(3):
-        a = left.nth(index).bounding_box()
-        b = right.nth(index).bounding_box()
-        assert abs(a["y"] - b["y"]) < 1
-        assert abs(a["height"] - b["height"]) < 1
-    assert extra.id in left.last.locator("td").first.get_attribute("title")
+    summary = page.get_by_role("region", name="比较组对比表，可横向滚动")
+    assert summary.get_by_role("columnheader").all_text_contents() == [
+        "比较组",
+        "1 parallel copy",
+        "8 parallel copies",
+        "128 parallel copies",
+        "计划轮次",
+        "已回收",
+        "已解析",
+        "256 parallel copies",
+    ]
+    assert page.get_by_role("heading", name="轮次概况", exact=True).count() == 0
+    rows = summary.locator("tbody").get_by_role("row")
+    assert rows.count() == 3
+    assert rows.first.get_by_role("cell").all_text_contents()[1:] == [
+        "40.00 (0.00%)",
+        "320.00 (0.00%)",
+        "5120.00 (0.00%)有效轮次 3/3",
+        "3",
+        "3",
+        "3",
+        "10240.00 (0.00%)有效轮次 3/3",
+    ]
+    cells = rows.last.get_by_role("cell")
+    assert extra.id in cells.first.text_content()
+    assert cells.all_text_contents()[4:7] == ["3", "1", "0"]
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    if width <= 390:
+        assert summary.evaluate("el => el.scrollWidth > el.clientWidth")
+        summary.press("ArrowRight")
+        page.wait_for_function("el => el.scrollLeft > 0", arg=summary.element_handle())
+    if output := os.getenv("AUTOBENCH_UI_SCREENSHOTS"):
+        summary.screenshot(path=Path(output) / f"unixbench-total-comparison-{width}.png")
 
 
 @pytest.mark.parametrize(
@@ -3691,6 +3719,20 @@ def test_report_copies_menu_displays_full_labels(browser_page, ui_server, width,
     page.get_by_role("button", name="生成报告", exact=True).click()
     copies = page.get_by_role("combobox", name="并发数", exact=True)
     expect(copies).to_have_css("font-size", f"{14 * text_size / 100:g}px")
+    summary = page.get_by_role("region", name="比较组对比表，可横向滚动")
+    assert summary.get_by_role("columnheader").all_text_contents()[-4:] == [
+        "128 parallel copies",
+        "计划轮次",
+        "已回收",
+        "已解析",
+    ]
+    assert summary.evaluate("""el => {
+        el.scrollLeft = el.scrollWidth;
+        const headers = el.querySelectorAll('th');
+        const first = headers[0].getBoundingClientRect();
+        const last = headers[headers.length - 1].getBoundingClientRect();
+        return last.left >= first.right - 1 && last.right <= el.getBoundingClientRect().right + 1;
+    }""")
     native_picker = page.evaluate("""CSS.supports("appearance: base-select") &&
         CSS.supports("selector(select::picker(select))")""")
     if native_picker:
@@ -3698,6 +3740,9 @@ def test_report_copies_menu_displays_full_labels(browser_page, ui_server, width,
     else:
         options = page.get_by_role("listbox", name="并发数", exact=True).get_by_role("option")
 
+    detail = page.get_by_role("region", name="测试项对比表，可横向滚动")
+    expect(detail).to_contain_text("400.00 (0.00%)")
+    expect(detail).not_to_contain_text("有效轮次")
     copies.click()
     expect(options.last).to_be_visible()
     assert options.all_text_contents() == ["1 parallel copy", "128 parallel copies"]
@@ -3712,9 +3757,8 @@ def test_report_copies_menu_displays_full_labels(browser_page, ui_server, width,
     })""")
     options.last.click()
     expect(copies).to_have_value("128")
-    expect(page.get_by_role("region", name="测试项对比表，可横向滚动")).to_contain_text(
-        "51200.00 (0.00%)"
-    )
+    expect(detail).to_contain_text("51200.00 (0.00%)")
+    expect(detail).not_to_contain_text("有效轮次")
     copies.press("Space")
     expect(options.first).to_be_visible()
     page.keyboard.press("Escape")
@@ -3724,13 +3768,21 @@ def test_report_copies_menu_displays_full_labels(browser_page, ui_server, width,
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
 
-@pytest.mark.parametrize("width", [1440, 768, 390])
-def test_report_preview_baseline_download_and_layout(browser_page, ui_server, width):
+@pytest.mark.parametrize(("width", "text_size"), [(1440, 100), (768, 100), (390, 100), (390, 200)])
+def test_report_preview_baseline_download_and_layout(browser_page, ui_server, width, text_size):
     from openpyxl import load_workbook
+    from playwright.sync_api import expect
 
     page, server = browser_page, ui_server
     run_id = report_history(server)
     page.set_viewport_size({"width": width, "height": 900})
+    if text_size == 200:
+
+        def apply_text_zoom(route):
+            response = route.fetch()
+            route.fulfill(response=response, body=response.text() + "\nhtml { font-size: 200%; }")
+
+        page.route("**/static/style.css", apply_text_zoom)
     calls = []
     page.on("request", lambda req: calls.append(req.url) if "/report?" in req.url else None)
     open_report_history(page, server, run_id)
@@ -3739,6 +3791,16 @@ def test_report_preview_baseline_download_and_layout(browser_page, ui_server, wi
     page.locator("#download-report").wait_for()
     assert len(calls) == 1
     panel = page.locator(".report-panel")
+    assert page.get_by_role("region", name="比较组对比表，可横向滚动").get_by_role(
+        "columnheader"
+    ).all_text_contents() == [
+        "比较组",
+        "1 parallel copy",
+        "64 parallel copies",
+        "计划轮次",
+        "已回收",
+        "已解析",
+    ]
     assert panel.locator(".report-table table").evaluate_all("""tables => tables.every(table => {
         const columns = [...table.tHead.rows[0].cells];
         return [...table.tBodies[0].rows].every(row => [...row.cells].every((cell, index) => {
@@ -3759,9 +3821,41 @@ def test_report_preview_baseline_download_and_layout(browser_page, ui_server, wi
     assert len(calls) == 1
     assert page.locator("#report-copies").input_value() == "64"
     assert page.evaluate("document.activeElement.id") == "report-copies"
-    page.locator("#report-baseline").select_option("server01/os2/ub")
-    page.locator("#download-report").wait_for()
-    assert "25600.00 (-16.67%)" in panel.text_content()
+    baseline = page.get_by_role("combobox", name="比较基线", exact=True)
+    baseline.focus()
+    page.evaluate("""() => {
+        const selectors = [
+            '.report-panel .section-heading', '#report-baseline', '#report-copies',
+            '#download-report', '.report-overall .report-table', '.report-panel > .report-table',
+        ];
+        window.reportLayout = selectors.map(selector => {
+            const element = document.querySelector(selector);
+            if (element.matches('.report-table')) element.scrollLeft = 36;
+            return { element, top: element.getBoundingClientRect().top, left: element.scrollLeft };
+        });
+        window.reportLayoutStable = () => window.reportLayout.every(({element, top, left}) =>
+            element.isConnected && Math.abs(element.getBoundingClientRect().top - top) <= 1
+                && element.scrollLeft === left
+        );
+    }""")
+    pending = []
+    page.route("**/report?*baseline=*", lambda route: pending.append(route))
+    with page.expect_request("**/report?*baseline=*"):
+        baseline.select_option("server01/os2/ub")
+    expect(panel).to_have_attribute("aria-busy", "true")
+    expect(baseline).to_be_focused()
+    download_link = page.locator("#download-report")
+    expect(download_link).to_be_visible()
+    expect(download_link).to_be_disabled()
+    assert download_link.get_attribute("href") is None
+    assert page.evaluate("window.reportLayoutStable()")
+    expect(panel).to_contain_text("25600.00 (0.00%)")
+    pending.pop().continue_()
+    page.unroute("**/report?*baseline=*")
+    expect(panel).to_have_attribute("aria-busy", "false")
+    expect(panel).to_contain_text("25600.00 (-16.67%)")
+    expect(baseline).to_be_focused()
+    assert page.evaluate("window.reportLayoutStable()")
     with page.expect_download() as download:
         page.locator("#download-report").click()
     result = download.value
@@ -3778,7 +3872,7 @@ def test_report_preview_baseline_download_and_layout(browser_page, ui_server, wi
         == "sticky"
     )
     page.locator("#generate-report").click()
-    page.locator("#download-report").wait_for()
+    expect(panel).to_have_attribute("aria-busy", "false")
     assert page.locator("#report-baseline").input_value() == "server01/os2/ub"
 
 
@@ -3800,10 +3894,24 @@ def test_report_loading_error_retry_and_empty_state(browser_page, ui_server):
     page.unroute("**/report?*")
     page.get_by_role("button", name="重试", exact=True).click()
     page.get_by_text("暂无可解析的 INDEX 结果。结果回收后可刷新报告。", exact=True).wait_for()
+    summary = page.get_by_role("region", name="比较组对比表，可横向滚动")
+    assert summary.get_by_role("columnheader").all_text_contents() == [
+        "比较组",
+        "计划轮次",
+        "已回收",
+        "已解析",
+    ]
+    assert summary.get_by_role("row").nth(1).get_by_role("cell").all_text_contents()[1:] == [
+        "3",
+        "0",
+        "0",
+    ]
     assert page.locator(".report-warnings").get_attribute("open") is not None
 
 
 def test_report_stale_baseline_response_cannot_replace_new_selection(browser_page, ui_server):
+    from playwright.sync_api import expect
+
     page, server = browser_page, ui_server
     run_id = report_history(server)
     open_report_history(page, server, run_id)
@@ -3816,7 +3924,7 @@ def test_report_stale_baseline_response_cannot_replace_new_selection(browser_pag
     page.wait_for_timeout(50)
     assert len(pending) == 2
     pending[1].continue_()
-    page.locator("#download-report").wait_for()
+    expect(page.locator(".report-panel")).to_have_attribute("aria-busy", "false")
     pending[0].continue_()
     page.wait_for_timeout(150)
     assert page.locator("#report-baseline").input_value() == "server01/os1/ub"

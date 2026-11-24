@@ -502,7 +502,8 @@ button.busy {
 .primary:enabled:not([aria-disabled="true"]):active {
   background-color: var(--ui-primary-active);
 }
-button:is(:disabled, [aria-disabled="true"]):is(.button, .icon-button, .browse-button, .chip-button) {
+button:is(:disabled, [aria-disabled="true"]):is(.button, .icon-button, .browse-button, .chip-button),
+.report-panel .actions a.button[aria-disabled="true"] {
   background: var(--ui-disabled-bg);
   border-color: var(--ui-border-subtle);
   color: var(--ui-disabled-fg);
@@ -1418,15 +1419,6 @@ td .secondary {
 .report-panel {
   min-width: 0;
 }
-.report-summary-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr);
-  gap: 24px;
-}
-.report-rounds,
-.report-overall {
-  min-width: 0;
-}
 .report-controls,
 .report-detail-heading {
   display: flex;
@@ -1479,17 +1471,11 @@ td .secondary {
   overflow-wrap: anywhere;
   background: var(--ui-surface);
 }
-.report-table th:not(:first-child),
-.report-table td:not(:first-child) {
+.report-overall .report-table :is(th, td):first-child {
+  max-width: min(320px, 45vw);
+}
+.report-panel > .report-table :is(th, td):not(:first-child) {
   min-width: 180px;
-}
-.report-rounds .report-table th:not(:first-child),
-.report-rounds .report-table td:not(:first-child) {
-  min-width: 56px;
-}
-.report-rounds .report-table th,
-.report-rounds .report-table td {
-  padding-inline: 8px;
 }
 .report-score {
   white-space: nowrap;
@@ -1504,28 +1490,6 @@ td .secondary {
 }
 .report-panel .section-heading {
   flex-wrap: wrap;
-}
-@media (min-width: 1101px) {
-  .report-summary-grid .report-table thead tr {
-    height: 44px;
-  }
-  .report-summary-grid .report-table tbody tr {
-    height: 4.5rem;
-  }
-  .report-summary-grid .report-table tbody td {
-    padding-block: 12px;
-  }
-  .report-summary-grid .report-table td:first-child {
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-}
-@media (max-width: 1100px) {
-  .report-summary-grid {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 0;
-  }
 }
 .current-stage {
   font-size: var(--text-sm);
