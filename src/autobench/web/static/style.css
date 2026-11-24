@@ -1481,7 +1481,20 @@ td .secondary {
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
-.report-score > span {
+.report-score-value {
+  position: relative;
+  display: inline-grid;
+  grid-template-columns: auto var(--ui-icon-sm);
+  align-items: center;
+  column-gap: var(--ui-space-1);
+}
+.report-score-arrow[data-tone="success"] {
+  color: var(--ui-success);
+}
+.report-score-arrow[data-tone="error"] {
+  color: var(--ui-error);
+}
+.report-score > .secondary {
   display: block;
 }
 .report-warnings li {
@@ -4151,7 +4164,8 @@ main {
   }
   .brand-mark,
   .plan-heading,
-  .plan-heading :is(.plan-scope, .plan-figure > span) {
+  .plan-heading :is(.plan-scope, .plan-figure > span),
+  .report-score-arrow[data-tone] {
     color: CanvasText;
   }
   select {

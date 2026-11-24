@@ -3688,6 +3688,11 @@ def test_report_combines_scores_and_round_counts_for_each_group(browser_page, ui
     cells = rows.last.get_by_role("cell")
     assert extra.id in cells.first.text_content()
     assert cells.all_text_contents()[4:7] == ["3", "1", "0"]
+    assert rows.last.locator("svg").count() == 0
+    detail = page.get_by_role("region", name="测试项对比表，可横向滚动")
+    missing_score = detail.get_by_role("cell", name="N/A", exact=True).first
+    assert missing_score.is_visible()
+    assert missing_score.locator("svg").count() == 0
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     if width <= 390:
         assert summary.evaluate("el => el.scrollWidth > el.clientWidth")
@@ -3791,9 +3796,9 @@ def test_report_preview_baseline_download_and_layout(browser_page, ui_server, wi
     page.locator("#download-report").wait_for()
     assert len(calls) == 1
     panel = page.locator(".report-panel")
-    assert page.get_by_role("region", name="比较组对比表，可横向滚动").get_by_role(
-        "columnheader"
-    ).all_text_contents() == [
+    summary = page.get_by_role("region", name="比较组对比表，可横向滚动")
+    detail = page.get_by_role("region", name="测试项对比表，可横向滚动")
+    assert summary.get_by_role("columnheader").all_text_contents() == [
         "比较组",
         "1 parallel copy",
         "64 parallel copies",
@@ -3813,6 +3818,20 @@ def test_report_preview_baseline_download_and_layout(browser_page, ui_server, wi
     assert "400.00 (0.00%)" in panel.text_content()
     assert "480.00 (+20.00%)" in panel.text_content()
     assert "有效轮次 3/3" in panel.text_content()
+
+    def check_arrow(table, score, description, color):
+        cell = table.get_by_role("cell", name=f"{score} {description}", exact=True).first
+        arrow = cell.locator("svg")
+        expect(arrow).to_be_visible()
+        expect(arrow).to_have_attribute("aria-hidden", "true")
+        expect(arrow).to_have_css("color", color)
+
+    check_arrow(summary, "48.00 (+20.00%)", "较基线提升", "rgb(22, 101, 52)")
+    check_arrow(detail, "480.00 (+20.00%)", "较基线提升", "rgb(22, 101, 52)")
+    for table, neutral_score in ((summary, "40.00 (0.00%)"), (detail, "400.00 (0.00%)")):
+        cell = table.get_by_role("cell", name=neutral_score, exact=True).first
+        expect(cell).to_be_visible()
+        expect(cell.locator("svg")).to_have_count(0)
     page.locator("#report-copies").select_option("64")
     assert "25600.00 (0.00%)" in panel.text_content()
     # Polling must keep the report DOM, selection, and keyboard focus intact.
@@ -3854,6 +3873,8 @@ def test_report_preview_baseline_download_and_layout(browser_page, ui_server, wi
     page.unroute("**/report?*baseline=*")
     expect(panel).to_have_attribute("aria-busy", "false")
     expect(panel).to_contain_text("25600.00 (-16.67%)")
+    check_arrow(summary, "40.00 (-16.67%)", "较基线下降", "rgb(180, 35, 24)")
+    check_arrow(detail, "25600.00 (-16.67%)", "较基线下降", "rgb(180, 35, 24)")
     expect(baseline).to_be_focused()
     assert page.evaluate("window.reportLayoutStable()")
     with page.expect_download() as download:

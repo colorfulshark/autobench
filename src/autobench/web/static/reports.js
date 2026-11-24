@@ -77,7 +77,22 @@ export function createReportPanel(reportUrl) {
 
   function score(cell, showRoundCount = false) {
     const box = node("div", "report-score");
-    box.append(node("span", "", cell.display));
+    const value = node("span", "report-score-value", cell.display);
+    const change = cell.change_percent;
+    // Match the report's displayed precision when the change rounds to zero.
+    if (change && !cell.display.includes("(0.00%)")) {
+      const improved = change > 0;
+      const arrow = icon(
+        improved ? "arrowUp" : "arrowDown",
+        "icon report-score-arrow",
+      );
+      arrow.dataset.tone = improved ? "success" : "error";
+      value.append(
+        arrow,
+        node("span", "visually-hidden", improved ? " 较基线提升" : " 较基线下降"),
+      );
+    }
+    box.append(value);
     if (showRoundCount) {
       box.append(
         node(
