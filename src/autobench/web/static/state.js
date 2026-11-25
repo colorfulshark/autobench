@@ -34,8 +34,8 @@ export const subscribe = (fn) => {
   listeners.add(fn);
   return () => listeners.delete(fn);
 };
-export function emit(layout = false) {
-  for (const fn of listeners) fn(layout);
+export function emit(layout = false, options) {
+  for (const fn of listeners) fn(layout, options);
 }
 export function change(path, value, layout = false) {
   patch(state.document, path, value);

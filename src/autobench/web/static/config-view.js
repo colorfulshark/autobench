@@ -55,13 +55,22 @@ const asList = (value) => (Array.isArray(value) ? value : []);
 const machines = () => asList(state.document.machines);
 const benchmarks = () => asList(state.document.benchmarks);
 const configViewKey = "autobench-config-view";
-function navigate({
-  machine = state.machine,
-  system = state.system,
-  benchmark = state.benchmark,
-} = {}) {
-  Object.assign(state, { machine, system, benchmark });
+let systemListOrigin;
+function openSystem(machine, system) {
+  systemListOrigin = { machine, system, scroll: window.scrollY };
+  Object.assign(state, { machine, system });
   emit(true);
+  $("config-body").querySelector(".system-back")?.focus();
+}
+function closeSystem() {
+  const { machine, system } = state;
+  const origin = systemListOrigin;
+  state.system = null;
+  emit(true);
+  const control = $("config-body").querySelectorAll(".systems-board .object-title")[system];
+  if (origin?.machine === machine && origin.system === system)
+    window.scrollTo(0, origin.scroll);
+  control?.focus();
 }
 function mutateGroup(path, keys) {
   const object = at(state.document, path);
@@ -540,9 +549,7 @@ function addSystem(machine, index) {
   const list = asList(machine.systems),
     system = newSystem(list);
   change(["machines", index, "systems"], [...list, system]);
-  state.system = list.length;
-  state.machine = index;
-  emit(true);
+  openSystem(index, list.length);
 }
 function editObjectId(label, items, item, path, trigger) {
   const dialog = $("id-dialog"),
@@ -725,7 +732,7 @@ function systemsBoard(machine, index) {
   systems.forEach((system, si) => {
     const r = node("div", "system-item");
     const name = system.id || `系统 ${si + 1}`;
-    const openEditor = () => navigate({ machine: index, system: si });
+    const openEditor = () => openSystem(index, si);
     const validEntry = /^[a-f\d]{4}$/i.test(system.boot_entry || "");
     const entryLabel = validEntry
       ? "Boot" + system.boot_entry
@@ -1229,10 +1236,13 @@ function benchmarkTabs() {
   });
 }
 export function renderConfig() {
-  const container = $("config-body");
+  const body = $("config-body");
+  const container = $("config-step-content");
+  body.querySelector(":scope > .object-tabs")?.remove();
   container.replaceChildren();
   const sourceMode = state.mode === "yaml";
-  container.classList.toggle("system-step", !sourceMode && state.step === 1);
+  if (sourceMode || state.step !== 1 || state.system === null) systemListOrigin = undefined;
+  body.classList.toggle("system-step", !sourceMode && state.step === 1);
   const actions = $(sourceMode ? "source-actions" : "wizard-actions");
   const primary = $("primary-action");
   if (primary.parentElement !== actions) actions.append(primary);
@@ -1261,7 +1271,7 @@ export function renderConfig() {
     else option.removeAttribute("aria-current");
   }
   $("yaml-panel").hidden = !sourceMode;
-  container.hidden = sourceMode;
+  body.hidden = sourceMode;
   if (sourceMode) return;
   if (
     !state.document ||
@@ -1300,7 +1310,7 @@ export function renderConfig() {
     Math.min(state.benchmark, benchmarks().length - 1),
   );
   const m = machines()[state.machine];
-  if (state.step === 0 || state.step === 1) container.append(machineTabs());
+  if (state.step === 0 || state.step === 1) body.prepend(machineTabs());
   if (state.step === 0)
     container.append(
       m
@@ -1321,10 +1331,7 @@ export function renderConfig() {
         frame.append(
           button(
             "返回系统列表",
-            () => {
-              state.system = null;
-              emit(true);
-            },
+            closeSystem,
             "text-button system-back",
             "arrowLeft",
           ),
@@ -1338,7 +1345,7 @@ export function renderConfig() {
     container.append(content);
   }
   if (state.step === 2) {
-    container.append(benchmarkTabs());
+    body.prepend(benchmarkTabs());
     const b = benchmarks()[state.benchmark];
     if (b) container.append(benchmarkEditor(b, state.benchmark));
     else
@@ -1436,7 +1443,7 @@ export function nextStep() {
   if (index !== state.step) state.system = null;
   state.step = index;
   state.errors = problems;
-  emit(true);
+  emit(true, { blockedNavigation: true });
   setStepPicker(false);
   window.scrollTo(0, 0);
   $("config-errors").querySelector("button")?.focus();

@@ -130,6 +130,26 @@ def history_row(page, run_id):
     return page.get_by_role("row").filter(has=action)
 
 
+def track_navigation_motion(page):
+    page.add_init_script("""(() => {
+        Object.defineProperty(document, 'startViewTransition', { value: undefined });
+        window.navigationMotion = [];
+        document.addEventListener('animationstart', ({ target, animationName }) => {
+            if (animationName !== 'ui-navigation-enter') return;
+            const effect = target.getAnimations().find(a => a.animationName === animationName)
+                ?.effect;
+            if (!effect) return;
+            const [x, y = 0] = effect.getKeyframes()[0].translate.match(/-?[0-9.]+/g).map(Number);
+            window.navigationMotion.push([
+                target.id || target.className,
+                target.dataset.navigationMotion,
+                effect.getTiming().duration,
+                [x, y],
+            ]);
+        });
+    })();""")
+
+
 def artifact_folder(page, path):
     return page.locator(f'.artifact-folder[data-keep="folder-{path}"]')
 
@@ -805,13 +825,14 @@ def test_run_detail_returns_to_filtered_list(browser_page, ui_server):
 @pytest.mark.parametrize(
     "motion,colors", [("no-preference", "none"), ("reduce", "none"), ("reduce", "active")]
 )
-def test_run_view_fades_follow_navigation(browser_page, ui_server, motion, colors):
+def test_run_view_motion_follows_committed_navigation(browser_page, ui_server, motion, colors):
     from playwright.sync_api import expect
 
     from autobench.storage import Store
 
     page, server = browser_page, ui_server
     page.emulate_media(reduced_motion=motion, forced_colors=colors)
+    track_navigation_motion(page)
     store = Store(server.config.policy.state_dir)
     try:
         run_id = store.create(server.config)
@@ -819,28 +840,29 @@ def test_run_view_fades_follow_navigation(browser_page, ui_server, motion, color
     finally:
         store.close()
     ready(page, server, startup_path=server.existing)
-    page.locator("#page-runs").evaluate(
-        """panel => panel.addEventListener('transitionrun', event => {
-            if (event.propertyName === 'opacity' && event.target.matches('.run-view')) {
-                const view = event.target;
-                view.dataset.fades = Number(view.dataset.fades || 0) + 1;
-            }
-        })"""
-    )
+    assert page.evaluate("window.navigationMotion") == []
 
     page.get_by_role("tab", name="运行记录").click()
     history = page.locator("#runs-overview")
     row_action = history.get_by_role("button", name="查看详情", exact=True)
     if motion == "no-preference":
-        expect(history).to_have_attribute("data-fades", "1")
-    row_action.click()
+        page.wait_for_function("() => window.navigationMotion.length === 1")
+
+    # Navigation commits to the detail loading view before the server returns data.
+    detail_route = f"**/api/runs/{run_id}?*"
+    pending = []
+    page.route(detail_route, lambda route: pending.append(route))
+    with page.expect_request(detail_route):
+        row_action.click()
+    expect(page.get_by_role("status").filter(has_text="正在加载运行详情")).to_be_visible()
+    expect(page.get_by_role("button", name="返回运行列表")).to_be_focused()
+    if motion == "no-preference":
+        page.wait_for_function("() => window.navigationMotion.length === 2")
+        expect(page.locator("[data-navigation-motion]")).to_have_count(0)
+    pending.pop().continue_()
+    page.unroute(detail_route)
     detail = page.locator("#run-detail")
     expect(detail.get_by_text(run_id, exact=True)).to_be_visible()
-    if motion == "no-preference":
-        expect(detail).to_have_attribute("data-fades", "1")
-    else:
-        assert detail.get_attribute("data-fades") is None
-        expect(detail).to_have_css("opacity", "1")
     if colors == "active":
         expect(detail.get_by_role("progressbar", name="已结束任务")).to_have_css(
             "appearance", "auto"
@@ -850,12 +872,19 @@ def test_run_view_fades_follow_navigation(browser_page, ui_server, motion, color
     expect(row_action).to_be_focused()
     expect(row_action).to_have_css("outline-style", "solid")
     if motion == "no-preference":
-        expect(history).to_have_attribute("data-fades", "2")
+        page.wait_for_function("() => window.navigationMotion.length === 3")
     expect(history).to_have_css("opacity", "1")
     page.get_by_label("搜索运行", exact=True).fill("no-match")
     expect(history.get_by_text("没有匹配的运行记录", exact=True)).to_be_visible()
     assert not history.evaluate("el => el.getAnimations().length")
-    assert history.get_attribute("data-fades") == ("2" if motion == "no-preference" else None)
+    targets = ["runs-overview", "run-selection", "runs-overview"]
+    assert page.evaluate("window.navigationMotion") == (
+        [[target, "page", 180, [0, 4]] for target in targets] if motion == "no-preference" else []
+    )
+    page.reload()
+    expect(history).to_be_visible()
+    assert page.evaluate("window.navigationMotion") == []
+    expect(page.locator("[data-navigation-motion]")).to_have_count(0)
 
 
 @pytest.mark.parametrize("key", ["config", "runs"])
@@ -1002,11 +1031,27 @@ def test_readable_run_names_and_nested_downloads(
     preview.scroll_into_view_if_needed()
     tree = page.locator("#run-detail .artifact-panel")
     tree_position = tree.bounding_box()
+    drawer_element = page.locator("#preview-drawer")
+    drawer_element.evaluate("""el => {
+        const record = ({ animationName, propertyName, pseudoElement }) => {
+            if (pseudoElement || (propertyName !== 'translate' && animationName !== 'dialog-enter'))
+                return;
+            const effect = el.getAnimations().find(animation =>
+                animation.transitionProperty === 'translate' ||
+                animation.animationName === 'dialog-enter').effect;
+            window.previewEntrance = [effect.getTiming().duration, effect.getKeyframes()[0].translate];
+        };
+        el.addEventListener('transitionrun', record);
+        el.addEventListener('animationstart', record);
+    }""")
     preview.click()
     path = drawer.get_by_role("group", name="文件路径")
     path.get_by_text(relative, exact=True).wait_for()
     log = drawer.locator("#artifact-preview")
     assert log.text_content() == result.read_text()
+    page.wait_for_function("() => window.previewEntrance")
+    assert page.evaluate("window.previewEntrance") == [220, "100%"]
+    expect(drawer).to_have_css("translate", "none")
     assert tree.bounding_box() == tree_position
     assert drawer.locator(".artifact-panel").count() == 0
     drawer_position = drawer.bounding_box()
@@ -1047,6 +1092,7 @@ def test_readable_run_names_and_nested_downloads(
     preview.click()
     assert drawer.locator("#preview-content").evaluate("element => element.scrollTop") == 0
     expect(drawer).to_have_css("opacity", "1")
+    expect(drawer).to_have_css("translate", "none")
     exit_frame = close.evaluate(
         """button => {
             const drawer = button.closest('dialog');
@@ -1059,11 +1105,18 @@ def test_readable_run_names_and_nested_downloads(
             const fade = drawer.getAnimations().find(animation =>
                 animation.transitionProperty === 'opacity'
             );
-            if (fade) fade.currentTime = fade.effect.getTiming().duration / 2;
+            const slide = drawer.getAnimations().find(animation =>
+                animation.transitionProperty === 'translate'
+            );
+            for (const animation of [fade, slide]) {
+                if (animation) animation.currentTime = animation.effect.getTiming().duration / 2;
+            }
             return {
                 before,
                 during: bounds(),
                 opacity: Number(getComputedStyle(drawer).opacity),
+                durations: [fade, slide].map(animation => animation?.effect.getTiming().duration),
+                interactive: getComputedStyle(drawer).pointerEvents,
                 supportsExit: CSS.supports('interactivity: inert') &&
                     CSS.supports('overlay: auto') && CSS.supports('transition-behavior: allow-discrete'),
             };
@@ -1071,8 +1124,11 @@ def test_readable_run_names_and_nested_downloads(
     )
     if exit_frame["supportsExit"]:
         assert 0 < exit_frame["opacity"] < 1
+        assert exit_frame["durations"] == [160, 160]
+        assert exit_frame["interactive"] == "none"
         for during, before in zip(exit_frame["during"], exit_frame["before"], strict=True):
-            assert during == pytest.approx(before, abs=1)
+            assert during[0] > before[0]
+            assert during[1:] == pytest.approx(before[1:], abs=1)
     drawer.wait_for(state="hidden")
     expect(preview).to_be_focused()
     page.emulate_media(reduced_motion="reduce")
@@ -2025,7 +2081,7 @@ def test_warmup_alignment_and_pointer_vs_keyboard_focus(browser_page, ui_server,
 @pytest.mark.parametrize(
     "width,text_size", [(1280, 100), (1440, 100), (1920, 100), (390, 100), (720, 200)]
 )
-def test_input_focus_uses_single_halo_and_other_controls_use_neutral_focus(
+def test_fields_use_shared_focus_ring_and_buttons_keep_neutral_focus(
     browser_page, ui_server, width, text_size
 ):
     from playwright.sync_api import expect
@@ -2044,9 +2100,12 @@ def test_input_focus_uses_single_halo_and_other_controls_use_neutral_focus(
     ready(page, ui_server)
     address = page.locator("#input-machines-0-ssh-host")
     address.click()
+    keyboard_focus = address.evaluate("el => el.matches(':focus-visible')")
     expect(address).to_have_css("border-top-width", "1px")
-    expect(address).to_have_css("border-top-color", "rgb(77, 131, 220)")
-    expect(address).to_have_css("outline-style", "none")
+    expect(address).to_have_css(
+        "border-top-color", "rgb(30, 64, 175)" if keyboard_focus else "rgb(77, 131, 220)"
+    )
+    expect(address).to_have_css("outline-style", "solid" if keyboard_focus else "none")
     expect(address).to_have_css("box-shadow", "rgba(59, 130, 246, 0.1) 0px 0px 0px 3px")
     if (output := os.getenv("AUTOBENCH_UI_SCREENSHOTS")) and width == 1440:
         Path(output).mkdir(parents=True, exist_ok=True)
@@ -2055,9 +2114,10 @@ def test_input_focus_uses_single_halo_and_other_controls_use_neutral_focus(
     page.keyboard.press("Tab")
     select = page.locator(".machine-connection select:enabled").first
     select.focus()
-    expect(select).to_have_css("outline-color", "rgb(71, 85, 105)")
+    expect(select).to_have_css("outline-color", "rgb(30, 64, 175)")
     expect(select).to_have_css("outline-style", "solid")
-    expect(select).to_have_css("box-shadow", "none")
+    expect(select).to_have_css("outline-offset", "-1px")
+    expect(select).to_have_css("box-shadow", "rgba(59, 130, 246, 0.1) 0px 0px 0px 3px")
     button = page.locator("#tab-runs")
     button.focus()
     expect(button).to_have_css("outline-color", "rgb(71, 85, 105)")
@@ -2278,7 +2338,7 @@ def test_mobile_and_validation_field_navigation(browser_page, ui_server):
     page.clock.run_for(5160)
     assert page.locator("#notice").is_hidden()
     assert page.locator("#config-errors").is_visible()
-    assert page.locator(".field-error").is_visible()
+    assert page.get_by_text("数值小于允许的下限", exact=True).is_visible()
     page.set_viewport_size({"width": 390, "height": 844})
     assert page.evaluate("() => document.documentElement.scrollWidth <= innerWidth")
     set_editor_mode(page, "yaml")
@@ -3225,9 +3285,10 @@ def test_five_steps_preserve_existing_config_and_fit_viewport(browser_page, ui_s
 @pytest.mark.parametrize("width", [1920, 1440, 1280, 1279, 1024, 768])
 def test_plan_aligns_with_each_wizard_card(browser_page, ui_server, width):
     page = browser_page
+    page.emulate_media(reduced_motion="reduce")
     page.set_viewport_size({"width": width, "height": 900})
     ready(page, ui_server, startup_path=ui_server.existing)
-    card = page.locator("#config-body > .panel, .system-content > .panel")
+    card = page.locator("#config-step-content > .panel, .system-content > .panel")
     plan = page.locator("#config-plan")
 
     def assert_plan_alignment():
@@ -4423,7 +4484,151 @@ def test_motion_keeps_step_disclosure_and_switch_state_immediate(
             "el => getComputedStyle(el, '::details-content').transitionDuration.split(', ')[0]"
         )
         assert accordion_duration == ("0s" if reduced_motion == "reduce" else "0.2s")
-    assert not page.locator("#config-body").evaluate("el => el.getAnimations().length")
+    assert not page.locator("#config-step-content").evaluate("el => el.getAnimations().length")
+
+
+@pytest.mark.parametrize(
+    "width,motion,zoom",
+    [(1440, "no-preference", 100), (320, "no-preference", 100), (390, "reduce", 200)],
+)
+def test_wizard_and_system_motion_keep_persistent_layout(
+    browser_page, ui_server, width, motion, zoom
+):
+    from playwright.sync_api import expect
+
+    page = browser_page
+    page.set_viewport_size({"width": width, "height": 900})
+    page.emulate_media(reduced_motion=motion)
+    track_navigation_motion(page)
+    ready(page, ui_server, startup_path=ui_server.existing)
+    page.evaluate("(zoom) => document.documentElement.style.fontSize = zoom + '%'", zoom)
+    host = page.get_by_role("textbox", name="主机地址 *", exact=True)
+    saved_host = host.input_value()
+    host.fill("")
+    click_primary(page)
+    expect(page.get_by_text("请填写主机地址。", exact=False).first).to_be_visible()
+    expect(page.locator("#wizard-step-0")).to_have_attribute("aria-current", "step")
+    expect(page.locator("[data-navigation-motion]")).to_have_count(0)
+    host.fill(saved_host)
+
+    page.evaluate("""() => {
+        window.persistentLayout = ['.topbar', '#wizard-options', '.plan-heading']
+            .map(selector => [selector, document.querySelector(selector)]);
+    }""")
+
+    def check_motion(target, count):
+        if motion == "no-preference":
+            page.wait_for_function("(count) => window.navigationMotion.length === count", arg=count)
+        expect(page.locator("[data-navigation-motion]")).to_have_count(0)
+        assert page.locator(target).evaluate("el => getComputedStyle(el).translate") == "none"
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+    click_primary(page)
+    expect(page.get_by_role("heading", name="参与测试的系统")).to_be_focused()
+    check_motion("#config-step-content", 1)
+    system = page.get_by_role("button", name="os1", exact=True)
+    system.press("Enter")
+    back = page.get_by_role("button", name="返回系统列表", exact=True)
+    expect(back).to_be_focused()
+    check_motion(".system-content", 2)
+    back.press("Enter")
+    expect(system).to_be_focused()
+    check_motion(".system-content", 3)
+    open_step(page, "连接机器")
+    expect(host).to_have_value(saved_host)
+    check_motion("#config-step-content", 4)
+    assert page.evaluate("""window.persistentLayout.every(([selector, element]) =>
+        document.querySelector(selector) === element && !element.getAnimations().length)""")
+    assert page.evaluate("window.navigationMotion") == (
+        [
+            ["config-step-content", "forward", 200, [8, 0]],
+            ["system-content", "page", 180, [0, 4]],
+            ["system-content", "page", 180, [0, 4]],
+            ["config-step-content", "backward", 200, [-8, 0]],
+        ]
+        if motion == "no-preference"
+        else []
+    )
+
+
+def test_rapid_navigation_interrupts_previous_motion(browser_page, ui_server):
+    from playwright.sync_api import expect
+
+    page = browser_page
+    track_navigation_motion(page)
+    ready(page, ui_server, startup_path=ui_server.existing)
+    result = page.evaluate("""async () => {
+        const body = document.getElementById('config-step-content');
+        const click = (id) => document.getElementById(id).click();
+        click('wizard-step-1');
+        const first = body.getAnimations()[0];
+        click('wizard-step-2');
+        const second = body.getAnimations()[0];
+        await Promise.resolve();
+        click('wizard-step-2');
+        const same = body.getAnimations()[0] === second;
+        click('tab-runs');
+        const runs = document.getElementById('runs-overview');
+        const third = runs.getAnimations()[0];
+        click('tab-config');
+        return {
+            distinct: first !== second,
+            same,
+            cancelled: [first, second, third].every(animation => animation.playState === 'idle'),
+            active: [...document.querySelectorAll('[data-navigation-motion]')].map(el => el.id),
+        };
+    }""")
+    assert result == {
+        "distinct": True,
+        "same": True,
+        "cancelled": True,
+        "active": ["config-step-content"],
+    }
+    expect(page.get_by_role("tab", name="测试配置")).to_have_attribute("aria-selected", "true")
+    expect(page.locator("#wizard-step-2")).to_have_attribute("aria-current", "step")
+    expect(page.get_by_role("heading", name="UnixBench 测试")).to_be_visible()
+    expect(page.locator("[data-navigation-motion]")).to_have_count(0)
+    assert page.evaluate("window.navigationMotion") == [
+        ["config-step-content", "page", 180, [0, 4]]
+    ]
+
+
+def test_cancelled_navigation_and_browser_history_do_not_replay_motion(browser_page, ui_server):
+    from playwright.sync_api import expect
+
+    page, server = browser_page, ui_server
+    track_navigation_motion(page)
+    ready(page, server, startup_path=server.existing)
+    host = page.get_by_role("textbox", name="主机地址 *", exact=True)
+    host.fill("unsaved.example")
+    page.evaluate("() => { window.confirm = () => false; }")
+    reveal_file_menu(page)
+    page.locator("#new-config").click()
+    expect(host).to_have_value("unsaved.example")
+    expect(page.get_by_role("tab", name="测试配置")).to_have_attribute("aria-selected", "true")
+    assert page.evaluate("window.navigationMotion") == []
+
+    page.route(
+        "**/navigation-check",
+        lambda route: route.fulfill(
+            content_type="text/html",
+            body="<h1>Navigation check</h1>",
+        ),
+    )
+    with page.expect_navigation(url="**/navigation-check"):
+        page.evaluate("""() => {
+            document.getElementById('tab-runs').click();
+            location.assign('/navigation-check');
+        }""")
+    page.go_back()
+    page.wait_for_function("""() => document.querySelector(
+        '#startup-dialog[open], #page-runs:not([hidden])'
+    )""")
+    if page.locator("#startup-dialog").is_visible():
+        complete_startup(page, server.existing)
+    expect(page.locator("[data-navigation-motion]")).to_have_count(0)
+    page.go_forward()
+    expect(page.get_by_role("heading", name="Navigation check")).to_be_visible()
 
 
 @pytest.mark.parametrize(
@@ -4451,8 +4656,13 @@ def test_file_picker_fades_with_backdrop_and_keeps_layout(browser_page, ui_serve
                 );
                 for (const fade of fades) fade.currentTime = fade.effect.getTiming().duration / 2;
                 const backdrop = getComputedStyle(dialog, '::backdrop');
+                const slide = dialog.getAnimations().find(animation =>
+                    animation.transitionProperty === 'translate'
+                );
                 return {
                     opacities: [Number(getComputedStyle(dialog).opacity), Number(backdrop.opacity)],
+                    offset: slide?.effect.getKeyframes()[0].translate ?? null,
+                    duration: slide?.effect.getTiming().duration ?? null,
                     hitTest: backdrop.pointerEvents,
                     bounds: dialog.getBoundingClientRect().toJSON(),
                 };
@@ -4468,9 +4678,12 @@ def test_file_picker_fades_with_backdrop_and_keeps_layout(browser_page, ui_serve
 
     if motion == "reduce":
         assert opened["opacities"] == [1, 1]
+        assert opened["offset"] is None
         assert closed["opacities"] == [0, 0]
         assert dialog.is_hidden()
     else:
+        assert opened["offset"] == "0px 8px"
+        assert opened["duration"] == 200
         for sample in (opened, closed):
             panel, backdrop = sample["opacities"]
             assert 0 < panel < 1
@@ -4847,7 +5060,10 @@ def test_run_events_keep_focused_log_and_scroll_position(browser_page, ui_server
     assert task_scroll > 0
     page.locator("#run-detail").evaluate(
         """el => {
-            el.addEventListener('animationstart', () => el.dataset.pollAnimation = 'true');
+            el.closest('#run-selection').addEventListener('animationstart', event => {
+                if (event.animationName === 'ui-navigation-enter')
+                    el.dataset.pollAnimation = 'true';
+            });
             el.addEventListener('transitionrun', event => {
                 if (event.propertyName === 'transform' && event.pseudoElement === '::after'
                     && event.target.matches('.run-progress-meter')) {

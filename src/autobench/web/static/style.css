@@ -87,7 +87,13 @@
   --ui-motion-accordion: var(--ui-motion-modal);
   --ui-motion-exit: var(--ui-motion-fast);
   --ui-motion-spinner: 900ms;
+  --ui-motion-page: var(--ui-motion-popup);
+  --ui-motion-step: var(--ui-motion-modal);
+  --ui-motion-drawer: 220ms;
+  --ui-motion-drawer-exit: var(--ui-motion-focus);
   --ui-motion-offset-sm: 4px;
+  --ui-motion-offset-md: 8px;
+  --ui-motion-drawer-distance: 100%;
   --ui-motion-switch-travel: 1.125rem;
   --ui-motion-menu-switch-travel: 13px;
   --ui-ease: cubic-bezier(.2, 0, 0, 1);
@@ -425,7 +431,8 @@ select:disabled {
     [type="tel"],
     [type="url"]
   ),
-  textarea
+  textarea,
+  select
 ) {
   border-color: var(--ui-control-border);
   border-radius: var(--ui-radius-md);
@@ -434,17 +441,24 @@ select:disabled {
     border-color: var(--text-secondary);
   }
 
-  &:focus {
+  &:is(:focus, :open) {
     outline: none;
     border-color: var(--ui-focus);
     box-shadow: var(--ui-focus-ring);
+  }
+
+  &:focus-visible {
+    outline: 1px solid var(--ui-primary-active);
+    outline-offset: -1px;
+    border-color: var(--ui-primary-active);
   }
 }
 :is(input, textarea, select)[aria-invalid="true"] {
   border-color: var(--ui-error);
 }
-:is(input, textarea)[aria-invalid="true"]:focus {
+:is(input, textarea, select)[aria-invalid="true"]:is(:focus, :open) {
   border-color: var(--ui-error);
+  outline-color: var(--ui-error);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--ui-error) 15%, transparent);
 }
 :is(input, textarea, select):disabled {
@@ -1604,6 +1618,10 @@ td .secondary {
   overflow-wrap: anywhere;
 }
 dialog {
+  --dialog-enter: var(--ui-motion-modal);
+  --dialog-exit: var(--ui-motion-modal-exit);
+  --dialog-enter-offset: 0px var(--ui-motion-offset-md);
+  --dialog-closed-offset: none;
   border: 1px solid var(--ui-border-subtle);
   border-radius: var(--ui-radius-modal);
   padding: var(--ui-card-padding);
@@ -1616,7 +1634,14 @@ dialog {
 dialog::backdrop {
   background-color: var(--ui-overlay);
 }
+.preview-drawer,
+.preview-drawer::backdrop {
+  --dialog-enter: var(--ui-motion-drawer);
+  --dialog-exit: var(--ui-motion-drawer-exit);
+}
 .preview-drawer {
+  --dialog-enter-offset: var(--ui-motion-drawer-distance) 0px;
+  --dialog-closed-offset: var(--dialog-enter-offset);
   position: fixed;
   flex-direction: column;
   inset: var(--header-offset, var(--ui-header-height)) 0 0 auto;
@@ -1630,9 +1655,6 @@ dialog::backdrop {
 }
 .preview-drawer[open] {
   display: flex;
-}
-.preview-drawer::backdrop {
-  background-color: transparent;
 }
 .preview-drawer .section-heading {
   flex: none;
@@ -1717,9 +1739,17 @@ dialog::backdrop {
   }
 }
 @media (prefers-reduced-motion: no-preference) {
-  dialog[open],
+  dialog[open] {
+    animation: dialog-enter var(--dialog-enter) var(--ui-ease);
+  }
   dialog[open]::backdrop {
-    animation: dialog-fade-in var(--ui-motion-modal) var(--ui-ease);
+    animation: dialog-fade-in var(--dialog-enter, var(--ui-motion-modal)) var(--ui-ease);
+  }
+}
+@keyframes dialog-enter {
+  from {
+    opacity: 0;
+    translate: var(--dialog-enter-offset);
   }
 }
 @keyframes dialog-fade-in {
@@ -1732,27 +1762,34 @@ dialog::backdrop {
   dialog::backdrop {
     opacity: 0;
     pointer-events: none;
-    transition: opacity var(--ui-motion-modal-exit) var(--ui-ease-exit),
-      display var(--ui-motion-modal-exit) allow-discrete,
-      overlay var(--ui-motion-modal-exit) allow-discrete;
+    transition: opacity var(--dialog-exit, var(--ui-motion-modal-exit)) var(--ui-ease-exit),
+      translate var(--dialog-exit, var(--ui-motion-modal-exit)) var(--ui-ease-exit),
+      display var(--dialog-exit, var(--ui-motion-modal-exit)) allow-discrete,
+      overlay var(--dialog-exit, var(--ui-motion-modal-exit)) allow-discrete;
   }
   dialog {
     interactivity: inert;
+    translate: var(--dialog-closed-offset);
   }
   dialog[open],
   dialog[open]::backdrop {
     opacity: 1;
     pointer-events: auto;
-    transition: opacity var(--ui-motion-modal) var(--ui-ease);
+    transition: opacity var(--dialog-enter, var(--ui-motion-modal)) var(--ui-ease),
+      translate var(--dialog-enter, var(--ui-motion-modal)) var(--ui-ease);
     animation: none;
   }
   dialog[open] {
     interactivity: auto;
+    translate: none;
   }
   @starting-style {
     dialog[open],
     dialog[open]::backdrop {
       opacity: 0;
+    }
+    dialog[open] {
+      translate: var(--dialog-enter-offset);
     }
   }
 }
@@ -1945,7 +1982,8 @@ dialog input {
   flex: none;
   vertical-align: middle;
 }
-#config-body {
+#config-body,
+#config-step-content {
   min-width: 0;
 }
 
@@ -2283,7 +2321,10 @@ textarea {
     --ui-motion-focus: 0ms;
     --ui-motion-popup: 0ms;
     --ui-motion-modal: 0ms;
+    --ui-motion-drawer: 0ms;
     --ui-motion-offset-sm: 0px;
+    --ui-motion-offset-md: 0px;
+    --ui-motion-drawer-distance: 0%;
   }
   .inline-status[data-phase="running"] .status-icon {
     animation: none;
@@ -2857,14 +2898,28 @@ main {
   }
 }
 @media (prefers-reduced-motion: no-preference) {
-  .run-view {
-    opacity: 1;
-    transition: opacity var(--ui-motion-popup) var(--ui-ease);
+  [data-navigation-motion="page"] {
+    --navigation-offset: 0px var(--ui-motion-offset-sm);
+    animation: ui-navigation-enter var(--ui-motion-page) var(--ui-ease);
   }
-  @starting-style {
-    .run-view {
-      opacity: 0.8;
-    }
+  [data-navigation-motion="forward"] {
+    --navigation-offset: var(--ui-motion-offset-md) 0px;
+  }
+  [data-navigation-motion="backward"] {
+    --navigation-offset: calc(-1 * var(--ui-motion-offset-md)) 0px;
+  }
+  :is([data-navigation-motion="forward"], [data-navigation-motion="backward"]) {
+    animation: ui-navigation-enter var(--ui-motion-step) var(--ui-ease);
+  }
+}
+@keyframes ui-navigation-enter {
+  from {
+    opacity: 0;
+    translate: var(--navigation-offset);
+  }
+  to {
+    opacity: 1;
+    translate: none;
   }
 }
 .run-history-actions {
@@ -4576,7 +4631,7 @@ main {
   #mode-toggle[aria-checked="true"] .menu-switch::before {
     background-color: HighlightText;
   }
-  :is(input, select, textarea):focus-visible {
+  :is(input, select, textarea):focus:focus-visible {
     box-shadow: none;
   }
   .select-menu-option[aria-selected="true"],
@@ -4586,7 +4641,8 @@ main {
     outline: 1px solid Highlight;
     outline-offset: -1px;
   }
-  :is(input, select, textarea, .page-tab):focus-visible,
+  :is(input, select, textarea):focus:focus-visible,
+  .page-tab:focus-visible,
   .wizard-step[aria-current="step"]:focus-visible {
     outline: 2px solid Highlight;
     outline-offset: 2px;

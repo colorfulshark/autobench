@@ -16,6 +16,7 @@ import {
 } from "./ui.js";
 import { chooseFile } from "./files.js";
 import { createReportPanel } from "./reports.js";
+import { playNavigationMotion } from "./navigation-motion.js";
 const view = {
   directory: "",
   selected: null,
@@ -93,6 +94,7 @@ function jobReason(job) {
   return job.reason || "";
 }
 function selectRun(id, focus = false) {
+  const changed = view.selected !== id;
   if (!view.selected && id && state.page === "runs") view.listScroll = window.scrollY;
   view.selected = id;
   view.detail = null;
@@ -112,6 +114,7 @@ function selectRun(id, focus = false) {
   storage();
   closePreview();
   renderRuns();
+  if (changed && state.page === "runs") playNavigationMotion(runNavigationContent());
   if (focus) {
     window.scrollTo(0, 0);
     $("back-to-runs").focus({ preventScroll: true });
@@ -1071,6 +1074,9 @@ export function closePreview(restoreFocus = false) {
     (trigger || $("back-to-runs")).focus({ preventScroll: true });
   }
   view.previewPath = null;
+}
+export function runNavigationContent() {
+  return $(view.selected ? "run-selection" : "runs-overview");
 }
 export function renderRuns() {
   renderSelection();

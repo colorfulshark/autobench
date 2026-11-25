@@ -3,9 +3,25 @@ import { counts } from "./model.js";
 import { $, node, button, icon } from "./ui.js";
 import { canGoToStep, goToStep } from "./config-view.js";
 
+let planVersion,
+  editControls = [];
+
+function updatePlanActions(stepLimit) {
+  for (const [control, index] of editControls) {
+    control.disabled = !canGoToStep(index, stepLimit);
+    control.title = control.disabled ? `请先完成「${configSteps[stepLimit]}」` : "";
+  }
+}
+
 // The preview and the review screen use the same configuration and task count.
 // Nothing in this view is written back to the YAML document.
 export function renderPlan(stepLimit) {
+  if (planVersion === state.version) {
+    updatePlanActions(stepLimit);
+    return;
+  }
+  planVersion = state.version;
+  editControls = [];
   const root = $("config-plan");
   root.replaceChildren();
   if (!state.document || typeof state.document !== "object") return;
@@ -38,8 +54,7 @@ export function renderPlan(stepLimit) {
   const editStep = (label, index) => {
     const edit = button(label, () => goToStep(index, true), "text-button");
     edit.append(icon("arrowRight"));
-    edit.disabled = !canGoToStep(index, stepLimit);
-    if (edit.disabled) edit.title = `请先完成「${configSteps[stepLimit]}」`;
+    editControls.push([edit, index]);
     return edit;
   };
   const sequence = node("section", "plan-section");
@@ -106,4 +121,5 @@ export function renderPlan(stepLimit) {
     );
   tests.append(editStep("编辑测试", 2));
   root.append(tests);
+  updatePlanActions(stepLimit);
 }

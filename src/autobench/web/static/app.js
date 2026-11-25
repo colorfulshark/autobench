@@ -36,14 +36,38 @@ import {
   closePreview,
   initRuns,
   renderRuns,
+  runNavigationContent,
   refreshRuns,
   startRun,
 } from "./runs.js";
 import { renderPlan } from "./config-plan.js";
+import { clearNavigationMotion, playNavigationMotion } from "./navigation-motion.js";
 let ready = false,
-  pathAction = "save";
+  pathAction = "save",
+  configView;
 const titles = { config: "测试配置", runs: "运行记录" };
-function setPage(page) {
+function configNavigationContent() {
+  return $(state.mode === "yaml" ? "yaml-panel" : "config-step-content");
+}
+function updateConfigMotion(blockedNavigation) {
+  const previous = configView;
+  const { epoch, mode, step, machine, system } = state;
+  configView = { epoch, mode, step, machine, system };
+  if (state.page !== "config" || !previous) return;
+  if (epoch !== previous.epoch || blockedNavigation) {
+    clearNavigationMotion();
+  } else if (mode !== previous.mode) {
+    playNavigationMotion(configNavigationContent());
+  } else if (mode === "form" && step !== previous.step) {
+    playNavigationMotion(configNavigationContent(), step > previous.step ? "forward" : "backward");
+  } else if (
+    mode === "form" && step === 1 &&
+    (system !== previous.system || (system !== null && machine !== previous.machine))
+  ) {
+    playNavigationMotion($("config-body").querySelector(".system-content"));
+  }
+}
+function setPage(page, { initial = false } = {}) {
   if (!Object.hasOwn(titles, page)) page = "config";
   const changed = state.page !== page;
   state.page = page;
@@ -70,6 +94,8 @@ function setPage(page) {
     renderRuns();
     refreshRuns().catch((error) => show(error.message, "error"));
   }
+  if (changed && !initial)
+    playNavigationMotion(page === "runs" ? runNavigationContent() : configNavigationContent());
 }
 function chrome() {
   const saved = isSaved();
@@ -124,7 +150,7 @@ function chrome() {
       "配置、源码包及本地 SSH 文件检查通过，可以开始测试。";
   updateConfig(stepLimit);
 }
-function render(layout) {
+function render(layout, { blockedNavigation = false } = {}) {
   if (!ready) return;
   const active = document.activeElement;
   const focus = active?.id;
@@ -145,6 +171,7 @@ function render(layout) {
         } catch {}
     }
   }
+  if (layout) updateConfigMotion(blockedNavigation);
 }
 function openPath(action = "save") {
   pathAction = action;
@@ -492,6 +519,7 @@ function initWorkspace() {
       event.returnValue = "";
     }
   });
+  window.addEventListener("pagehide", clearNavigationMotion);
 }
 async function restoreProject(path) {
   if (!path) {
@@ -541,7 +569,7 @@ async function boot() {
   ready = true;
   render(true);
   $("app-shell").inert = false;
-  setPage(restoring ? sessionStorage.getItem("autobench-page") : "config");
+  setPage(restoring ? sessionStorage.getItem("autobench-page") : "config", { initial: true });
   if (!restoring) {
     dialog.close();
     $("tab-config").focus({ preventScroll: true });
