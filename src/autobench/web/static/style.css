@@ -1477,25 +1477,19 @@ td .secondary {
 .report-panel > .report-table :is(th, td):not(:first-child) {
   min-width: 180px;
 }
-.report-score {
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-}
 .report-score-value {
   position: relative;
   display: inline-grid;
   grid-template-columns: auto var(--ui-icon-sm);
   align-items: center;
   column-gap: var(--ui-space-1);
+  white-space: nowrap;
 }
 .report-score-arrow[data-tone="success"] {
   color: var(--ui-success);
 }
 .report-score-arrow[data-tone="error"] {
   color: var(--ui-error);
-}
-.report-score > .secondary {
-  display: block;
 }
 .report-warnings li {
   margin: 8px 0;

@@ -75,8 +75,7 @@ export function createReportPanel(reportUrl) {
     };
   }
 
-  function score(cell, showRoundCount = false) {
-    const box = node("div", "report-score");
+  function score(cell) {
     const value = node("span", "report-score-value", cell.display);
     const change = cell.change_percent;
     // Match the report's displayed precision when the change rounds to zero.
@@ -92,24 +91,7 @@ export function createReportPanel(reportUrl) {
         node("span", "visually-hidden", improved ? " 较基线提升" : " 较基线下降"),
       );
     }
-    box.append(value);
-    if (showRoundCount) {
-      box.append(
-        node(
-          "span",
-          "secondary",
-          `有效轮次 ${cell.valid_runs}/${cell.planned_runs}`,
-        ),
-      );
-    }
-    return box;
-  }
-
-  function overallScore(profile, groupId) {
-    return score(
-      profile.overall[groupId],
-      profile.copies !== 1 && profile.copies !== 8,
-    );
+    return value;
   }
 
   function reportTable(label) {
@@ -225,11 +207,11 @@ export function createReportPanel(reportUrl) {
       ],
       data.groups.map((g) => [
         g.label,
-        ...leadingProfiles.map((p) => overallScore(p, g.id)),
+        ...leadingProfiles.map((p) => score(p.overall[g.id])),
         g.planned_runs,
         g.discovered_runs,
         g.parsed_runs,
-        ...trailingProfiles.map((p) => overallScore(p, g.id)),
+        ...trailingProfiles.map((p) => score(p.overall[g.id])),
       ]),
     );
     const hasProfiles = data.profiles.length > 0;

@@ -3679,12 +3679,13 @@ def test_report_combines_scores_and_round_counts_for_each_group(browser_page, ui
     assert rows.first.get_by_role("cell").all_text_contents()[1:] == [
         "40.00 (0.00%)",
         "320.00 (0.00%)",
-        "5120.00 (0.00%)有效轮次 3/3",
+        "5120.00 (0.00%)",
         "3",
         "3",
         "3",
-        "10240.00 (0.00%)有效轮次 3/3",
+        "10240.00 (0.00%)",
     ]
+    assert "有效轮次" not in summary.text_content()
     cells = rows.last.get_by_role("cell")
     assert extra.id in cells.first.text_content()
     assert cells.all_text_contents()[4:7] == ["3", "1", "0"]
@@ -3817,7 +3818,7 @@ def test_report_preview_baseline_download_and_layout(browser_page, ui_server, wi
     })""")
     assert "400.00 (0.00%)" in panel.text_content()
     assert "480.00 (+20.00%)" in panel.text_content()
-    assert "有效轮次 3/3" in panel.text_content()
+    expect(summary).not_to_contain_text("有效轮次")
 
     def check_arrow(table, score, description, color):
         cell = table.get_by_role("cell", name=f"{score} {description}", exact=True).first
