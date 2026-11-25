@@ -348,9 +348,22 @@
                   <option value="succeeded">成功</option>
                   <option value="failed">失败</option>
                   <option value="cancelled">已取消</option>
+                  <option value="merged">已合并</option>
                   <option value="pending">待执行</option>
                 </select>
               </div>
+            </div>
+            <div id="run-history-actions" class="actions run-history-actions" hidden>
+              <button
+                id="merge-runs"
+                class="button secondary"
+                type="button"
+                aria-haspopup="dialog"
+                disabled
+              >
+                合并记录…
+              </button>
+              <span id="run-checked-count" class="hint" role="status"></span>
             </div>
             <div id="runs-list" class="table-scroll"></div>
           </div>
@@ -364,6 +377,24 @@
         </section>
       </main>
     </div>
+    <dialog
+      id="run-history-dialog"
+      aria-labelledby="run-history-title"
+      aria-describedby="run-history-description"
+    >
+      <form id="run-history-form">
+        <h2 id="run-history-title"></h2>
+        <p id="run-history-description"></p>
+        <ul id="run-history-targets" class="run-history-targets mono" tabindex="0" aria-label="所选运行"></ul>
+        <p id="run-history-error" class="callout error" role="alert" hidden></p>
+        <div class="dialog-actions">
+          <button id="run-history-cancel" class="button secondary" type="button">
+            取消
+          </button>
+          <button id="run-history-confirm" class="button primary" type="submit"></button>
+        </div>
+      </form>
+    </dialog>
     <dialog
       id="preview-drawer"
       class="preview-drawer"

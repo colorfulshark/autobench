@@ -156,55 +156,72 @@ def profile_name(copies: int) -> str:
     return f"{copies} parallel {'copy' if copies == 1 else 'copies'}"
 
 
+def report_groups(config: Config | None, jobs: list[dict]):
+    if config is None:
+        variants: dict[str, dict[str, list[tuple[dict, str]]]] = {}
+        for job in jobs:
+            key = "/".join(job[part] for part in ("machine", "system", "benchmark"))
+            details = job["details"]
+            samples = variants.setdefault(key, {}).setdefault(details["group_fingerprint"], [])
+            samples.append((job, details["result_relative"]))
+        for key, configurations in variants.items():
+            label = key.replace("/", " / ")
+            for index, samples in enumerate(configurations.values(), 1):
+                if len(configurations) == 1:
+                    yield key, label, samples
+                else:
+                    yield f"{key}@{index}", f"{label}（配置 {index}）", samples
+        return
+
+    by_group: dict[str, list[tuple[dict, str]]] = {}
+    for job in jobs:
+        key = "/".join(job[part] for part in ("machine", "system", "benchmark"))
+        by_group.setdefault(key, []).append((job, f"{key}/round-{job['repetition']:03d}"))
+    for machine in config.machines:
+        for system in machine.systems:
+            for benchmark in config.benchmarks:
+                parts = (machine.id, system.id, benchmark.id)
+                key = "/".join(parts)
+                yield key, " / ".join(parts), by_group.get(key, [])
+
+
 def build_report(
-    run_id: str, config: Config, jobs: list[dict], root: Path, baseline: str | None = None
+    run_id: str, config: Config | None, jobs: list[dict], root: Path, baseline: str | None = None
 ) -> dict:
     groups = []
     samples = {}
     warnings = []
-    for machine in config.machines:
-        for system in machine.systems:
-            for benchmark in config.benchmarks:
-                key = f"{machine.id}/{system.id}/{benchmark.id}"
-                group_jobs = [
-                    job
-                    for job in jobs
-                    if (job["machine"], job["system"], job["benchmark"])
-                    == (machine.id, system.id, benchmark.id)
-                ]
-                group = {
-                    "id": key,
-                    "label": " / ".join((machine.id, system.id, benchmark.id)),
-                    "planned_runs": len(group_jobs),
-                    "discovered_runs": 0,
-                    "parsed_runs": 0,
-                }
-                groups.append(group)
-                samples[key] = []
-                for job in group_jobs:
-                    relative = f"{key}/round-{job['repetition']:03d}"
-                    directory = result_path(root, relative)
-                    if not directory.is_dir():
-                        warnings.append(f"{relative}：结果未回收，未计入平均值。")
-                        continue
-                    group["discovered_runs"] += 1
-                    try:
-                        parsed = read_round(root, relative)
-                    except ConflictingResults as exc:
-                        warnings.append(f"{relative}：{exc}")
-                        continue
-                    except OSError:
-                        warnings.append(f"{relative}：结果文件读取失败，未计入平均值。")
-                        continue
-                    if not parsed:
-                        warnings.append(f"{relative}：没有可解析的 INDEX 结果。")
-                        continue
-                    group["parsed_runs"] += 1
-                    samples[key].append(parsed)
-                    if job["status"] != "succeeded":
-                        warnings.append(
-                            f"{relative}：轮次状态为 {job['status']}，仅计入有效 INDEX 值。"
-                        )
+    for key, label, group_jobs in report_groups(config, jobs):
+        group = {
+            "id": key,
+            "label": label,
+            "planned_runs": len(group_jobs),
+            "discovered_runs": 0,
+            "parsed_runs": 0,
+        }
+        groups.append(group)
+        samples[key] = []
+        for job, relative in group_jobs:
+            directory = result_path(root, relative)
+            if not directory.is_dir():
+                warnings.append(f"{relative}：结果未回收，未计入平均值。")
+                continue
+            group["discovered_runs"] += 1
+            try:
+                parsed = read_round(root, relative)
+            except ConflictingResults as exc:
+                warnings.append(f"{relative}：{exc}")
+                continue
+            except OSError:
+                warnings.append(f"{relative}：结果文件读取失败，未计入平均值。")
+                continue
+            if not parsed:
+                warnings.append(f"{relative}：没有可解析的 INDEX 结果。")
+                continue
+            group["parsed_runs"] += 1
+            samples[key].append(parsed)
+            if job["status"] != "succeeded":
+                warnings.append(f"{relative}：轮次状态为 {job['status']}，仅计入有效 INDEX 值。")
 
     keys = {group["id"] for group in groups}
     if baseline is not None and baseline not in keys:

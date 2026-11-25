@@ -504,6 +504,7 @@ class Scheduler:
     async def execute(self, *, fetch_only=False) -> str:
         root = self.config.policy.output_dir / self.run_id
         with self.store.run_lock(self.run_id):
+            self.store.require_executable(self.run_id)
             self.store.set_run_status(self.run_id, "running")
             self.store.snapshot(self.run_id, root)
             semaphore = asyncio.Semaphore(self.config.policy.parallel_machines)

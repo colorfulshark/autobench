@@ -10,6 +10,7 @@ from typing import Callable
 
 import asyncssh
 
+from autobench import history
 from autobench.config import Config, Policy, SSHConfig
 from autobench.errors import (
     AuthenticationFailed,
@@ -228,8 +229,12 @@ def run_status(store: Store, run_id: str) -> dict:
         ],
     }
     for job, stored in zip(result["jobs"], jobs):
+        if run["status"] == "merged":
+            job["source_run_id"] = stored["details"]["source_run_id"]
         ready_at = stored["details"].get("ready_at")
         if job["status"] == "stabilizing" and isinstance(ready_at, (int, float)):
             if math.isfinite(ready_at):
                 job["wait_seconds"] = max(0, math.ceil(ready_at - time.time()))
+    if run["status"] == "merged":
+        result["sources"] = history.public_sources(store, run_id)
     return result

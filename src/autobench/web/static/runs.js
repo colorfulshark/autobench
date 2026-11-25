@@ -22,6 +22,9 @@ const view = {
   listKey: null,
   listReady: false,
   listError: "",
+  checked: new Set(),
+  historyAction: null,
+  historyBusy: false,
   listSynced: 0,
   listScroll: 0,
   detail: null,
@@ -46,7 +49,7 @@ const view = {
   previewPath: null,
 };
 const pollInterval = 2000;
-const terminalRunStatuses = ["succeeded", "failed", "cancelled"];
+const terminalRunStatuses = ["succeeded", "failed", "cancelled", "merged"];
 let pollTimer;
 let pollDelay = pollInterval;
 export const directory = () => view.directory || state.info.state_dir;
@@ -72,6 +75,7 @@ function changeDirectory(path) {
     view.listSynced = 0;
     view.listScroll = 0;
     view.listRequest = null;
+    view.checked.clear();
   }
   view.directory = path;
 }
@@ -167,6 +171,10 @@ export async function refreshRuns() {
     const list = await request;
     if (view.listRequest !== request) return;
     view.list = list;
+    const eligible = new Set(list.filter((run) => run.can_merge).map((run) => run.id));
+    for (const id of view.checked) {
+      if (!eligible.has(id) && !view.historyBusy) view.checked.delete(id);
+    }
     view.listReady = true;
     view.listError = "";
     view.listSynced = Date.now();
@@ -178,6 +186,92 @@ export async function refreshRuns() {
   }
   renderList();
   if (view.selected) await refreshDetail();
+}
+function openHistoryAction(kind, ids) {
+  if (view.historyAction) return;
+  const deleting = kind === "delete";
+  view.historyAction = { kind, ids, stateDir: directory() };
+  $("run-history-title").textContent = deleting ? "删除运行记录" : "合并运行记录";
+  $("run-history-description").textContent = deleting
+    ? "此操作会永久删除该运行记录及其本地结果、日志和事件。"
+    : "将所选运行的任务、事件和本地产物复制到一条新记录。来源记录会保留，重复来源只纳入一次。";
+  $("run-history-targets").replaceChildren(...ids.map((id) => node("li", "", id)));
+  $("run-history-error").hidden = true;
+  const confirm = $("run-history-confirm");
+  confirm.textContent = deleting ? "删除记录" : "创建合并记录";
+  confirm.className = deleting ? "button danger" : "button primary";
+  $("run-history-dialog").showModal();
+  $("run-history-cancel").focus();
+}
+function closeHistoryAction(restoreFocus = true) {
+  const action = view.historyAction;
+  if (!action || view.historyBusy) return;
+  view.historyAction = null;
+  $("run-history-dialog").close();
+  if (!restoreFocus) return;
+  if (action.kind === "delete") focusRun(action.ids[0], true, "delete");
+  else if (!$("merge-runs").disabled) $("merge-runs").focus();
+  else $("run-search").focus();
+}
+async function submitHistoryAction(event) {
+  event.preventDefault();
+  const action = view.historyAction;
+  if (!action || view.historyBusy) return;
+  const deleting = action.kind === "delete";
+  const id = action.ids[0];
+  const visibleIds = visibleRuns().map((run) => run.id);
+  const index = visibleIds.indexOf(id);
+  const neighbor = visibleIds[index + 1] || visibleIds[index - 1];
+  const error = $("run-history-error");
+  const confirm = $("run-history-confirm");
+  const cancel = $("run-history-cancel");
+  view.historyBusy = true;
+  confirm.setAttribute("aria-disabled", "true");
+  confirm.setAttribute("aria-busy", "true");
+  confirm.classList.add("busy");
+  confirm.textContent = deleting ? "正在删除…" : "正在合并…";
+  cancel.disabled = true;
+  error.hidden = true;
+  let result;
+  try {
+    result = deleting
+      ? await api(`/api/runs/${encodeURIComponent(id)}/delete`, { state_dir: action.stateDir })
+      : await api("/api/runs/merge", { state_dir: action.stateDir, run_ids: action.ids });
+  } catch (failure) {
+    error.textContent = failure.status
+      ? failure.message
+      : "无法确认操作结果。请关闭对话框并刷新列表后核对。";
+    error.hidden = false;
+  } finally {
+    view.historyBusy = false;
+    confirm.removeAttribute("aria-disabled");
+    confirm.removeAttribute("aria-busy");
+    confirm.classList.remove("busy");
+    confirm.textContent = deleting ? "删除记录" : "创建合并记录";
+    cancel.disabled = false;
+  }
+  // Ignore any list request that was started before the mutation completed.
+  view.listRequest = null;
+  if (!result) {
+    await refreshRuns();
+    return;
+  }
+  closeHistoryAction(false);
+  if (deleting) {
+    view.checked.delete(id);
+    view.list = view.list.filter((run) => run.id !== id);
+    renderList();
+    focusRun(neighbor, true);
+    if (result.cleanup_pending)
+      show("运行记录已删除，部分本地文件仍待清理。", "warning");
+    else show("运行记录已删除。");
+  } else {
+    view.checked.clear();
+    view.listKey = null;
+    selectRun(result.run_id, true);
+    show("已创建合并记录。");
+  }
+  await refreshRuns();
 }
 function refreshDetail() {
   if (!view.selected) return;
@@ -203,14 +297,19 @@ async function readDetail(token) {
   renderDetail();
   renderSelection();
   try {
-    const events = await api(url("/events", { after: view.after }));
-    if (token !== view.token) return;
-    for (const event of events) {
-      if (event.sequence <= view.after) continue;
-      view.after = event.sequence;
-      view.events.push(event);
-    }
-    view.events = view.events.slice(-5000);
+    let count;
+    do {
+      const after = view.after;
+      const events = await api(url("/events", { after }));
+      if (token !== view.token) return;
+      for (const event of events) {
+        if (event.sequence <= view.after) continue;
+        view.after = event.sequence;
+        view.events.push(event);
+      }
+      view.events = view.events.slice(-5000);
+      count = view.after > after ? events.length : 0;
+    } while (detail.status === "merged" && count === 500);
     view.eventError = "";
   } catch (error) {
     if (token !== view.token) return;
@@ -241,10 +340,8 @@ function terminalDetail() {
 function syncMessage(error, synced) {
   return synced ? `同步失败，数据可能已过期。上次同步：${date(synced / 1000)}。 ${error}` : error;
 }
-function renderList() {
-  $("state-location").textContent = directory();
-  $("state-location").title = directory();
-  const list = view.list.filter(
+function visibleRuns() {
+  return view.list.filter(
     (run) =>
       (!view.filter || run.status === view.filter) &&
       (!view.search ||
@@ -252,6 +349,21 @@ function renderList() {
           .toLowerCase()
           .includes(view.search.toLowerCase())),
   );
+}
+function renderHistoryActions() {
+  $("run-history-actions").hidden = !view.list.some((run) => run.can_merge) && !view.checked.size;
+  $("merge-runs").disabled = view.checked.size < 2;
+  const text = view.checked.size
+    ? `已选择 ${view.checked.size} 条记录`
+    : "选择至少两条已封存的记录";
+  const count = $("run-checked-count");
+  if (count.textContent !== text) count.textContent = text;
+}
+function renderList() {
+  $("state-location").textContent = directory();
+  $("state-location").title = directory();
+  const list = visibleRuns();
+  renderHistoryActions();
   const key = JSON.stringify([
     view.listReady,
     view.listError,
@@ -315,8 +427,7 @@ function renderList() {
     if (stale) root.prepend(stale);
     return;
   }
-  const focusedRun =
-    root.contains(document.activeElement) && document.activeElement.dataset.run;
+  const focused = root.contains(document.activeElement) ? document.activeElement.dataset : {};
   root.replaceChildren(
     table(
       ["创建时间", "状态", "最近更新", "操作"],
@@ -332,17 +443,49 @@ function renderList() {
           "text-button",
         );
         open.dataset.run = run.id;
-        return [title, badge(run.status), date(run.updated), open];
+        open.dataset.historyControl = "open";
+        const info = node("div", "run-list-title");
+        const actions = node("div", "actions run-row-actions");
+        actions.append(open);
+        if (run.can_merge) {
+          const select = node("input");
+          select.type = "checkbox";
+          select.checked = view.checked.has(run.id);
+          select.dataset.run = run.id;
+          select.dataset.historyControl = "select";
+          select.setAttribute("aria-label", `选择运行 ${run.id}`);
+          select.addEventListener("change", () => {
+            if (select.checked) view.checked.add(run.id);
+            else view.checked.delete(run.id);
+            renderHistoryActions();
+          });
+          const label = node("label", "run-list-checkbox");
+          label.append(select);
+          info.append(label);
+        }
+        info.append(title);
+        if (run.can_delete) {
+          const remove = button("删除", null, "text-button run-delete");
+          remove.addEventListener("click", () => openHistoryAction("delete", [run.id]));
+          remove.setAttribute("aria-label", `删除运行 ${run.id}`);
+          remove.setAttribute("aria-haspopup", "dialog");
+          remove.dataset.run = run.id;
+          remove.dataset.historyControl = "delete";
+          actions.append(remove);
+        }
+        return [info, badge(run.status), date(run.updated), actions];
       }),
     ),
   );
   if (stale) root.prepend(stale);
-  if (focusedRun) focusRun(focusedRun);
+  if (focused.run) focusRun(focused.run, true, focused.historyControl);
 }
-function focusRun(id, preventScroll = false) {
-  const row = [...$("runs-list").querySelectorAll("[data-run]")].find(
+function focusRun(id, preventScroll = false, action = "open") {
+  const controls = [...$("runs-list").querySelectorAll("[data-run]")].filter(
     (control) => control.dataset.run === id,
   );
+  const row = controls.find((control) => control.dataset.historyControl === action)
+    || controls.find((control) => control.dataset.historyControl === "open");
   (row || $("run-search")).focus({ preventScroll });
 }
 function renderSelection() {
@@ -359,6 +502,7 @@ function renderSelection() {
   status.classList.toggle("warning", Boolean(view.detailError));
 }
 function outcomeHint(detail) {
+  if (detail.status === "merged") return `由 ${detail.sources.length} 条原始运行合并，可查看各来源的结果与日志。`;
   if (
     detail.cancel_requested &&
     !detail.controller_active &&
@@ -397,6 +541,7 @@ function renderDetail() {
   }
   view.renderKey = renderKey;
   const oldMatrix = root.querySelector("details[data-matrix]")?.open || false;
+  const oldSources = root.querySelector("details[data-sources]");
   const previousTaskTables = view.report?.isConnected
     ? root.querySelector(".run-task-tables")
     : null;
@@ -406,7 +551,7 @@ function renderDetail() {
   const actions = node("div", "actions");
   const recoverable =
     !d.controller_active && ["pending", "running", "paused"].includes(d.status);
-  const final = ["succeeded", "cancelled"].includes(d.status);
+  const final = ["succeeded", "cancelled", "merged"].includes(d.status);
   if (recoverable)
     actions.append(
       button(
@@ -449,6 +594,20 @@ function renderDetail() {
     actions,
   );
   panel.querySelector(".callout").prepend(icon("info"));
+  if (d.sources) {
+    const sources = node("details", "technical");
+    sources.dataset.sources = "true";
+    sources.open = oldSources?.open || false;
+    sources.append(node("summary", "", "来源记录"));
+    const list = node("ul", "run-source-list");
+    for (const source of d.sources) {
+      const item = node("li");
+      item.append(node("code", "", source.run_id), badge(source.status));
+      list.append(item);
+    }
+    sources.append(list);
+    panel.append(sources);
+  }
   const stats = node("div", "stat-grid");
   const complete = d.jobs.filter((j) =>
     ["succeeded", "failed", "cancelled", "interrupted"].includes(j.status),
@@ -555,12 +714,13 @@ function renderDetail() {
   taskTables.setAttribute("aria-label", "机器与系统任务表");
   for (const [name, jobs] of grouped) {
     const taskTable = table(
-      ["测试", "次数", "状态", "说明"],
+      ["测试", "次数", "状态", "说明", ...(d.sources ? ["来源运行"] : [])],
       jobs.map((j) => [
         j.benchmark,
         j.repetition,
         badge(j.status),
         jobReason(j) || "—",
+        ...(d.sources ? [j.source_run_id] : []),
       ]),
     );
     taskTable.classList.add("run-task-table");
@@ -581,6 +741,8 @@ function renderDetail() {
   taskTables.scrollLeft = taskScrollLeft;
   if (taskTablesFocused) taskTables.focus({ preventScroll: true });
   if (matrixFocused) matrixTitle.focus({ preventScroll: true });
+  if (oldFocus === oldSources?.firstElementChild)
+    panel.querySelector("details[data-sources] > summary")?.focus({ preventScroll: true });
   if (copyFocused) copyId.focus({ preventScroll: true });
   if (actionName) {
     const replacement = [...actions.querySelectorAll("[data-run-control]")].find(
@@ -631,7 +793,8 @@ function updateEvents() {
     const selection = window.getSelection();
     const selecting = selection && !selection.isCollapsed && log.contains(selection.anchorNode);
     const follow = nearLogEnd(log) && !selecting;
-    const format = (event) => `${date(event.time)}  ${event.message}\n`;
+    const format = (event) =>
+      `${date(event.time)}  ${event.source_run_id ? `[${event.source_run_id}] ` : ""}${event.message}\n`;
     if (lastSequence && view.events[0]?.sequence <= lastSequence && !(
       log.dataset.firstSequence && Number(log.dataset.firstSequence) < view.events[0].sequence
     )) {
@@ -783,6 +946,15 @@ export function renderRuns() {
 export async function initRuns() {
   view.directory =
     sessionStorage.getItem("autobench-run-directory") || state.info.state_dir;
+  $("merge-runs").addEventListener("click", () => {
+    if (view.checked.size >= 2) openHistoryAction("merge", [...view.checked]);
+  });
+  $("run-history-form").addEventListener("submit", submitHistoryAction);
+  $("run-history-cancel").addEventListener("click", () => closeHistoryAction());
+  $("run-history-dialog").addEventListener("cancel", (event) => {
+    event.preventDefault();
+    closeHistoryAction();
+  });
   $("back-to-runs").addEventListener("click", () => {
     const id = view.selected;
     selectRun(null);

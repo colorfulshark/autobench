@@ -14,6 +14,7 @@ from autobench.config import Config
 from autobench.errors import AutoBenchError
 
 TERMINAL = {"succeeded", "failed", "interrupted", "cancelled"}
+HISTORY_TERMINAL = {"succeeded", "failed", "cancelled"}
 RUN_ID_PATTERN = (
     r"^[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{2}-[0-9]{2}-[0-9]{2}"
     r"(?:-(?:0[2-9]|[1-9][0-9]+))?$"
@@ -70,6 +71,21 @@ class Store:
                 sequence INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL,
                 job_id TEXT, time REAL NOT NULL, message TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS run_merges (
+                run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,
+                sources TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS merged_event_sources (
+                sequence INTEGER PRIMARY KEY REFERENCES events(sequence) ON DELETE CASCADE,
+                source_key TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS run_file_changes (
+                run_id TEXT PRIMARY KEY, action TEXT NOT NULL,
+                root TEXT NOT NULL, stage TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS retired_run_ids (id TEXT PRIMARY KEY);
+            CREATE INDEX IF NOT EXISTS jobs_run_id ON jobs(run_id);
+            CREATE INDEX IF NOT EXISTS events_run_sequence ON events(run_id, sequence);
         """)
 
     def close(self):
@@ -77,26 +93,25 @@ class Store:
 
     def create(self, config: Config) -> str:
         now = time.time()
-        name = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime(now))
         frozen = config.model_dump_json()
-        output = private_dir(config.policy.output_dir)
+        output = config.policy.output_dir.absolute()
         root = None
         try:
             with self.db:
                 # Serialize name allocation within this state database. mkdir also
                 # reserves names across controllers sharing only the output directory.
                 self.db.execute("BEGIN IMMEDIATE")
-                sequence = 1
-                while True:
-                    run_id = name if sequence == 1 else f"{name}-{sequence:02d}"
-                    if self.db.execute("SELECT 1 FROM runs WHERE id=?", (run_id,)).fetchone():
-                        sequence += 1
-                        continue
+                for change in self.db.execute(
+                    "SELECT root FROM run_file_changes WHERE action='delete'"
+                ):
+                    if output.is_relative_to(Path(change["root"])):
+                        raise AutoBenchError("结果输出目录位于待清理的运行目录中")
+                private_dir(output)
+                for run_id in self.available_run_ids(now):
                     candidate = output / run_id
                     try:
                         candidate.mkdir(mode=0o700)
                     except FileExistsError:
-                        sequence += 1
                         continue
                     root = candidate
                     break
@@ -107,6 +122,20 @@ class Store:
                     root.rmdir()
             raise
         return run_id
+
+    def available_run_ids(self, now: float):
+        name = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime(now))
+        sequence = 1
+        while True:
+            run_id = name if sequence == 1 else f"{name}-{sequence:02d}"
+            if not self.db.execute(
+                "SELECT id FROM runs WHERE id=? "
+                "UNION ALL SELECT run_id FROM run_file_changes WHERE run_id=? "
+                "UNION ALL SELECT id FROM retired_run_ids WHERE id=?",
+                (run_id, run_id, run_id),
+            ).fetchone():
+                yield run_id
+            sequence += 1
 
     def _insert_run(self, config: Config, run_id: str, frozen: str, now: float):
         self.db.execute(
@@ -146,7 +175,10 @@ class Store:
         return dict(row)
 
     def config(self, run_id: str) -> Config:
-        frozen = json.loads(self.run(run_id)["config"])
+        row = self.run(run_id)
+        if row["status"] == "merged":
+            raise AutoBenchError("合并记录是只读快照")
+        frozen = json.loads(row["config"])
         # New documents default to warmup; existing runs keep their frozen behavior.
         for benchmark in frozen["benchmarks"]:
             benchmark.setdefault("warmup", False)
@@ -160,6 +192,22 @@ class Store:
                 "ORDER BY created DESC, id"
             )
         ]
+
+    def merge_sources(self, run_id: str) -> list[dict]:
+        row = self.db.execute("SELECT sources FROM run_merges WHERE run_id=?", (run_id,)).fetchone()
+        return json.loads(row["sources"]) if row else []
+
+    def result_directory(self, run_id: str) -> Path:
+        run = self.run(run_id)
+        if run["status"] == "merged":
+            return self.directory / "merged-results" / run_id
+        return self.config(run_id).policy.output_dir.absolute() / run_id
+
+    def require_executable(self, run_id: str):
+        if self.run(run_id)["status"] == "merged":
+            raise AutoBenchError("合并记录是只读快照")
+        if self.db.execute("SELECT 1 FROM run_file_changes WHERE run_id=?", (run_id,)).fetchone():
+            raise AutoBenchError("此运行的本地文件正在处理，请稍后重试")
 
     def jobs(self, run_id: str, machine: str | None = None) -> list[dict]:
         sql = "SELECT * FROM jobs WHERE run_id = ?"
@@ -197,8 +245,16 @@ class Store:
                 (run_id, job_id, time.time(), message),
             )
 
-    def events(self, run_id: str, after: int = 0, limit: int | None = None) -> list[dict]:
-        sql = "SELECT * FROM events WHERE run_id=? AND sequence>? ORDER BY sequence"
+    def events(
+        self, run_id: str, after: int = 0, limit: int | None = None, *, with_source: bool = False
+    ) -> list[dict]:
+        sql = "SELECT events.*"
+        if with_source:
+            sql += ", merged_event_sources.source_key"
+        sql += " FROM events"
+        if with_source:
+            sql += " LEFT JOIN merged_event_sources USING(sequence)"
+        sql += " WHERE run_id=? AND sequence>? ORDER BY sequence"
         args = [run_id, after]
         if limit is not None:
             sql += " LIMIT ?"
@@ -206,8 +262,9 @@ class Store:
         return [dict(r) for r in self.db.execute(sql, args)]
 
     def request_cancel(self, run_id: str):
-        self.run(run_id)
         with self.db:
+            self.db.execute("BEGIN IMMEDIATE")
+            self.require_executable(run_id)
             self.db.execute("UPDATE runs SET cancel_requested=1 WHERE id=?", (run_id,))
 
     def set_run_status(self, run_id: str, status: str):

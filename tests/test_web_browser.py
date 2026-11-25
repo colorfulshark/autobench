@@ -4267,6 +4267,96 @@ def test_modal_exit_restores_focus_and_allows_immediate_reopen(browser_page, ui_
     expect(opener).to_be_focused()
 
 
+@pytest.mark.parametrize("width,zoom", [(1440, 1), (390, 1), (390, 2)])
+def test_run_history_delete_and_merge(browser_page, ui_server, width, zoom):
+    from playwright.sync_api import expect
+    from test_history import completed_run
+
+    from autobench.storage import Store
+
+    page = browser_page
+    page.set_viewport_size({"width": width, "height": 850})
+    store = Store(ui_server.config.policy.state_dir)
+    first, first_root = completed_run(store, ui_server.config)
+    second, second_root = completed_run(store, ui_server.config)
+    if zoom == 2:
+
+        def apply_user_styles(route):
+            response = route.fetch()
+            route.fulfill(
+                response=response,
+                body=response.text() + "\nhtml { font-size: 200% !important; }",
+            )
+
+        page.route("**/static/style.css", apply_user_styles)
+    ready(page, ui_server, startup_path=ui_server.existing)
+    page.get_by_role("tab", name="运行记录", exact=True).click()
+    search = page.get_by_role("textbox", name="搜索运行")
+    search.fill(first)
+    select = page.get_by_role("checkbox", name=f"选择运行 {first}", exact=True)
+    select.focus()
+    page.keyboard.press("Space")
+    expect(select).to_be_checked()
+    store.set_run_status(first, "failed")
+    row = page.get_by_role("row").filter(has=page.get_by_text(first, exact=True))
+    expect(row.get_by_text("失败", exact=True)).to_be_visible()
+    expect(select).to_be_focused()
+    expect(select).to_be_checked()
+    search.fill(second)
+    page.get_by_role("checkbox", name=f"选择运行 {second}", exact=True).check()
+    merge = page.get_by_role("button", name="合并记录…")
+    expect(page.get_by_role("status").filter(has_text="已选择 2 条记录")).to_be_visible()
+    merge.click()
+    dialog = page.get_by_role("dialog", name="合并运行记录")
+    expect(dialog.get_by_role("button", name="取消")).to_be_focused()
+    expect(dialog.get_by_role("listitem")).to_have_text([first, second])
+    assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+    box = dialog.bounding_box()
+    assert box["x"] >= 0 and box["x"] + box["width"] <= width
+    if output := os.getenv("AUTOBENCH_UI_SCREENSHOTS"):
+        page.screenshot(path=Path(output) / f"run-merge-{width}-{zoom}.png", animations="disabled")
+    page.keyboard.press("Escape")
+    expect(merge).to_be_focused()
+    merge.click()
+
+    def conflict(route):
+        route.fulfill(status=409, json={"detail": "运行正在使用"})
+
+    page.route("**/api/runs/merge", conflict)
+    confirm = dialog.get_by_role("button", name="创建合并记录")
+    confirm.click()
+    expect(dialog.get_by_role("alert")).to_have_text("运行正在使用")
+    page.unroute("**/api/runs/merge", conflict)
+    confirm.click()
+    expect(page.get_by_role("heading", name="运行详情", exact=True)).to_be_visible()
+    expect(page.locator("#run-detail").get_by_text("已合并", exact=True)).to_be_visible()
+    sources = page.get_by_text("来源记录", exact=True)
+    sources.click()
+    expect(page.locator(".run-source-list").get_by_text(first, exact=True)).to_be_visible()
+    expect(page.locator(".run-source-list").get_by_text(second, exact=True)).to_be_visible()
+    expect(page.get_by_role("button", name="仅收集结果")).to_have_count(0)
+    assert first_root.is_dir() and second_root.is_dir()
+    page.get_by_role("button", name="返回运行列表").click()
+    expect(search).to_have_value(second)
+    search.fill("")
+    remove = page.get_by_role("button", name=f"删除运行 {second}", exact=True)
+    remove.click()
+    delete_dialog = page.get_by_role("dialog", name="删除运行记录")
+    expect(delete_dialog.get_by_role("listitem")).to_have_text(second)
+    if output := os.getenv("AUTOBENCH_UI_SCREENSHOTS"):
+        page.screenshot(path=Path(output) / f"run-delete-{width}-{zoom}.png", animations="disabled")
+    page.keyboard.press("Escape")
+    expect(remove).to_be_focused()
+    assert second_root.is_dir()
+    remove.click()
+    delete_dialog.get_by_role("button", name="删除记录", exact=True).click()
+    expect(remove).to_have_count(0)
+    expect(row.get_by_role("button", name="查看详情")).to_be_focused()
+    assert not second_root.exists() and first_root.is_dir()
+    assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+    store.close()
+
+
 def test_run_events_keep_focused_log_and_scroll_position(browser_page, ui_server):
     from playwright.sync_api import expect
 

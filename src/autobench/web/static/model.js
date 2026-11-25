@@ -190,6 +190,7 @@ export const statusLabels = {
   blocked: "已阻塞",
   interrupted: "已中断",
   completed: "已完成",
+  merged: "已合并",
   stopped: "控制端已停止",
 };
 export const statusTone = (status) =>

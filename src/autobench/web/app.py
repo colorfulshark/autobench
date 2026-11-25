@@ -23,7 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from starlette.background import BackgroundTask
 
-from autobench import __version__, services
+from autobench import __version__, history, services
 from autobench.artifacts import UnsafeArtifactPath, result_path
 from autobench.config import (
     Config,
@@ -96,6 +96,10 @@ class InspectionBody(SavedBody):
 
 class ControlBody(Body):
     state_dir: str
+
+
+class MergeRunsBody(ControlBody):
+    run_ids: list[RunID] = Field(min_length=2)
 
 
 class ProbeBody(Body):
@@ -294,6 +298,7 @@ def create_app(
         return redact(value)
 
     operations = Operations(clean)
+    history_active: set[tuple[str, str]] = set()
 
     @asynccontextmanager
     async def lifespan(app):
@@ -349,11 +354,11 @@ def create_app(
         return response
 
     async def failure(request, exc):
-        if isinstance(exc, ConflictError):
+        if isinstance(exc, (ConflictError, history.HistoryConflict)):
             status = 409
         elif isinstance(exc, FileNotFoundError):
             status = 404
-        elif isinstance(exc, PermissionError):
+        elif isinstance(exc, (PermissionError, UnsafeArtifactPath)):
             status = 403
         else:
             status = 422
@@ -370,6 +375,8 @@ def create_app(
         yaml.YAMLError,
         tarfile.TarError,
         AutoBenchError,
+        history.HistoryConflict,
+        UnsafeArtifactPath,
         RequestValidationError,
     ):
         app.add_exception_handler(error, failure)
@@ -518,7 +525,47 @@ def create_app(
         if not (directory / "state.sqlite3").exists():
             return []
         with store_at(str(directory)) as store:
-            return store.runs()
+            history.recover(store)
+            result = store.runs()
+            for item in result:
+                key = (str(store.directory), item["id"])
+                eligible = (
+                    key not in operations.active
+                    and key not in history_active
+                    and history.allowed(store, item["id"], item["status"])
+                )
+                item.update(can_delete=eligible, can_merge=eligible)
+            return result
+
+    @contextmanager
+    def reserve_history(directory: Path, run_ids: list[str]):
+        keys = {(str(directory), run_id) for run_id in run_ids}
+        if keys & (operations.active | history_active):
+            raise history.HistoryConflict("部分运行正在使用，请稍后重试")
+        history_active.update(keys)
+        try:
+            yield
+        finally:
+            history_active.difference_update(keys)
+
+    @app.post("/api/runs/merge", status_code=201)
+    async def merge_runs(body: MergeRunsBody):
+        if len(set(body.run_ids)) != len(body.run_ids):
+            raise HTTPException(422, "请选择不同的运行记录")
+        directory = files.path(body.state_dir)
+
+        def work():
+            with store_at(str(directory)) as store:
+                for run_id in body.run_ids:
+                    try:
+                        remember(json.loads(store.run(run_id)["config"]))
+                    except AutoBenchError:
+                        raise FileNotFoundError(f"运行记录不存在：{run_id}") from None
+                run_id = history.merge(store, body.run_ids, clean)
+                return {"run_id": run_id, "state_dir": str(store.directory)}
+
+        with reserve_history(directory, body.run_ids):
+            return await asyncio.to_thread(work)
 
     @app.post("/api/runs", status_code=202)
     async def run(body: SavedBody):
@@ -547,15 +594,40 @@ def create_app(
                 result["controller_active"] = True
             for job in result["jobs"]:
                 job["reason"] = clean(job["reason"])
+            key = (str(store.directory), run_id)
+            eligible = (
+                not result["controller_active"]
+                and key not in operations.active
+                and key not in history_active
+                and history.allowed(store, run_id, result["status"])
+            )
+            result.update(can_delete=eligible, can_merge=eligible)
             return result
+
+    @app.post("/api/runs/{run_id}/delete")
+    async def delete_run(run_id: RunID, body: ControlBody):
+        directory = files.path(body.state_dir)
+
+        def work():
+            with store_at(str(directory)) as store:
+                return history.delete(store, run_id)
+
+        with reserve_history(directory, [run_id]):
+            return await asyncio.to_thread(work)
 
     @app.post("/api/runs/{run_id}/{action}", status_code=202)
     async def control(
         run_id: RunID, action: Literal["resume", "fetch", "cancel"], body: ControlBody
     ):
         with store_at(body.state_dir) as store:
-            remember(json.loads(store.run(run_id)["config"]))
+            row = store.run(run_id)
             directory = store.directory
+            if row["status"] == "merged":
+                raise HTTPException(409, "合并记录是只读快照")
+            if (str(directory), run_id) in history_active:
+                raise HTTPException(409, "此运行的本地文件正在处理")
+            store.require_executable(run_id)
+            remember(json.loads(row["config"]))
             if action == "cancel":
                 store.request_cancel(run_id)
                 try:
@@ -591,19 +663,27 @@ def create_app(
         after: Annotated[int, Query(ge=0)] = 0,
     ):
         with store_at(state_dir) as store:
-            remember(json.loads(store.run(run_id)["config"]))
-            result = store.events(run_id, after, limit=500)
+            row = store.run(run_id)
+            remember(json.loads(row["config"]))
+            merged = row["status"] == "merged"
+            sources = (
+                {source["key"]: source["run_id"] for source in store.merge_sources(run_id)}
+                if merged
+                else {}
+            )
+            result = store.events(run_id, after, limit=500, with_source=merged)
             for event in result:
                 event["message"] = clean(event["message"])
+                if merged:
+                    event["source_run_id"] = sources[event.pop("source_key")]
             return result
 
     def result_root(run_id: str, state_dir: str | None) -> Path:
         with store_at(state_dir) as store:
-            parsed = store.config(run_id)
-        base = parsed.policy.output_dir.absolute()
+            root = store.result_directory(run_id)
+        base = root.parent
         if any(path.is_symlink() for path in (base, *base.parents)):
             raise HTTPException(403, "结果目录不允许经过符号链接")
-        root = base / run_id
         if root.is_symlink():
             raise HTTPException(403, "结果目录不允许使用符号链接")
         if not root.is_dir():
@@ -622,7 +702,7 @@ def create_app(
     def run_report(run_id: str, state_dir: str | None, baseline: str | None) -> dict:
         root = result_root(run_id, state_dir)
         with store_at(state_dir) as store:
-            config = store.config(run_id)
+            config = None if store.run(run_id)["status"] == "merged" else store.config(run_id)
             jobs = store.jobs(run_id)
         try:
             return build_report(run_id, config, jobs, root, baseline)

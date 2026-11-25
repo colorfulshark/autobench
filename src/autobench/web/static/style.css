@@ -2848,6 +2848,56 @@ main {
 #runs-list tbody tr:hover td {
   background: var(--ui-surface-alt);
 }
+.run-history-actions {
+  margin-block-end: var(--ui-space-3);
+}
+.run-history-actions .hint {
+  margin: 0;
+}
+.run-list-title {
+  display: flex;
+  align-items: center;
+  gap: var(--ui-space-2);
+}
+.run-list-title > div {
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+}
+.run-list-checkbox {
+  display: grid;
+  flex: none;
+  place-items: center;
+  min-inline-size: var(--ui-height-sm);
+  min-block-size: var(--ui-height-sm);
+  cursor: pointer;
+}
+.run-row-actions {
+  justify-content: flex-end;
+}
+#runs-list .run-delete {
+  color: var(--text-secondary);
+}
+#runs-list .run-delete:is(:hover, :focus-visible) {
+  color: var(--ui-error);
+}
+.run-history-targets,
+.run-source-list {
+  padding-inline-start: var(--ui-space-5);
+  overflow-wrap: anywhere;
+}
+.run-history-targets {
+  max-block-size: min(32dvh, 16rem);
+  overflow-y: auto;
+}
+.run-source-list .pill {
+  margin-inline-start: var(--ui-space-2);
+}
+@media (pointer: coarse) {
+  .run-list-checkbox {
+    min-inline-size: var(--ui-height-touch);
+    min-block-size: var(--ui-height-touch);
+  }
+}
 #runs-list .empty {
   padding: 36px 12px;
 }
