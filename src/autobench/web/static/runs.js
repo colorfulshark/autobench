@@ -569,7 +569,6 @@ function renderSelection() {
   status.classList.toggle("warning", Boolean(view.detailError));
 }
 function outcomeHint(detail) {
-  if (detail.status === "merged") return `由 ${detail.sources.length} 条原始运行合并，可查看各来源的结果与日志。`;
   if (
     detail.cancel_requested &&
     !detail.controller_active &&
@@ -676,7 +675,7 @@ function renderDetail() {
   metadata.append(node("span", "", d.run_id), copyId);
   identity.append(identityTitle, metadata);
   overview.append(identity);
-  if (d.status !== "succeeded") {
+  if (!["succeeded", "merged"].includes(d.status)) {
     const message = node(
       "p",
       "callout " + (["failed", "paused"].includes(d.status) ? "warning" : ""),
@@ -741,12 +740,27 @@ function renderDetail() {
   if (d.jobs.length)
     progressFigure.append(node("span", "", `(${Math.floor(complete * 100 / d.jobs.length)}%)`));
   const progress = node("progress", "run-progress");
+  progress.setAttribute("aria-label", "已结束任务");
+  let progressDisplay = progress;
   if (d.jobs.length) {
     progress.max = d.jobs.length;
     progress.value = complete;
+    const previous = reportMounted ? root.querySelector(".run-progress[value]") : null;
+    if (
+      state.page === "runs" &&
+      !terminalRunStatuses.includes(d.status) &&
+      complete < progress.max &&
+      previous?.max === progress.max &&
+      previous.value < complete
+    ) {
+      const meter = node("div", "run-progress-meter");
+      meter.style.setProperty("--run-progress-from", previous.position);
+      meter.style.setProperty("--run-progress-position", progress.position);
+      meter.append(progress);
+      progressDisplay = meter;
+    }
   }
-  progress.setAttribute("aria-label", "已结束任务");
-  progressGroup.append(progressFigure, progress);
+  progressGroup.append(progressFigure, progressDisplay);
   overview.append(progressGroup, stats);
   if (view.artifacts.length) overview.append(archive);
   const current = d.jobs.filter((j) =>

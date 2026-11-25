@@ -1007,7 +1007,7 @@ pre {
   rotate: 90deg;
 }
 @supports selector(details::details-content) and (interpolate-size: allow-keywords) and (interactivity: inert) and (transition-behavior: allow-discrete) {
-  .advanced::details-content {
+  :is(.advanced, #run-detail details)::details-content {
     interpolate-size: allow-keywords;
     block-size: 0;
     overflow: clip;
@@ -1016,12 +1016,16 @@ pre {
     transition: block-size var(--ui-motion-accordion) var(--ui-ease),
       content-visibility var(--ui-motion-accordion) allow-discrete;
   }
-  .advanced[open]::details-content {
+  :is(.advanced, #run-detail details)[open]::details-content {
     block-size: auto;
     interactivity: auto;
   }
-  .advanced[open]:has(.advanced-body :focus)::details-content {
+  :is(.advanced, #run-detail details)[open]:focus-within:not(:has(> summary:focus))::details-content {
     transition: none;
+  }
+  #run-detail [data-sources]::details-content {
+    /* Keep both list margins inside the animated block size. */
+    display: flow-root;
   }
 }
 .advanced-count {
@@ -1539,6 +1543,7 @@ td .secondary {
   border: solid var(--text-accent);
   border-width: 0 2px 2px 0;
   transform: translateY(-50%) rotate(-45deg);
+  transition: transform var(--ui-motion-focus) var(--ui-ease);
   content: "";
 }
 .artifact-folder[open] > summary::before {
@@ -2843,8 +2848,24 @@ main {
 #runs-list th:last-child {
   text-align: right;
 }
-#runs-list tbody tr:hover td {
-  background: var(--ui-surface-alt);
+@media (hover: hover) {
+  #runs-list tbody td {
+    transition: background-color var(--ui-motion-fast) var(--ui-ease);
+  }
+  #runs-list tbody tr:hover td {
+    background-color: var(--ui-hover);
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .run-view {
+    opacity: 1;
+    transition: opacity var(--ui-motion-popup) var(--ui-ease);
+  }
+  @starting-style {
+    .run-view {
+      opacity: 0.8;
+    }
+  }
 }
 .run-history-actions {
   margin-block-end: var(--ui-space-3);
@@ -2939,6 +2960,34 @@ main {
 }
 .run-progress::-moz-progress-bar {
   background: var(--ui-primary);
+}
+@media (forced-colors: none) and (prefers-reduced-motion: no-preference) {
+  .run-progress-meter {
+    position: relative;
+    overflow: hidden;
+    border-radius: var(--ui-radius-tag);
+  }
+  .run-progress-meter > .run-progress::-webkit-progress-value {
+    background-color: transparent;
+  }
+  .run-progress-meter > .run-progress::-moz-progress-bar {
+    background-color: transparent;
+  }
+  .run-progress-meter::after {
+    position: absolute;
+    inset: 0;
+    background-color: var(--ui-primary);
+    transform: scaleX(var(--run-progress-position));
+    transform-origin: left center;
+    transition: transform var(--ui-motion-focus) var(--ui-ease);
+    pointer-events: none;
+    content: "";
+  }
+  @starting-style {
+    .run-progress-meter::after {
+      transform: scaleX(var(--run-progress-from));
+    }
+  }
 }
 .yaml-help > div:first-child {
   flex: 1;
@@ -4141,6 +4190,9 @@ main {
   width: var(--ui-icon-md);
   height: var(--ui-icon-md);
 }
+.run-summary:has(> [data-sources]:last-child) {
+  padding-block-end: 0;
+}
 .run-summary .technical {
   margin: 0;
   padding: 0;
@@ -4201,6 +4253,7 @@ main {
   inline-size: var(--ui-icon-sm);
   block-size: var(--ui-icon-sm);
   transform: rotate(90deg);
+  transition: transform var(--ui-motion-focus) var(--ui-ease);
 }
 .run-monitor-panel[open] > .run-monitor-heading > .run-monitor-chevron {
   transform: rotate(-90deg);
@@ -4302,6 +4355,9 @@ main {
   border-color: transparent;
   background: transparent;
   color: var(--ui-primary-hover);
+}
+.run-events:not([open]) > .run-event-follow {
+  visibility: hidden;
 }
 @container (min-width: 36rem) {
   .run-summary .stat-grid {

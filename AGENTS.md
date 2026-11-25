@@ -1,12 +1,12 @@
 # AGENTS.md
 
-**AutoBench Web UI Design & Engineering Standards · v3.1**
+**AutoBench Web UI Design & Engineering Standards · v3.2**
 
 > 本文件是完整的项目级 Web UI 开发约束；适用于 Coding Agent 与人工开发。具体技术栈、API、目录及测试命令以实际仓库为准。
 
 ## 1. Scope
 
-本文件定义 AutoBench Web UI 的完整设计系统与前端工程规范，包括字体排版、控件、布局、响应式、图标、克制的渐变与动效、交互流程、运行状态、数据可视化、文案、无障碍、安全、性能和测试，适用于所有现有及新增前端页面、共享组件和样式代码。
+本文件定义 AutoBench Web UI 的完整设计系统与前端工程规范，包括字体排版、控件、布局、响应式、图标、克制的渐变与动效、页面切换动画、交互流程、运行状态、数据可视化、文案、无障碍、安全、性能和测试，适用于所有现有及新增前端页面、共享组件和样式代码。
 
 修改 UI 时必须遵循本规范。保持现有业务逻辑、配置语义、数据格式及交互行为不变；不要为了视觉统一而删除功能、改变默认值或引入不必要的依赖。
 
@@ -14,7 +14,7 @@
 
 ## 2. Core rules
 
-**阅读导航：** 3–10 字体与原有验收；11–15 控件、渐变与动效（第 13 节）、CSS；16–19 布局、图标、流程及页面状态；20–24 任务状态、数据、文案与无障碍；25–30 工程、安全、性能、测试及治理；31 参考标准。涉及 UI 的任务必须阅读相关章节，不能只执行视觉部分。
+**阅读导航：** 3–10 字体与原有验收；11–15 控件、渐变与动效（第 13 节，页面切换见 13.6）、CSS；16–19 布局、图标、流程及页面状态；20–24 任务状态、数据、文案与无障碍；25–30 工程、安全、性能、测试及治理；31 参考标准。涉及 UI 的任务必须阅读相关章节，不能只执行视觉部分。
 
 - MUST：保持后端契约、配置默认值、权限及测试调度语义；所有状态、结果和进度必须来自真实数据。
 - MUST：使用共享组件、统一语义 token 和页面布局原语；无障碍、安全、性能与相关回归测试是 UI 改造的一部分。
@@ -28,6 +28,7 @@
 - SHOULD：优先使用 400、500、600 三种字重；700 仅用于品牌或少量重要数据。
 - SHOULD：保持现代、克制、专业的开发者工具风格；通过间距、布局和语义层级建立信息秩序，而不是普遍放大或加粗文字。
 - MUST：渐变与动效遵循第 13 节的白名单及预算；使用公共 token 和组件，保留无动效、纯色及高对比度回退。允许适度视觉活力，但不得牺牲操作速度、信息密度、状态真实性或可访问性。
+- MUST：真实页面导航、向导步骤和内容 Tab 切换采用第 13.6 节统一的轻量过渡；持久化 AppShell 保持稳定。禁止普通渲染、轮询和日志更新触发页面入场动画。减少动画模式和功能性回退优先。
 
 ## 3. Font families
 
@@ -404,7 +405,7 @@ button, input, select, textarea { font: inherit; }
 ### 12.5 Tabs, wizard navigation and accordion
 
 - 顶栏统一浅蓝背景、深蓝文字、浅蓝选中态、蓝色下划线或现有选中标记，不在不同页面切换深色主题。左侧步骤导航顺序：连接机器、选择系统、设置测试、运行设置、检查运行；当前步骤突出蓝色，其他步骤中性，状态用数字/图标/文字明确。
-- 步骤导航保持位置一致，不因内容变长移动；上一步/下一步保持业务校验，不允许通过纯视觉改造绕过校验。适当使用 aria-current="step"；路由导航不滥用 tab role。真实 Tab/Tabpanel 遵循 APG 键盘模式。
+- 步骤导航保持位置一致，不因内容变长移动；上一步/下一步保持业务校验，不允许通过纯视觉改造绕过校验。适当使用 aria-current="step"；路由导航不滥用 tab role。真实 Tab/Tabpanel 遵循 APG 键盘模式；页面、步骤与 Tab 内容切换统一执行第 13.6 节，不在组件内自建路由动效。
 - Accordion 标题 14px/600、行高约 40px，Chevron 指明展开状态，按钮具有 aria-expanded。展开收起不销毁未提交值；有错误的折叠组提供可定位提示。高级设置仅用于确实低频的可选项，不能重复基础配置或隐藏必填错误。机器标签的锁定样式与可编辑样式需清楚区分。
 
 ### 12.6 Card, Table, status tag and data display
@@ -460,7 +461,11 @@ button, input, select, textarea { font: inherit; }
 | Tabs / Step indicator | 160–180ms | 选中标记或背景切换；不滑动整个页面 |
 | Accordion | 180–220ms（默认 200ms） | 局部展开收起，不销毁输入值 |
 | Modal enter / exit | 200ms / 160ms | 淡入、最多 8px 位移；退出优先淡出 |
-| Explicit view transition | 180ms | 可选，仅主要内容区 opacity + 最多 4px 位移 |
+| Route / detail navigation | 180ms | 主内容 Fade Up，opacity + translateY(4px) |
+| Wizard next / previous | 200ms | 主内容方向性淡入，translateX(+8px / -8px)，LTR |
+| Tab panel switch | 150ms | 仅新内容淡入；选中标记仍按上表独立过渡 |
+| File preview drawer enter / exit | 220ms / 160ms | 从右侧进入（LTR），关闭立即处理焦点和交互 |
+| Background refresh / polling | 0ms | 不触发页面级入场或退出动效 |
 | Toast enter / exit | 180ms / 120ms | 淡入、最多 4px 位移；不跳动布局 |
 | Progress update | ≤ 200ms | 平滑跟随真实数据，仅适用于连续更新且不延迟终态 |
 | Spinner cycle | 800–1000ms（默认 900ms） | 仅真实等待期间循环，结束立即停止 |
@@ -474,7 +479,7 @@ button, input, select, textarea { font: inherit; }
 | --- | --- | --- |
 | 输入框、选择器 | 聚焦光晕 160ms；下拉面板 180ms 淡入与 4px 位移；Chevron 旋转 | 双层粗蓝框、点击时放大、焦点出现前延迟 |
 | 按钮、图标按钮、系统行操作 | 120ms 颜色反馈；危险操作使用语义色；Loading 保持按钮尺寸 | 悬停上浮、弹跳、缩放、禁用时仍出现激活动效 |
-| Tab、五步向导 | 选中背景/下划线轻量过渡；显式切换步骤时可对新主内容做一次 180ms 淡入 | 每次表单输入、轮询、刷新或切换筛选时重播入场；动画整套 AppShell |
+| Tab、五步向导 | 选中背景/下划线轻量过渡；步骤切换 200ms 方向性淡入，Tab 内容 150ms 淡入，按 13.6 节执行 | 每次表单输入、轮询、刷新或切换筛选时重播入场；动画整套 AppShell |
 | UnixBench 测试项和组合 | 折叠面板展开、Check/Switch 反馈；已选数量立即更新 | 每个选项依次飞入、动态计数滚动、折叠后清空选择 |
 | 测试计划摘要 | 仅在用户编辑计划导致计数变化时可短暂淡入变化内容，默认直接更新 | 持续跳动数字、动画伪造任务数、整卡闪动 |
 | 连接测试、自动识别、GRUB/EFI 读取 | 请求中显示真实 spinner + 文字；返回成功或失败时直接显示相应图标/文字，允许一次局部淡入 | 成功前预先打勾、持续发光、用动效替代错误说明 |
@@ -498,6 +503,52 @@ button, input, select, textarea { font: inherit; }
 - 新增渐变或动效必须属于上述白名单，复用已有 token，并有明确的信息层级或交互反馈目的；业务功能、配置含义和操作响应时间不变。超出预算或引入新颜色、时间尺度、动画库，需要说明理由并更新统一规范，不在单页私自扩展。
 - 视觉验收同时检查连接机器、系统设置、设置测试、检查运行、运行记录和运行详情等受影响页面，保证统一浅蓝顶栏、白色主体、清晰的主次层级。既要检查静态截图，也要实际操作下拉、折叠、切换步骤和异步反馈；不以 AI 效果图代替浏览器验证。
 - 最少覆盖默认/hover/focus/active/disabled、打开/关闭、快速重复操作、键盘、reduced-motion、forced-colors（支持时），以及真实加载结束、错误/取消、轮询刷新。报告实际执行结果和未验证项。
+
+### 13.6 Page transitions and navigation motion
+
+目标：点击导航或按钮切换页面时，提供短暂、自然、可预测的视觉连续性；静态布局及长期使用的专业感优先。页面过渡为共享导航能力，而不是页面私有装饰。除减少动画偏好或兼容性、性能等明确回退情况外，真实视图切换 MUST 使用以下默认策略。
+
+#### 13.6.1 Scenario matrix
+
+| Scenario | Duration | Motion / scope |
+| --- | --- | --- |
+| 顶部导航：测试配置 ↔ 运行记录 | 180ms | 新主内容 Fade Up，opacity 0 → 1，translateY(4px) → 0 |
+| 系统列表 ↔ 系统详情、运行列表 ↔ 运行详情 | 180ms | 同一 Fade Up，不重复播放持久化外壳动效 |
+| 五步向导：下一步 / 前进 | 200ms | opacity 0 → 1，translateX(+8px) → 0（LTR） |
+| 五步向导：上一步 / 后退 | 200ms | opacity 0 → 1，translateX(-8px) → 0（LTR） |
+| 报告 / 日志 / 事件等实际存在的内容 Tab | 150ms | 仅新 Tabpanel 淡入；无位移 |
+| 文件预览 Drawer | 入场 220ms，退场 160ms | 从右侧滑入（LTR），遮罩按浮层语义淡入/淡出 |
+| 文件选择器 Modal | 入场 200ms，退场 160ms | 淡入 + 向上移动最多 8px；退出优先淡出 |
+| 高级设置等 Accordion | 默认 200ms | 仅本地内容展开/收起，保留输入 |
+| 轮询、日志、进度、筛选、排序、分页、表单输入 | 0ms 页面动效 | 保持当前视图；允许第 13.2 节规定的局部状态反馈 |
+
+- 入场统一复用 `--ui-ease`（`cubic-bezier(.2,0,0,1)`），退场复用 `--ui-ease-exit`。时长和位移只由第 14 节 token 管理。默认采用新内容单次入场，不强制先播放旧页面退场；可选的 crossfade 应在同一过渡时间预算内完成，不叠加等待时间。
+- 向导方向由实际步骤索引或明确的导航意图决定，不按 URL 字符串排序或组件渲染次数猜测。RTL 环境按逻辑方向镜像（若项目支持）；普通跨模块路由默认 Fade Up，而非任意左右滑动。
+- Drawer 是现有浮层的例外，可从实际停靠边缘完整滑入；页面及步骤主体位移不得超过 4px / 8px。不得为了应用动效新增不存在的 Tab、Drawer 或业务功能。
+
+#### 13.6.2 Animation boundary and navigation lifecycle
+
+- MUST：全局顶栏、AppShell 背景、仍存在的步骤导航与测试计划摘要保持稳定，不能整页重挂载或闪烁。只动画发生替换的 route outlet、step content 或 Tabpanel 内部内容；导航自身可更新选中背景、下划线与步骤标记。持久化侧栏不得随内容滑动。
+- MUST：使用现有路由器/导航机制的已确认视图切换事件或稳定的视图身份（route/step/tab + 必要资源 ID）。同一视图重复点击、校验未通过、被取消的导航、普通组件 render、query/filter 更新、后端轮询和日志追加不得重播页面动画。不同运行 ID 等确实替换主视图的导航可以触发一次。首次直接打开或浏览器刷新默认不额外播放路由入场。
+- MUST：动画仅用于视觉表现，不能等待 animationend、transitionend、任意 timeout 或 View Transition 完成才执行校验、路由提交、网络请求、表单状态保存、焦点恢复或可访问状态更新。异步数据按第 19、26 节加载，禁止以动画掩盖真实等待；骨架屏替换为数据时不重复播放页面入场。
+- MUST：快速连续导航 A → B → C、浏览器前进/后退、Esc 关闭浮层等必须可中断并遵循最新有效导航。取消或替换旧动画，清理临时 class、监听器、快照和资源引用；不得出现陈旧页面重新显示、退出层遮挡点击、重复提交、丢失输入或遗留透明/位移状态。
+- 保持原有路由历史、未保存更改保护、步骤校验、筛选和滚动恢复规则。新详情按现有导航语义定位，返回列表恢复滚动和合理焦点；Tab 切换不强制滚至页面顶端。文档标题、aria-current、aria-selected、焦点与页面真实语义立即同步。不要将焦点移入已退出或隐藏的 DOM，也不要因后台数据更新抢焦点。
+- 动画容器选在不会破坏 sticky/fixed 定位、portal 浮层、滚动根及长表格的内容内层；避免长期设置 transform、overflow:hidden 或 will-change。新旧页面不得同时参与正常布局或产生双重可访问内容；旧快照仅用于装饰，不可交互。滚动条、卡片宽高和背景保持稳定，不因动画产生横向溢出或可见布局跳动。
+
+#### 13.6.3 Implementation and progressive enhancement
+
+- 默认使用第 14 节的共享 CSS keyframes 和语义 token，结合现有技术栈在导航确认后触发一次。优先共享 PageTransition/RouteOutlet/WizardLayout/Tabpanel 或等效机制，保持现有框架生命周期；不要创建平行路由器或为每个页面复制动画。禁止为了简单过渡新增动画库。
+- MAY：现有路由框架和目标浏览器支持时，使用 `document.startViewTransition()` 改善新旧内容的视觉连续性。必须特性检测并遵循减少动画偏好；仅在实际 DOM 提交可协调且不会影响交互、焦点和敏感内容时使用。限制快照和动画在实际变化的内容区域，避免默认 root crossfade 让顶栏或背景一起闪动；为命名的过渡元素使用唯一 `view-transition-name`，不要捕获密码等敏感区域。
+- View Transition API 不可用、过渡被跳过或捕获失败时，保留同一导航结果并安全回退至共享 CSS 入场或直接切换；禁止重复执行有副作用的导航/提交回调。若框架提供原生路由过渡集成则优先复用。API 路径与 CSS 入场互斥，不叠加两套动画；不得等待过渡结束才允许下一次导航。必要时跳过旧的活跃过渡（如受支持的 `skipTransition()`），业务导航仍按正常流程处理。
+- MUST：`prefers-reduced-motion: reduce` 下页面、步骤、Tab、Drawer 和 Modal 的非必要入场/退出及位移全部取消；仍保留导航反馈、真实加载提示、焦点及完整功能。forced-colors 模式保留清晰边界与选中态。浏览器不支持动画时直接切换必须完全可用。
+
+#### 13.6.4 Navigation motion acceptance
+
+- [ ] 顶部两个模块、五步向导前进/后退、列表与详情、实际存在的报告/日志 Tab、文件预览和文件选择器均按场景规则验证；持久化 AppShell 无重复动画。
+- [ ] 快速 A → B → C、连续点击、浏览器前进/后退、校验阻止跳转、未保存配置取消导航及异步加载，不出现陈旧页面、重复动效或操作延迟。
+- [ ] 轮询、日志刷新、进度、表格筛选/分页、普通渲染均不触发页面动效；原有表单、选择、焦点和滚动恢复行为保持正确。
+- [ ] 默认 CSS、减少动画模式和不支持 View Transition API 的回退路径功能等价；采用可选 API 时另测跳过/中断/失败，验证不会双重执行导航或叠加动画。
+- [ ] 在代表性桌面、窄屏、高倍率缩放及长报告/大日志数据下验证无布局抖动、横向溢出、遮挡焦点或明显性能回退；静态视觉截图固定动效状态，正常动效另做行为测试。
 
 ## 14. Component Design Tokens and reference CSS
 
@@ -567,6 +618,13 @@ button, input, select, textarea { font: inherit; }
   --ui-motion-accordion: var(--ui-motion-modal);
   --ui-motion-exit: var(--ui-motion-fast);
   --ui-motion-spinner: 900ms;
+  /* Navigation motion: reuse existing timing/offset primitives. */
+  --ui-motion-page: var(--ui-motion-popup); /* 180ms */
+  --ui-motion-step: var(--ui-motion-modal); /* 200ms */
+  --ui-motion-tab: 150ms;
+  --ui-motion-drawer: 220ms;
+  --ui-motion-drawer-exit: var(--ui-motion-focus); /* 160ms */
+  --ui-motion-modal-exit: var(--ui-motion-focus); /* 160ms */
   --ui-motion-offset-sm: 4px;
   --ui-motion-offset-md: 8px;
   --ui-ease-exit: cubic-bezier(.4,0,1,1);
@@ -717,16 +775,72 @@ button, input, select, textarea { font: inherit; }
 .ui-motion-enter[data-entering="true"] {
   animation: ui-enter-soft var(--ui-motion-popup) var(--ui-ease) both;
 }
+/* Page/step/tab motion: set only after a real committed navigation.
+   Apply to a shared content inner wrapper, not the AppShell or sticky root.
+   Remove the transient attribute/class on completion or interruption;
+   this cleanup is visual only, never a prerequisite for navigation. */
+@keyframes ui-step-enter {
+  from { opacity: 0; transform: translateX(var(--ui-step-enter-x)); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes ui-tab-enter {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.ui-page-content[data-navigation-motion="page"] {
+  animation: ui-enter-soft var(--ui-motion-page) var(--ui-ease) both;
+}
+.ui-page-content[data-navigation-motion="forward"] {
+  --ui-step-enter-x: var(--ui-motion-offset-md);
+}
+.ui-page-content[data-navigation-motion="backward"] {
+  --ui-step-enter-x: calc(-1 * var(--ui-motion-offset-md));
+}
+.ui-page-content[data-navigation-motion="forward"],
+.ui-page-content[data-navigation-motion="backward"] {
+  animation: ui-step-enter var(--ui-motion-step) var(--ui-ease) both;
+}
+.ui-page-content[data-navigation-motion="tab"] {
+  animation: ui-tab-enter var(--ui-motion-tab) var(--ui-ease) both;
+}
+/* Optional RTL direction support (if the application supports RTL). */
+[dir="rtl"] .ui-page-content[data-navigation-motion="forward"] {
+  --ui-step-enter-x: calc(-1 * var(--ui-motion-offset-md));
+}
+[dir="rtl"] .ui-page-content[data-navigation-motion="backward"] {
+  --ui-step-enter-x: var(--ui-motion-offset-md);
+}
+/* Drawer: use the existing overlay lifecycle, not a route animation. */
+@keyframes ui-drawer-enter {
+  from { transform: translateX(100%); }
+  to { transform: none; }
+}
+@keyframes ui-drawer-exit {
+  from { transform: none; }
+  to { transform: translateX(100%); }
+}
+.ui-file-drawer[data-motion="enter"] {
+  animation: ui-drawer-enter var(--ui-motion-drawer) var(--ui-ease) both;
+}
+.ui-file-drawer[data-motion="exit"] {
+  animation: ui-drawer-exit var(--ui-motion-drawer-exit) var(--ui-ease-exit) both;
+}
+
 @media (prefers-reduced-motion: reduce) {
   :root {
     --ui-motion-fast: 0ms;
     --ui-motion-focus: 0ms;
     --ui-motion-popup: 0ms;
     --ui-motion-modal: 0ms;
+    --ui-motion-tab: 0ms;
+    --ui-motion-drawer: 0ms;
+    /* Page, step and exit aliases resolve to zero via the base tokens. */
     --ui-motion-offset-sm: 0px;
     --ui-motion-offset-md: 0px;
   }
-  .ui-motion-enter[data-entering="true"] {
+  .ui-motion-enter[data-entering="true"],
+  .ui-page-content[data-navigation-motion],
+  .ui-file-drawer[data-motion] {
     animation: none;
     opacity: 1;
     transform: none;
@@ -754,6 +868,8 @@ button, input, select, textarea { font: inherit; }
 
 注意：CSS 的 aria-disabled 选择器只提供视觉效果；自定义控件仍必须阻止禁用操作。Select 活动项的属性应映射所选组件库的真实状态。复合控件内独立按钮的键盘焦点仍需单独可辨识，且不能重复给整个输入框描边。原生控件保留可见的焦点反馈，除非有验证过的替代样式。
 
+页面切换示例中的 `data-navigation-motion` 由现有路由/步骤/Tab 生命周期驱动，不是永久挂在页面上的样式。若采用可选 View Transition API，必须按 13.6.3 处理 DOM 提交、过渡范围与回退，并禁用该次 CSS 入场；Drawer 示例以右侧停靠、LTR 为基准，其他停靠方向按实际布局适配。退出元素在动效期间不可交互，减少动画或过渡中断时也要完成实际关闭及视觉清理。以上 CSS 不替代路由、焦点、历史或浮层生命周期实现。
+
 ## 15. Component acceptance criteria
 
 本节补充第 10 节验收流程，Agent 必须按实际改动范围检查，不能因仅修改 CSS 就跳过交互回归。
@@ -768,6 +884,7 @@ button, input, select, textarea { font: inherit; }
 - [ ] 加载态防重复提交、错误保留配置、运行状态和进度来自实际数据；不泄露密码/密钥；原有权限、API 和配置格式不变。
 - [ ] reduced-motion 下无非必要动画，forced-colors 下焦点与状态清晰；关键文字、触控区域满足第 10 节要求。
 - [ ] 渐变仅在第 13 节白名单及视觉预算内使用；最浅背景处对比度合格，静态/纯色回退正常；动画可中断、无装饰性循环、无重复入场、无业务响应延迟。
+- [ ] 页面、步骤、Tab 与文件预览切换通过第 13.6.4 节验收；共用动效 tokens、持久外壳稳定、快速导航及回退正常。
 - [ ] 在 1280/1440/1920px、窄屏、200% 缩放检查布局；若目标为 WCAG AA，另验证适用的 320 CSS px 重排要求（确需二维布局的内容允许标准例外）。检查支持的 Chromium/Firefox/Safari（可用时），必要时记录 OS 差异。
 - [ ] 执行已有 lint、类型检查、组件/端到端测试与构建；有浏览器测试能力时保存关键状态截图。报告实际执行结果、未验证项与原因，不声称未做过的测试已通过。
 
@@ -810,7 +927,7 @@ button, input, select, textarea { font: inherit; }
 
 - 在 320 CSS px 等效宽度下验证适用的 WCAG 重排；数据表、图表等必要二维内容使用局部可操作滚动，不能以此为由让整个表单横向滚动。
 - 用户 200% 文本缩放、浏览器 400% 页面缩放/320 CSS px 测试分别验证，不混为同一要求。支持系统大字体、触屏及高 DPI；控件允许增高，截断值提供完整查看。抽屉/摘要折叠不丢失数据或阻断提交。
-- 宽屏表单使用内容宽度上限而非无意义的满宽控件；弹窗使用 `max-inline-size` 和 `max-block-size`，避免固定高宽导致裁剪。页面跳转和锚点考虑 sticky 高度（如 `scroll-margin-block-start`）。
+- 宽屏表单使用内容宽度上限而非无意义的满宽控件；弹窗使用 `max-inline-size` 和 `max-block-size`，避免固定高宽导致裁剪。页面跳转和锚点考虑 sticky 高度（如 `scroll-margin-block-start`）。页面切换动画仅作用于变化的内容内层，不改变共享 AppShell 和滚动根的身份，遵循第 13.6 节。
 
 ## 17. Iconography and visual asset standards
 
@@ -859,6 +976,8 @@ button, input, select, textarea { font: inherit; }
 - EFI 和 GRUB 是不同层次的选择，不假定必定存在 GRUB 或每个 EFI 启动项对应同一 GRUB 菜单。是否启用、加载来源、默认值、可选项、系统关联及切换后的失效规则必须依据真实后端能力；手动值与自动探测值须区分，自动识别不得静默覆盖用户配置。
 - 自动识别、批量操作、删除、取消或重试明确对象和影响。影响真实服务器或运行中的任务时，遵循权限和确认策略。保持操作后焦点、筛选、选中项合理；若删除当前项，移至邻近有效项。确认后避免双击/Enter 产生重复请求。
 - MUST NOT：仅为 UI 演示发送重启、运行、取消、删除等真实操作，或为了让界面显得完整而造成功连接、测试结果、启动项、进度或后台能力。使用隔离 fixture 验证。
+
+- 页面切换与返回按第 13.6 节执行：先遵循原有校验和未保存配置保护，再对已确认的视图切换提供一次视觉反馈；不得通过动效改变保存、提交、历史导航或远端任务的语义。
 
 ## 19. Page states, feedback and error recovery
 
@@ -1007,7 +1126,7 @@ MUST：先检查后端调度器、状态枚举、事件及 API 契约，建立�
 ### 25.2 Token governance
 
 - 全局 token 分为 primitive（基础色值/数值）、semantic（主色、表面、状态、焦点）、component alias（控件实际使用语义）。允许现有 `--ui-*` 与 `--text-*` 作为语义层；不要求为迁移而复制两套变量。组件消费语义 token 而非随意色值；不要用 token 名称掩盖多个实际来源。
-- 统一命名、定义位置和作用域；第 8、14 节为参考实现，应合并到同一现有主题入口；渐变与动效 token 遵循第 13 节，不在页面层复制。新增 token 必须解释用途、检查已有等价 token、补充组件状态及测试。变更全局 token 评估所有消费组件影响，视觉基准变更需明确审核。
+- 统一命名、定义位置和作用域；第 8、14 节为参考实现，应合并到同一现有主题入口；渐变与动效 token 遵循第 13 节，不在页面层复制。页面、步骤、Tab、Drawer 的过渡通过第 14 节语义别名及共享导航/浮层组件统一实现，禁止独立硬编码。新增 token 必须解释用途、检查已有等价 token、补充组件状态及测试。变更全局 token 评估所有消费组件影响，视觉基准变更需明确审核。
 - 布局建议额外提供 `--ui-header-height: 4rem`、`--ui-sidebar-width: 14rem`、`--ui-plan-width: 18.75rem`、`--ui-shell-gap: var(--ui-space-6)`、`--ui-page-padding: var(--ui-space-6)`；断点由现有主题或 CSS media query 统一维护，不能指望普通 CSS custom property 直接用于 media query 条件。图表序列色与状态色分离。主题扩展优先通过语义 token 重映射，为未来深色主题预留结构，但本版本不要求实现深色主题。
 - CSS 使用现有模块、作用域或 utility 体系；全局 reset 仅限必要行为，避免全局选择器误伤第三方/原生组件。禁止滥用 `!important`、深层选择器、任意 z-index、重复覆盖及行内硬编码（动态几何或第三方 API 等确需情况应说明）。优先逻辑属性、flex/grid、min-width:0 和可扩展高度；CSS 断点、token 与组件 API 维持一致。
 
@@ -1051,6 +1170,8 @@ MUST：先检查后端调度器、状态枚举、事件及 API 契约，建立�
 - 桌面优先，兼顾 Windows、macOS、Linux。建议验证当前及前一稳定版 Chromium/Edge、Firefox、Safari（Safari 以 macOS/iOS 实际环境为准）；真实支持矩阵由项目已有目标环境决定，不凭空声称测试通过。无环境时记录未验证项。
 - 使用标准 Web API 和现有构建目标；必要时特性检测、渐进增强或现有 polyfill。系统字体、原生控件、滚动条、输入法、剪贴板和下载行为可能跨平台不同，确保功能等价而非像素完全一致。不要依赖仅 Chromium 支持的能力作为唯一关键路径。
 
+- 页面切换默认采用共享 CSS，View Transition API 仅作为渐进增强并做特性检测；验证 API 不支持或过渡跳过时导航仍正常。对长报告、日志、固定表头和大列表验证过渡不引入明显合成/快照开销（第 13.6 节）。
+
 ## 29. Automated testing, visual regression and release acceptance
 
 ### 29.1 Test layers and fixtures
@@ -1067,6 +1188,8 @@ MUST：先检查后端调度器、状态枚举、事件及 API 契约，建立�
 
 - 使用项目已有测试框架及脚本；如已有 Playwright 可使用 `expect(page).toHaveScreenshot()`，没有则评估现有等效能力，不擅自引入大型测试框架。选择器优先 role/name/label，必要时使用稳定 test ID；不要依赖内部 CSS 类名、任意 sleep 或脆弱 DOM 层级。断言实际行为、值、请求与状态，而不仅是截图。
 - 使用确定性、脱敏 fixtures；冻结时间、随机数据及异步响应顺序，覆盖极端长路径、多个系统、空列表、大量日志、缺失/失败样本、不同并发值。不得使用真实凭据、真实生产任务或真实重启作为默认自动化测试。验证取消请求中与真实取消终态区别、SSH 重启阶段与网络故障区别。
+
+- 导航动效测试覆盖真实 route/step/tab 切换、快速连续导航、浏览器前进/后退、减少动画、无 API 回退、校验阻止导航与轮询不重播。断言最终视图、焦点、草稿、滚动位置、请求次数及无陈旧动画状态；避免依赖固定 sleep 或逐帧像素完全一致。可选 View Transition 路径另验证中断和失败不重复提交。
 
 ### 29.2 Visual reference workflow
 
@@ -1087,7 +1210,7 @@ MUST：先检查后端调度器、状态枚举、事件及 API 契约，建立�
 - [ ] 适用页面状态、错误恢复、键盘、屏幕阅读器、文本缩放、重排、对比度、触控与减少动画要求已检查。
 - [ ] API 契约、权限、密钥检查默认值、数据格式不变；不泄露凭据，不执行不可信日志或未经授权的真实服务器操作。
 - [ ] 代表性数据下无明显性能回退、重复轮询、监听器泄漏或布局跳动；兼容性检查结果如实记录。
-- [ ] 渐变/动效改动通过第 13.5 节验收；正常动效、快速连续操作、减少动画偏好及静态截图分别验证，不影响真实进度、焦点或请求语义。
+- [ ] 渐变/动效改动通过第 13.5 节验收；正常动效、快速连续操作、减少动画偏好及静态截图分别验证，不影响真实进度、焦点或请求语义。页面切换另执行第 13.6.4 节，验证固定外壳、正常/快速导航、历史恢复和减少动画/兼容性回退。
 - [ ] 执行项目已有 lint、类型检查、单元/组件/集成/E2E 测试及 build（按存在的命令及影响范围），保存必要截图及测试证据。
 - [ ] 最终报告列出改动文件、复用组件/token、行为影响、运行过的命令及结果、视觉验收证据、未验证项及原因。不得把计划执行的测试描述成已通过。
 

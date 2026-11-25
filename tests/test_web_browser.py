@@ -769,6 +769,8 @@ def test_reload_restores_only_reachable_config_step(browser_page, ui_server):
 
 
 def test_run_detail_returns_to_filtered_list(browser_page, ui_server):
+    from playwright.sync_api import expect
+
     from autobench.storage import Store
 
     page, server = browser_page, ui_server
@@ -781,6 +783,9 @@ def test_run_detail_returns_to_filtered_list(browser_page, ui_server):
     page.locator("#run-search").fill(run_id)
     page.locator("#run-filter").select_option("failed")
     row_action = page.get_by_role("button", name="查看详情", exact=True)
+    cell = history_row(page, run_id).get_by_role("cell").first
+    page.mouse.move(0, 0)
+    resting_color = cell.evaluate("el => getComputedStyle(el).backgroundColor")
     row_action.click()
     assert page.locator("#runs-overview").is_hidden()
     assert page.evaluate("document.activeElement.id") == "back-to-runs"
@@ -789,10 +794,68 @@ def test_run_detail_returns_to_filtered_list(browser_page, ui_server):
     assert page.locator("#run-search").input_value() == run_id
     assert page.locator("#run-filter").input_value() == "failed"
     assert row_action.evaluate("e => e === document.activeElement")
+    page.mouse.move(0, 0)
+    expect(cell).to_have_css("background-color", resting_color)
     page.locator("#run-search").fill("no-match")
     page.get_by_role("button", name="清除筛选", exact=True).click()
     assert page.locator("#run-filter").input_value() == ""
     assert row_action.is_visible()
+
+
+@pytest.mark.parametrize(
+    "motion,colors", [("no-preference", "none"), ("reduce", "none"), ("reduce", "active")]
+)
+def test_run_view_fades_follow_navigation(browser_page, ui_server, motion, colors):
+    from playwright.sync_api import expect
+
+    from autobench.storage import Store
+
+    page, server = browser_page, ui_server
+    page.emulate_media(reduced_motion=motion, forced_colors=colors)
+    store = Store(server.config.policy.state_dir)
+    try:
+        run_id = store.create(server.config)
+        store.set_run_status(run_id, "failed")
+    finally:
+        store.close()
+    ready(page, server, startup_path=server.existing)
+    page.locator("#page-runs").evaluate(
+        """panel => panel.addEventListener('transitionrun', event => {
+            if (event.propertyName === 'opacity' && event.target.matches('.run-view')) {
+                const view = event.target;
+                view.dataset.fades = Number(view.dataset.fades || 0) + 1;
+            }
+        })"""
+    )
+
+    page.get_by_role("tab", name="运行记录").click()
+    history = page.locator("#runs-overview")
+    row_action = history.get_by_role("button", name="查看详情", exact=True)
+    if motion == "no-preference":
+        expect(history).to_have_attribute("data-fades", "1")
+    row_action.click()
+    detail = page.locator("#run-detail")
+    expect(detail.get_by_text(run_id, exact=True)).to_be_visible()
+    if motion == "no-preference":
+        expect(detail).to_have_attribute("data-fades", "1")
+    else:
+        assert detail.get_attribute("data-fades") is None
+        expect(detail).to_have_css("opacity", "1")
+    if colors == "active":
+        expect(detail.get_by_role("progressbar", name="已结束任务")).to_have_css(
+            "appearance", "auto"
+        )
+
+    page.get_by_role("button", name="返回运行列表", exact=True).press("Enter")
+    expect(row_action).to_be_focused()
+    expect(row_action).to_have_css("outline-style", "solid")
+    if motion == "no-preference":
+        expect(history).to_have_attribute("data-fades", "2")
+    expect(history).to_have_css("opacity", "1")
+    page.get_by_label("搜索运行", exact=True).fill("no-match")
+    expect(history.get_by_text("没有匹配的运行记录", exact=True)).to_be_visible()
+    assert not history.evaluate("el => el.getAnimations().length")
+    assert history.get_attribute("data-fades") == ("2" if motion == "no-preference" else None)
 
 
 @pytest.mark.parametrize("key", ["config", "runs"])
@@ -917,7 +980,7 @@ def test_readable_run_names_and_nested_downloads(
     result.parent.mkdir(parents=True)
     result.write_text("readable archive result\n" * 300)
     page.set_viewport_size({"width": width, "height": 844})
-    page.emulate_media(reduced_motion="no-preference")
+    page.emulate_media(reduced_motion="reduce")
     if text_size == 200:
 
         def apply_text_zoom(route):
@@ -931,6 +994,7 @@ def test_readable_run_names_and_nested_downloads(
     row.get_by_role("button", name="查看详情", exact=True).click()
     page.locator("#run-detail").get_by_text(run_id, exact=True).wait_for()
     open_artifact_folder(page, PurePosixPath(relative).parent)
+    page.emulate_media(reduced_motion="no-preference")
     artifact = page.locator(".artifact-row").filter(has_text=filename)
     preview = artifact.get_by_role("button", name="预览", exact=True)
     drawer = page.get_by_role("dialog", name=filename)
@@ -1078,10 +1142,11 @@ def test_run_artifact_tree_groups_file_paths_and_keeps_expansion(browser_page, u
     assert common.locator("strong").text_content() == "build.stdout"
     first_log = first_folder.get_by_role("button", name="预览", exact=True)
     second_log = second_folder.get_by_role("button", name="预览", exact=True)
-    assert first_log.is_visible() and second_log.is_hidden()
+    first_log.wait_for(state="visible")
+    assert second_log.is_hidden()
     reports = artifact_folder(page, f"{first}/results")
     reports.locator(":scope > summary").click()
-    assert reports.get_by_text(report_name, exact=True).is_visible()
+    reports.get_by_text(report_name, exact=True).wait_for(state="visible")
     assert reports.get_by_role("link", name="下载", exact=True).is_visible()
     assert reports.get_by_role("button", name="预览", exact=True).count() == 0
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
@@ -4505,6 +4570,7 @@ def test_run_history_delete_and_merge(browser_page, ui_server, width, zoom):
     expect(page.get_by_role("heading", name="运行详情", exact=True)).to_be_visible()
     detail = page.locator("#run-detail")
     expect(detail.get_by_text("已合并", exact=True)).to_be_visible()
+    expect(detail.locator(".run-summary > .callout")).to_have_count(0)
     expect(detail.locator(".run-monitor-panel:not([open])")).to_have_count(2)
     sources = page.get_by_text("来源记录", exact=True)
     sources.click()
@@ -4651,6 +4717,89 @@ def test_run_detail_opens_task_and_event_panels_for_unsuccessful_runs(
     expect(page.get_by_label("运行事件日志")).to_be_visible()
 
 
+@pytest.mark.parametrize(
+    "width,motion", [(1440, "no-preference"), (390, "no-preference"), (390, "reduce")]
+)
+def test_run_detail_disclosures_animate_open_and_closed(browser_page, ui_server, width, motion):
+    page, server = browser_page, ui_server
+    page.set_viewport_size({"width": width, "height": 850})
+    page.emulate_media(reduced_motion=motion)
+    runs = [report_history(server), report_history(server)]
+    merged = page.request.post(
+        f"{server.url}/api/runs/merge",
+        data={"state_dir": str(server.config.policy.state_dir), "run_ids": runs},
+    )
+    assert merged.ok, merged.text()
+    ready(page, server, startup_path=server.existing)
+    page.get_by_role("tab", name="运行记录").click()
+    history_row(page, merged.json()["run_id"]).get_by_role("button", name="查看详情").click()
+    root = page.locator("#run-detail")
+    root.locator(".report-warnings").wait_for()
+    root.locator(".artifact-folder").first.wait_for()
+
+    for name in [
+        "[data-sources]",
+        "[data-matrix]",
+        "[data-events]",
+        ".report-warnings",
+        ".artifact-folder",
+        ".file-location",
+    ]:
+        states = root.locator(name).first.evaluate(
+            """async disclosure => {
+                // Reveal any ancestor folders before sampling a nested file location.
+                for (let parent = disclosure.parentElement.closest('details');
+                     parent; parent = parent.parentElement.closest('details')) parent.open = true;
+                const summary = disclosure.querySelector(':scope > summary');
+                const style = () => getComputedStyle(disclosure, '::details-content');
+                const size = () => parseFloat(style().blockSize);
+                const nextPanel = disclosure.closest('.run-summary')?.nextElementSibling;
+                const nextFrame = () => new Promise(requestAnimationFrame);
+                await nextFrame();
+                const states = [];
+                for (let action = 0; action < 2; action++) {
+                    const offsets = [];
+                    const sample = () => {
+                        const height = size();
+                        if (nextPanel)
+                            offsets.push(nextPanel.getBoundingClientRect().top + scrollY - height);
+                        return height;
+                    };
+                    const before = sample();
+                    summary.click();
+                    const immediate = sample();
+                    const start = performance.now();
+                    const frames = [];
+                    while (performance.now() - start < 250) {
+                        await nextFrame();
+                        frames.push(sample());
+                    }
+                    const after = sample();
+                    const low = Math.min(before, after), high = Math.max(before, after);
+                    states.push({
+                        open: disclosure.open,
+                        before, immediate, after,
+                        intermediate: frames.some(frame => frame > low && frame < high),
+                        extraShift: offsets.length ? Math.max(...offsets) - Math.min(...offsets) : 0,
+                    });
+                }
+                return states;
+            }"""
+        )
+        assert {state["open"] for state in states} == {True, False}, name
+        for state in states:
+            assert state["extraShift"] == pytest.approx(0, abs=1), name
+            if state["open"]:
+                assert state["after"] > state["before"], name
+            else:
+                assert state["after"] == 0, name
+            if motion == "reduce":
+                assert state["immediate"] == state["after"], name
+                assert not state["intermediate"], name
+            else:
+                assert state["intermediate"], name
+
+
 @pytest.mark.parametrize("width", [1440, 390])
 def test_run_events_keep_focused_log_and_scroll_position(browser_page, ui_server, width):
     from playwright.sync_api import expect
@@ -4699,6 +4848,12 @@ def test_run_events_keep_focused_log_and_scroll_position(browser_page, ui_server
     page.locator("#run-detail").evaluate(
         """el => {
             el.addEventListener('animationstart', () => el.dataset.pollAnimation = 'true');
+            el.addEventListener('transitionrun', event => {
+                if (event.propertyName === 'transform' && event.pseudoElement === '::after'
+                    && event.target.matches('.run-progress-meter')) {
+                    el.dataset.progressTransitions = Number(el.dataset.progressTransitions || 0) + 1;
+                }
+            });
         }"""
     )
     events.append({"sequence": 81, "time": 1700000000, "message": "新事件 081"})
@@ -4708,6 +4863,7 @@ def test_run_events_keep_focused_log_and_scroll_position(browser_page, ui_server
     finally:
         store.close()
     expect(page.get_by_role("progressbar", name="已结束任务")).to_have_attribute("value", "1")
+    expect(page.locator("#run-detail")).to_have_attribute("data-progress-transitions", "1")
     expect(log).to_contain_text("新事件 081")
     expect(log).to_be_focused()
     assert log.evaluate("el => el.scrollTop") == 0
@@ -4727,5 +4883,6 @@ def test_run_events_keep_focused_log_and_scroll_position(browser_page, ui_server
     finally:
         store.close()
     expect(page.locator(".run-identity").get_by_text("成功", exact=True)).to_be_visible()
+    assert page.locator("#run-detail").get_attribute("data-progress-transitions") == "1"
     expect(tasks).to_be_visible()
     expect(log).to_be_visible()
