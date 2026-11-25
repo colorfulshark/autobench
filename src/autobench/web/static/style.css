@@ -2790,6 +2790,7 @@ main {
 .plan-heading h2 {
   margin: 0;
   font-size: var(--text-md);
+  overflow-wrap: anywhere;
 }
 .plan-heading .icon-heading .icon {
   color: inherit;
@@ -2838,7 +2839,8 @@ main {
 #run-count {
   white-space: nowrap;
 }
-#run-detail .section-heading .hint {
+#run-detail .section-heading .hint,
+.run-summary > .section-heading h2 {
   overflow-wrap: anywhere;
 }
 #runs-list td:last-child,
@@ -2859,8 +2861,25 @@ main {
   align-items: center;
   gap: var(--ui-space-2);
 }
-.run-list-title > div {
+.run-plan-heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--ui-space-1);
   min-inline-size: 0;
+  overflow-wrap: anywhere;
+}
+.run-plan-name {
+  min-inline-size: 0;
+  white-space: normal;
+}
+.run-rename {
+  flex: none;
+  color: var(--ui-primary-hover);
+  border-color: transparent;
+  background: transparent;
+}
+#run-rename-target {
   overflow-wrap: anywhere;
 }
 .run-list-checkbox {

@@ -11,6 +11,7 @@ import {
   table,
   date,
   empty,
+  friendlyError,
   perform,
 } from "./ui.js";
 import { chooseFile } from "./files.js";
@@ -25,6 +26,7 @@ const view = {
   checked: new Set(),
   historyAction: null,
   historyBusy: false,
+  renameAction: null,
   listSynced: 0,
   listScroll: 0,
   detail: null,
@@ -273,6 +275,68 @@ async function submitHistoryAction(event) {
   }
   await refreshRuns();
 }
+function setRenameError(message = "", invalid = false) {
+  const error = $("run-rename-error");
+  error.textContent = message;
+  error.hidden = !message;
+  const input = $("run-rename-name");
+  if (invalid) input.setAttribute("aria-invalid", "true");
+  else input.removeAttribute("aria-invalid");
+}
+function openRename(run) {
+  view.renameAction = { id: run.id, stateDir: directory() };
+  $("run-rename-target").textContent = `运行 ${run.id}`;
+  const input = $("run-rename-name");
+  input.value = run.plan_name ?? "";
+  setRenameError();
+  $("run-rename-dialog").showModal();
+  input.select();
+}
+function closeRename() {
+  const action = view.renameAction;
+  if (!action || $("run-rename-save").hasAttribute("aria-busy")) return;
+  view.renameAction = null;
+  $("run-rename-dialog").close();
+  focusRun(action.id, true, "rename");
+}
+async function submitRename(event) {
+  event.preventDefault();
+  const action = view.renameAction;
+  if (!action) return;
+  const input = $("run-rename-name");
+  const save = $("run-rename-save");
+  const cancel = $("run-rename-cancel");
+  const result = await perform(save, async () => {
+    setRenameError();
+    input.readOnly = true;
+    cancel.disabled = true;
+    save.textContent = "正在保存…";
+    try {
+      return await api(`/api/runs/${encodeURIComponent(action.id)}/rename`, {
+        state_dir: action.stateDir,
+        plan_name: input.value,
+      });
+    } catch (error) {
+      const field = error.fields?.find((issue) => issue.path?.[0] === "plan_name");
+      setRenameError(field ? friendlyError(field) : error.message, Boolean(field));
+      if (field) input.focus();
+    } finally {
+      input.readOnly = false;
+      cancel.disabled = false;
+      save.textContent = "保存名称";
+    }
+  });
+  if (!result) return;
+  // A list response started before the save can still contain the previous name.
+  view.listRequest = null;
+  view.list = view.list.map((run) =>
+    run.id === action.id ? { ...run, plan_name: result.plan_name } : run,
+  );
+  renderList();
+  closeRename();
+  show("已保存测试计划名称。");
+  await refreshRuns();
+}
 function refreshDetail() {
   if (!view.selected) return;
   if (view.detailRequest) return view.detailRequest;
@@ -430,13 +494,16 @@ function renderList() {
   const focused = root.contains(document.activeElement) ? document.activeElement.dataset : {};
   root.replaceChildren(
     table(
-      ["创建时间", "状态", "最近更新", "操作"],
+      ["测试计划", "状态", "最近更新", "操作"],
       list.map((run) => {
-        const title = node("div");
-        title.append(
-          node("strong", "", date(run.created)),
-          node("div", "secondary mono", run.id),
-        );
+        const rename = button("", () => openRename(run), "icon-button run-rename", "edit");
+        rename.dataset.run = run.id;
+        rename.dataset.historyControl = "rename";
+        rename.setAttribute("aria-label", "修改测试计划名称");
+        rename.setAttribute("aria-haspopup", "dialog");
+        rename.title = "修改测试计划名称";
+        const plan = node("div", "run-plan-heading");
+        plan.append(node("strong", "run-plan-name", run.plan_name ?? "未命名"), rename);
         const open = button(
           "查看详情",
           () => selectRun(run.id, true),
@@ -453,7 +520,7 @@ function renderList() {
           select.checked = view.checked.has(run.id);
           select.dataset.run = run.id;
           select.dataset.historyControl = "select";
-          select.setAttribute("aria-label", `选择运行 ${run.id}`);
+          select.setAttribute("aria-label", "选择运行");
           select.addEventListener("change", () => {
             if (select.checked) view.checked.add(run.id);
             else view.checked.delete(run.id);
@@ -463,7 +530,7 @@ function renderList() {
           label.append(select);
           info.append(label);
         }
-        info.append(title);
+        info.append(plan);
         if (run.can_delete) {
           const remove = button("删除", null, "text-button run-delete");
           remove.addEventListener("click", () => openHistoryAction("delete", [run.id]));
@@ -581,8 +648,9 @@ function renderDetail() {
   archive.href = url("/archive");
   archive.download = "";
   if (view.artifacts.length) actions.append(archive);
+  const title = d.plan_name ? `${d.plan_name} 运行详情` : "运行详情";
   panel.append(
-    heading("运行详情", d.run_id, badge(
+    heading(title, d.run_id, badge(
       d.cancel_requested && d.controller_active && !terminalRunStatuses.includes(d.status)
         ? "cancel_pending" : d.status,
     ), "layers"),
@@ -954,6 +1022,13 @@ export async function initRuns() {
   $("run-history-dialog").addEventListener("cancel", (event) => {
     event.preventDefault();
     closeHistoryAction();
+  });
+  $("run-rename-form").addEventListener("submit", submitRename);
+  $("run-rename-name").addEventListener("input", () => setRenameError());
+  $("run-rename-cancel").addEventListener("click", closeRename);
+  $("run-rename-dialog").addEventListener("cancel", (event) => {
+    event.preventDefault();
+    closeRename();
   });
   $("back-to-runs").addEventListener("click", () => {
     const id = view.selected;

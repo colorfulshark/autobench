@@ -395,6 +395,25 @@
         </div>
       </form>
     </dialog>
+    <dialog id="run-rename-dialog" aria-labelledby="run-rename-title" aria-describedby="run-rename-target">
+      <h2 id="run-rename-title">修改测试计划名称</h2>
+      <p id="run-rename-target" class="hint mono"></p>
+      <form id="run-rename-form">
+        <div class="field">
+          <label for="run-rename-name" class="field-label">测试计划名称</label>
+          <div class="input-controls">
+            <input id="run-rename-name" type="text" autocomplete="off" spellcheck="false"
+              aria-describedby="run-rename-help run-rename-error" autofocus />
+          </div>
+          <p id="run-rename-help" class="hint">留空将显示为「未命名」。</p>
+          <p id="run-rename-error" class="field-error" role="alert" hidden></p>
+        </div>
+        <div class="dialog-actions">
+          <button id="run-rename-cancel" class="button secondary" type="button">取消</button>
+          <button id="run-rename-save" class="button primary" type="submit">保存名称</button>
+        </div>
+      </form>
+    </dialog>
     <dialog
       id="preview-drawer"
       class="preview-drawer"

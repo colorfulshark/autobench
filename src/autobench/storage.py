@@ -19,6 +19,13 @@ RUN_ID_PATTERN = (
     r"^[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{2}-[0-9]{2}-[0-9]{2}"
     r"(?:-(?:0[2-9]|[1-9][0-9]+))?$"
 )
+_RUN_SUMMARIES = """
+    SELECT runs.id, status, cancel_requested, created, updated,
+           CASE WHEN names.run_id IS NULL
+                THEN json_extract(config, '$.policy.plan_name')
+                ELSE names.plan_name END AS plan_name
+    FROM runs LEFT JOIN run_plan_names AS names ON names.run_id = runs.id
+"""
 
 
 def private_dir(path: Path) -> Path:
@@ -60,6 +67,10 @@ class Store:
             CREATE TABLE IF NOT EXISTS runs (
                 id TEXT PRIMARY KEY, config TEXT NOT NULL, status TEXT NOT NULL,
                 cancel_requested INTEGER NOT NULL DEFAULT 0, created REAL, updated REAL
+            );
+            CREATE TABLE IF NOT EXISTS run_plan_names (
+                run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,
+                plan_name TEXT
             );
             CREATE TABLE IF NOT EXISTS jobs (
                 id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id),
@@ -186,12 +197,25 @@ class Store:
 
     def runs(self) -> list[dict]:
         return [
-            dict(row)
-            for row in self.db.execute(
-                "SELECT id, status, cancel_requested, created, updated FROM runs "
-                "ORDER BY created DESC, id"
-            )
+            dict(row) for row in self.db.execute(_RUN_SUMMARIES + "ORDER BY created DESC, runs.id")
         ]
+
+    def run_plan_name(self, run_id: str) -> str | None:
+        row = self.db.execute(_RUN_SUMMARIES + "WHERE runs.id = ?", (run_id,)).fetchone()
+        return row["plan_name"] if row is not None else None
+
+    def rename_run(self, run_id: str, plan_name: str | None) -> None:
+        with self.db:
+            result = self.db.execute(
+                """
+                INSERT INTO run_plan_names (run_id, plan_name)
+                SELECT id, ? FROM runs WHERE id = ?
+                ON CONFLICT(run_id) DO UPDATE SET plan_name = excluded.plan_name
+                """,
+                (plan_name, run_id),
+            )
+            if result.rowcount == 0:
+                raise FileNotFoundError(f"运行记录不存在：{run_id}")
 
     def merge_sources(self, run_id: str) -> list[dict]:
         row = self.db.execute("SELECT sources FROM run_merges WHERE run_id=?", (run_id,)).fetchone()

@@ -4,6 +4,7 @@ import stat
 import threading
 import time
 import zipfile
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -311,6 +312,44 @@ def test_web_run_resume_uses_frozen_config_without_replay(client, saved, config,
     assert world.starts.count(original) == 1
     assert world.jobs[original]["manifest"]["benchmark_env"]["SHARED"] == "benchmark"
     assert client.get(f"/api/runs/{run['run_id']}").json()["status"] == "succeeded"
+
+
+def test_run_list_uses_the_name_frozen_at_each_start(client, saved, config, monkeypatch):
+    async def no_remote_run(*args, **kwargs):
+        return "paused"
+
+    monkeypatch.setattr("autobench.services.execute_run", no_remote_run)
+    document = saved["document"]
+    names = {}
+    for draft, expected in [
+        ("  内核基准 A  ", "内核基准 A"),
+        ("内核基准 B", "内核基准 B"),
+        (None, None),
+    ]:
+        document["policy"]["plan_name"] = draft
+        response = client.post(
+            "/api/config/save", json={**reference(saved), "text": yaml.safe_dump(document)}
+        )
+        assert response.status_code == 200, response.text
+        saved = response.json()
+        assert saved["document"]["policy"]["plan_name"] == draft
+        response = client.post("/api/runs", json=reference(saved))
+        assert response.status_code == 202, response.text
+        run = response.json()
+        run_id = run["run_id"]
+        names[run_id] = expected
+        wait_operation(client, run["operation"])
+
+    with closing(Store(config.policy.state_dir)) as store, store.db:
+        assert store.config(run_id).policy.plan_name is None
+        store.db.execute(
+            "UPDATE runs SET config=json_remove(config, '$.policy.plan_name') WHERE id=?", (run_id,)
+        )
+        assert store.config(run_id).policy.plan_name is None
+
+    records = client.get("/api/runs").json()
+    assert {row["id"]: row["plan_name"] for row in records} == names
+    assert all("config" not in row for row in records)
 
 
 def test_fetch_never_submits_or_switches(client, config, monkeypatch):

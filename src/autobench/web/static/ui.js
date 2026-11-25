@@ -550,5 +550,7 @@ export function friendlyError(error) {
     return "启动项需要是四位十六进制字符串";
   if (error.message?.includes("test names cannot"))
     return "测试名不能为空、包含空白或 NUL，也不能以 - 开头";
+  if (error.message?.includes("test plan name must be a single line"))
+    return "测试计划名称只能填写一行";
   return error.message;
 }

@@ -8,6 +8,7 @@ from typing import Annotated, Literal
 
 import yaml
 from pydantic import (
+    AfterValidator,
     BaseModel,
     ConfigDict,
     Field,
@@ -214,7 +215,20 @@ class Benchmark(Model):
         return value.lower() if value else value
 
 
+def normalize_plan_name(value: str | None) -> str | None:
+    if value is None:
+        return None
+    name = value.strip()
+    if len(name.splitlines()) > 1:
+        raise ValueError("test plan name must be a single line")
+    return name or None
+
+
+PlanName = Annotated[StrictStr | None, AfterValidator(normalize_plan_name)]
+
+
 class Policy(Model):
+    plan_name: PlanName = None
     parallel_machines: Annotated[int, Field(ge=1)] = 4
     poll_interval: PositiveSeconds = 10
     settle_seconds: Annotated[float, Field(ge=0)] = 60

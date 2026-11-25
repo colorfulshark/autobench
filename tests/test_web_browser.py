@@ -7,6 +7,7 @@ import socket
 import threading
 import time
 import zipfile
+from contextlib import closing
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 
@@ -122,6 +123,11 @@ def complete_startup(page, path=None):
 def ready(page, server, startup_path=None):
     page.goto(server.url)
     complete_startup(page, startup_path)
+
+
+def history_row(page, run_id):
+    action = page.locator(f'[data-history-control="open"][data-run="{run_id}"]')
+    return page.get_by_role("row").filter(has=action)
 
 
 def artifact_folder(page, path):
@@ -909,9 +915,7 @@ def test_readable_run_names_and_nested_downloads(
         page.route("**/static/style.css", apply_text_zoom)
     ready(page, server)
     page.locator('[data-page="runs"]').click()
-    page.locator("#runs-list").get_by_text(name, exact=True).wait_for()
-    row = page.locator("#runs-list tr").filter(has_text=run_id)
-    row.get_by_text(run_id, exact=True).wait_for()
+    row = history_row(page, run_id)
     row.get_by_role("button", name="查看详情", exact=True).click()
     page.locator("#run-detail").get_by_text(run_id, exact=True).wait_for()
     open_artifact_folder(page, PurePosixPath(relative).parent)
@@ -2211,6 +2215,7 @@ def test_plan_preview_tracks_systems_rounds_and_yaml_changes(browser_page, ui_se
     plan = page.locator("#config-plan")
     assert plan.locator(".plan-figure strong").text_content() == "0"
     raw = server.config.model_dump(mode="json")
+    raw["policy"]["plan_name"] = "  YAML 测试计划  "
     raw["machines"][0]["systems"][0]["grub_entry"] = "advanced>linux-custom"
     raw["benchmarks"][0]["repetitions"] = 3
     other = {**raw["benchmarks"][0], "id": "second-benchmark", "repetitions": 2}
@@ -2221,6 +2226,7 @@ def test_plan_preview_tracks_systems_rounds_and_yaml_changes(browser_page, ui_se
     page.locator("#yaml-editor").fill(yaml.safe_dump(raw))
     set_editor_mode(page, "form")
     plan.wait_for(state="visible")
+    assert plan.get_by_role("heading", name="YAML 测试计划", exact=True).is_visible()
     assert plan.locator(".plan-figure strong").text_content() == str(system_count * 5)
     assert plan.locator(".plan-route").get_by_role("listitem").all_text_contents() == [
         system["id"] for system in systems
@@ -2242,11 +2248,13 @@ def test_plan_preview_tracks_systems_rounds_and_yaml_changes(browser_page, ui_se
     plan.wait_for(state="visible")
     open_step(page, "运行设置")
     assert plan.is_visible()
+    page.get_by_role("textbox", name="测试计划名称", exact=True).fill("   ")
+    assert plan.get_by_role("heading", name="测试计划", exact=True).is_visible()
     page.set_viewport_size({"width": 390, "height": 844})
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
 
-def test_mobile_run_row_keeps_details_action_and_dates_visible(browser_page, ui_server):
+def test_mobile_run_row_shows_plan_without_timestamps(browser_page, ui_server):
     from autobench.storage import Store
 
     page, server = browser_page, ui_server
@@ -2260,7 +2268,8 @@ def test_mobile_run_row_keeps_details_action_and_dates_visible(browser_page, ui_
     action.wait_for()
     cells = page.locator("#runs-list tbody tr").first.locator("td")
     assert cells.count() == 4
-    assert run_id in cells.nth(0).text_content()
+    assert cells.nth(0).text_content() == "未命名"
+    assert page.get_by_role("columnheader", name="测试计划", exact=True).count() == 1
     assert cells.nth(1).text_content()
     assert cells.nth(2).text_content()
     for cell in (cells.nth(0), cells.nth(2), action):
@@ -2269,6 +2278,149 @@ def test_mobile_run_row_keeps_details_action_and_dates_visible(browser_page, ui_
     assert page.locator("#runs-list").evaluate("e => e.scrollWidth === e.clientWidth")
     action.click()
     page.locator("#run-detail").get_by_text(run_id, exact=True).wait_for()
+
+
+@pytest.mark.parametrize("width,text_scale", [(1440, 1), (390, 1), (390, 2)])
+def test_plan_name_survives_reload_and_appears_in_run_history(
+    browser_page, ui_server, width, text_scale
+):
+    from playwright.sync_api import expect
+
+    from autobench.storage import Store
+
+    page, server = browser_page, ui_server
+    with closing(Store(server.config.policy.state_dir)) as store:
+        unnamed_id = store.create(server.config)
+    page.set_viewport_size({"width": width, "height": 900})
+    if text_scale == 2:
+
+        def apply_text_zoom(route):
+            response = route.fetch()
+            route.fulfill(
+                response=response,
+                body=response.text() + "\nhtml { font-size: 200% !important; }",
+            )
+
+        page.route("**/static/style.css", apply_text_zoom)
+
+    ready(page, server, startup_path=server.existing)
+    open_step(page, "运行设置")
+    field = page.get_by_role("textbox", name="测试计划名称", exact=True)
+    preview_title = page.locator("#config-plan").get_by_role("heading", level=2)
+    expect(field).to_have_value("")
+    expect(preview_title).to_have_text("测试计划")
+    name = "内核基准 <A/B> " + "BuildComparison" * 5
+    field.fill(name)
+    expect(preview_title).to_have_text(name)
+    assert preview_title.evaluate("e => e.scrollWidth <= e.clientWidth")
+    save_draft(page)
+    expect(page.locator("#save-state")).to_have_text("已保存")
+    assert yaml.safe_load(server.existing.read_text())["policy"]["plan_name"] == name
+
+    page.reload()
+    expect(field).to_have_value(name)
+    expect(preview_title).to_have_text(name)
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    open_step(page, "检查运行")
+    click_primary(page)
+    expect(page.get_by_role("button", name="开始测试", exact=True)).to_be_attached()
+    with page.expect_response(
+        lambda response: response.url.endswith("/api/runs") and response.request.method == "POST"
+    ) as started:
+        click_primary(page)
+    assert started.value.status == 202
+    run_id = started.value.json()["run_id"]
+    page.locator("#back-to-runs").click()
+
+    row = history_row(page, run_id)
+    title = row.get_by_text(name, exact=True)
+    expect(title).to_be_visible()
+    unnamed = history_row(page, unnamed_id)
+    expect(unnamed.get_by_text("未命名", exact=True)).to_be_visible()
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    assert title.evaluate("e => e.scrollWidth <= e.clientWidth")
+    if width == 390:
+        assert title.evaluate("e => e.clientHeight > parseFloat(getComputedStyle(e).lineHeight)")
+    row.get_by_role("button", name="查看详情", exact=True).click()
+    detail = page.locator("#run-detail")
+    expect(detail.get_by_text(run_id, exact=True)).to_be_visible()
+    expect(detail.get_by_role("heading", name=f"{name} 运行详情", exact=True)).to_be_visible()
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+
+@pytest.mark.parametrize("width,text_scale", [(1440, 1), (320, 1), (390, 2)])
+def test_run_history_can_rename_and_clear_a_plan_name(browser_page, ui_server, width, text_scale):
+    from playwright.sync_api import expect
+
+    from autobench.storage import Store
+
+    page, server = browser_page, ui_server
+    config = server.config.model_copy(deep=True)
+    config.policy.plan_name = "原测试计划"
+    with closing(Store(config.policy.state_dir)) as store:
+        run_id = store.create(config)
+    page.set_viewport_size({"width": width, "height": 900})
+    if text_scale == 2:
+
+        def apply_text_zoom(route):
+            response = route.fetch()
+            route.fulfill(
+                response=response,
+                body=response.text() + "\nhtml { font-size: 200% !important; }",
+            )
+
+        page.route("**/static/style.css", apply_text_zoom)
+
+    ready(page, server, startup_path=server.existing)
+    page.get_by_role("tab", name="运行记录", exact=True).click()
+    rename = page.get_by_role("button", name="修改测试计划名称", exact=True)
+    dialog = page.get_by_role("dialog", name="修改测试计划名称", exact=True)
+    field = dialog.get_by_role("textbox", name="测试计划名称", exact=True)
+    save = dialog.get_by_role("button", name="保存名称", exact=True)
+    rename.press("Enter")
+    expect(field).to_have_value("原测试计划")
+    expect(field).to_be_focused()
+    expect(dialog.get_by_text(run_id, exact=False)).to_be_visible()
+    assert dialog.evaluate("e => e.scrollWidth <= e.clientWidth")
+    field.fill("未保存的名称")
+    field.press("Escape")
+    expect(dialog).to_be_hidden()
+    expect(rename).to_be_focused()
+    expect(page.get_by_text("原测试计划", exact=True)).to_be_visible()
+
+    rename.click()
+    name = "基准结果 <A/B> " + "BuildComparison" * 5
+    field.fill(f"  {name}  ")
+    endpoint = f"**/api/runs/{run_id}/rename"
+    page.route(endpoint, lambda route: route.fulfill(status=503, json={"detail": "暂时无法保存"}))
+    save.click()
+    expect(dialog.get_by_role("alert")).to_have_text("暂时无法保存")
+    expect(field).to_have_value(f"  {name}  ")
+    page.unroute(endpoint)
+    field.press("Enter")
+    expect(dialog).to_be_hidden()
+    expect(rename).to_be_focused()
+    expect(page.get_by_text(name, exact=True)).to_be_visible()
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+    page.reload()
+    expect(page.get_by_text(name, exact=True)).to_be_visible()
+    open_detail = history_row(page, run_id).get_by_role("button", name="查看详情", exact=True)
+    detail = page.locator("#run-detail")
+    open_detail.click()
+    expect(detail.get_by_role("heading", name=f"{name} 运行详情", exact=True)).to_be_visible()
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.locator("#back-to-runs").click()
+    rename.click()
+    expect(field).to_have_value(name)
+    field.fill("")
+    save.click()
+    expect(page.get_by_text("未命名", exact=True)).to_be_visible()
+    page.reload()
+    expect(page.get_by_text("未命名", exact=True)).to_be_visible()
+    open_detail.click()
+    expect(detail.get_by_text(run_id, exact=True)).to_be_visible()
+    expect(detail.get_by_role("heading", name="运行详情", exact=True)).to_be_visible()
 
 
 def test_system_groups_reset_independently(browser_page, ui_server):
@@ -3965,9 +4117,7 @@ def test_report_stale_response_does_not_leak_into_another_run(browser_page, ui_s
         "() => document.querySelector('.report-panel').getAttribute('aria-busy') === 'true'"
     )
     page.locator("#back-to-runs").click()
-    page.locator("#runs-list tbody tr").filter(has_text=second).get_by_role(
-        "button", name="查看详情", exact=True
-    ).click()
+    history_row(page, second).get_by_role("button", name="查看详情", exact=True).click()
     page.wait_for_function(
         "id => document.querySelector('#run-detail').textContent.includes(id)", arg=second
     )
@@ -4046,12 +4196,13 @@ def test_runs_retry_retains_last_known_list(browser_page, ui_server):
     run_id = report_history(server)
     ready(page, server, startup_path=server.existing)
     page.get_by_role("tab", name="运行记录").click()
-    page.get_by_text(run_id, exact=True).wait_for()
+    row = history_row(page, run_id)
+    expect(row).to_be_visible()
     page.route("**/api/runs?*", lambda route: route.fulfill(
         status=503, json={"detail": "服务暂时不可用"}
     ))
     expect(page.get_by_role("status").filter(has_text="数据可能已过期")).to_be_visible()
-    expect(page.get_by_text(run_id, exact=True)).to_be_visible()
+    expect(row).to_be_visible()
     page.unroute("**/api/runs?*")
     expect(page.get_by_role("status").filter(has_text="数据可能已过期")).to_be_hidden()
 
@@ -4090,7 +4241,7 @@ def test_capture_workbench_reference_screens(browser_page, ui_server):
     open_step(page, "检查运行")
     capture("07-review")
     page.get_by_role("tab", name="运行记录").click()
-    page.get_by_text(run_id, exact=True).wait_for()
+    history_row(page, run_id).wait_for()
     capture("08-history")
     page.get_by_role("button", name="查看详情", exact=True).first.click()
     expect(page.get_by_role("heading", name="运行详情", exact=True)).to_be_visible()
@@ -4293,17 +4444,17 @@ def test_run_history_delete_and_merge(browser_page, ui_server, width, zoom):
     page.get_by_role("tab", name="运行记录", exact=True).click()
     search = page.get_by_role("textbox", name="搜索运行")
     search.fill(first)
-    select = page.get_by_role("checkbox", name=f"选择运行 {first}", exact=True)
+    row = history_row(page, first)
+    select = row.get_by_role("checkbox", name="选择运行", exact=True)
     select.focus()
     page.keyboard.press("Space")
     expect(select).to_be_checked()
     store.set_run_status(first, "failed")
-    row = page.get_by_role("row").filter(has=page.get_by_text(first, exact=True))
     expect(row.get_by_text("失败", exact=True)).to_be_visible()
     expect(select).to_be_focused()
     expect(select).to_be_checked()
     search.fill(second)
-    page.get_by_role("checkbox", name=f"选择运行 {second}", exact=True).check()
+    history_row(page, second).get_by_role("checkbox", name="选择运行", exact=True).check()
     merge = page.get_by_role("button", name="合并记录…")
     expect(page.get_by_role("status").filter(has_text="已选择 2 条记录")).to_be_visible()
     merge.click()

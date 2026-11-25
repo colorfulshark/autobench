@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from autobench.config import (
     Benchmark,
+    Policy,
     SOCKS5Proxy,
     SSHConfig,
     SSHOverride,
@@ -18,6 +19,22 @@ from autobench.config import (
     merged_env,
 )
 from autobench.storage import Store
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [(None, None), ("", None), (" \t ", None), ("  内核测试 A/B  ", "内核测试 A/B")],
+)
+def test_plan_name_is_optional_and_trims_outer_whitespace(value, expected):
+    assert Policy().plan_name is None
+    assert Policy(plan_name=value).plan_name == expected
+
+
+@pytest.mark.parametrize("value", [42, True, ["name"], "first\nsecond"])
+def test_plan_name_validation_identifies_the_field(value):
+    with pytest.raises(ValidationError) as error:
+        Policy.model_validate({"plan_name": value})
+    assert error.value.errors()[0]["loc"] == ("plan_name",)
 
 
 @pytest.mark.parametrize("value", [True, False])

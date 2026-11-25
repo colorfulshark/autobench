@@ -27,6 +27,7 @@ from autobench import __version__, history, services
 from autobench.artifacts import UnsafeArtifactPath, result_path
 from autobench.config import (
     Config,
+    PlanName,
     PositiveSeconds,
     SSHConfig,
     inspect_archive,
@@ -100,6 +101,10 @@ class ControlBody(Body):
 
 class MergeRunsBody(ControlBody):
     run_ids: list[RunID] = Field(min_length=2)
+
+
+class RenameRunBody(ControlBody):
+    plan_name: PlanName
 
 
 class ProbeBody(Body):
@@ -585,6 +590,7 @@ def create_app(
         with store_at(state_dir) as store:
             remember(json.loads(store.run(run_id)["config"]))
             result = services.run_status(store, run_id)
+            result["plan_name"] = store.run_plan_name(run_id)
             result["state_dir"] = str(store.directory)
             result["controller_active"] = False
             try:
@@ -614,6 +620,12 @@ def create_app(
 
         with reserve_history(directory, [run_id]):
             return await asyncio.to_thread(work)
+
+    @app.post("/api/runs/{run_id}/rename")
+    def rename_run(run_id: RunID, body: RenameRunBody):
+        with store_at(body.state_dir) as store:
+            store.rename_run(run_id, body.plan_name)
+        return {"run_id": run_id, "plan_name": body.plan_name}
 
     @app.post("/api/runs/{run_id}/{action}", status_code=202)
     async def control(

@@ -929,6 +929,11 @@ function policyEditor() {
   const panel = node("section", "panel policy-panel");
   panel.append(heading("运行设置", null, null, "layers"));
   panel.append(
+    field("测试计划名称", ["policy", "plan_name"], {
+      emptyValue: null,
+      help: "选填。名称会显示在运行记录中。",
+      labelIcon: "tag",
+    }),
     row(
       field("结果输出目录", ["policy", "output_dir"], {
         fallback: "results",
@@ -1497,6 +1502,7 @@ const fieldNames = {
   systems: "系统",
   benchmarks: "测试",
   policy: "运行设置",
+  plan_name: "测试计划名称",
   ssh: "连接",
   host: "地址",
   username: "用户名",

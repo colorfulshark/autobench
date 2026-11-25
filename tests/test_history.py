@@ -2,6 +2,7 @@ import io
 import sqlite3
 import time
 import zipfile
+from contextlib import closing
 
 import pytest
 from fastapi.testclient import TestClient
@@ -37,6 +38,49 @@ def completed_run(store, config, scores=(10,), *, status="succeeded"):
     store.event(run_id, jobs[0]["id"], "recorded test event secret-history-password")
     store.set_run_status(run_id, status)
     return run_id, root
+
+
+def test_rename_overrides_only_the_record_name_and_can_clear_it(client, config):
+    config.policy.plan_name = "原测试计划"
+    with closing(Store(config.policy.state_dir)) as store:
+        run_id, root = completed_run(store, config)
+        other, _ = completed_run(store, config)
+        store.set_run_status(run_id, "running")
+        original = store.run(run_id)
+        # Simulate an existing database from before names could be edited in history.
+        with store.db:
+            store.db.execute("DROP TABLE run_plan_names")
+
+    body = {"state_dir": str(config.policy.state_dir)}
+    detail_url = f"/api/runs/{run_id}"
+    url = f"{detail_url}/rename"
+
+    def names():
+        return {record["id"]: record["plan_name"] for record in client.get("/api/runs").json()}
+
+    assert names() == {run_id: "原测试计划", other: "原测试计划"}
+    assert client.get(detail_url).json()["plan_name"] == "原测试计划"
+    for invalid in (3, "第一行\n第二行"):
+        response = client.post(url, json={**body, "plan_name": invalid})
+        assert response.status_code == 422
+        assert response.json()["errors"][0]["path"] == ["plan_name"]
+
+    with closing(Store(config.policy.state_dir)) as store, store.run_lock(run_id):
+        response = client.post(url, json={**body, "plan_name": "  内核对比 B  "})
+        assert response.json() == {"run_id": run_id, "plan_name": "内核对比 B"}
+        assert names() == {run_id: "内核对比 B", other: "原测试计划"}
+        assert client.get(detail_url).json()["plan_name"] == "内核对比 B"
+        assert store.run(run_id) == original
+        assert store.result_directory(run_id) == root
+
+    assert client.post(url, json={**body, "plan_name": "  "}).json()["plan_name"] is None
+    assert names() == {run_id: None, other: "原测试计划"}
+    assert client.get(detail_url).json()["plan_name"] is None
+    with closing(Store(config.policy.state_dir)) as store:
+        store.set_run_status(run_id, "succeeded")
+        assert client.post(f"/api/runs/{run_id}/delete", json=body).status_code == 200
+        assert client.post(url, json={**body, "plan_name": "新版"}).status_code == 404
+        assert store.db.execute("SELECT * FROM run_plan_names").fetchall() == []
 
 
 def test_delete_removes_only_the_selected_record_and_files(client, config, tmp_path):
@@ -199,7 +243,14 @@ def test_merge_deduplicates_origins_and_reports_original_rounds(client, config):
         return response.json()["run_id"]
 
     ab, bc = merge(a, b), merge(b, c)
-    assert {row["id"] for row in store.runs()} == {a, b, c, ab, bc}
+    runs = {row["id"]: row for row in store.runs()}
+    assert set(runs) == {a, b, c, ab, bc}
+    assert runs[ab]["plan_name"] is None and runs[bc]["plan_name"] is None
+    response = client.post(f"/api/runs/{ab}/rename", json={**body, "plan_name": "合并基准"})
+    assert response.json() == {"run_id": ab, "plan_name": "合并基准"}
+    assert {record["id"]: record["plan_name"] for record in store.runs()}[ab] == "合并基准"
+    assert client.get(f"/api/runs/{ab}").json()["plan_name"] == "合并基准"
+    assert store.run(ab)["config"] == "{}"
     for original in (a, b, c):
         assert client.post(f"/api/runs/{original}/delete", json=body).status_code == 200
     merged = merge(ab, bc)

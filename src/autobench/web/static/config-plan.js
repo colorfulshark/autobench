@@ -17,8 +17,10 @@ export function renderPlan(stepLimit) {
     (value) => value && typeof value === "object",
   );
   const totals = counts(state.document);
+  const configuredName = state.document.policy?.plan_name;
+  const planName = typeof configuredName === "string" ? configuredName.trim() : "";
   const header = node("div", "plan-heading");
-  const title = node("h2", "icon-heading", "测试计划");
+  const title = node("h2", "icon-heading", planName || "测试计划");
   title.prepend(icon("calendar"));
   header.append(title);
   const figure = node("div", "plan-figure");
