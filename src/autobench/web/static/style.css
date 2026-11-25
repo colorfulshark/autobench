@@ -4289,8 +4289,18 @@ main {
   overflow: auto;
   overflow-wrap: anywhere;
 }
-#follow-events {
-  align-self: flex-end;
+.run-events {
+  position: relative;
+}
+.run-events[open] > .run-monitor-heading > span {
+  padding-inline-end: var(--ui-height-md);
+}
+.run-event-follow {
+  position: absolute;
+  inset-block-start: calc((var(--ui-height-lg) - var(--ui-height-md)) / 2);
+  inset-inline-end: calc(var(--ui-space-4) + var(--ui-icon-sm) + var(--ui-space-3));
+  border-color: transparent;
+  background: transparent;
   color: var(--ui-primary-hover);
 }
 @container (min-width: 36rem) {

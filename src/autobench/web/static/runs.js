@@ -783,7 +783,8 @@ function renderDetail() {
     line.dataset.tone = statusTone(job.phase || job.status);
     panel.append(line);
   }
-  const matrix = taskPanel(d, previousMatrix?.open ?? true);
+  const monitorOpenByDefault = !["succeeded", "merged"].includes(d.status);
+  const matrix = taskPanel(d, previousMatrix?.open ?? monitorOpenByDefault);
   if (reportMounted) {
     root.firstElementChild.replaceWith(panel);
     previousMatrix.replaceWith(matrix);
@@ -801,7 +802,7 @@ function renderDetail() {
     }
   } else {
     const monitor = node("div", "run-monitor");
-    monitor.append(matrix, eventPanel());
+    monitor.append(matrix, eventPanel(monitorOpenByDefault));
     view.report = createReportPanel(url("/report"));
     root.replaceChildren(panel, monitor, view.report.element, artifactPanel());
     if (state.page === "runs") view.report.loadInitially();
@@ -867,10 +868,10 @@ function taskPanel(detail, open) {
   matrix.append(body);
   return matrix;
 }
-function eventPanel() {
+function eventPanel(open) {
   const events = node("details", "panel run-monitor-panel run-events");
   events.dataset.events = "true";
-  events.open = true;
+  events.open = open;
   const title = monitorTitle("原始运行事件", "code");
   const notice = node("p", "callout warning");
   notice.id = "run-event-notice";
@@ -879,19 +880,22 @@ function eventPanel() {
   const log = node("pre", "event-log", "正在加载运行事件…");
   log.tabIndex = 0;
   log.setAttribute("aria-label", "运行事件日志");
-  const follow = button("回到底部", () => {
+  const follow = button("", () => {
     log.scrollTop = log.scrollHeight;
     log.focus({ preventScroll: true });
-  }, "text-button");
-  follow.id = "follow-events";
-  follow.hidden = true;
-  log.addEventListener("scroll", () => { follow.hidden = nearLogEnd(log); });
+  }, "icon-button run-event-follow", "arrowDown");
+  follow.setAttribute("aria-label", "回到底部");
+  follow.title = "回到底部";
+  let followOnExpand = true;
+  log.addEventListener("scroll", () => {
+    if (events.open) followOnExpand = nearLogEnd(log);
+  });
   events.addEventListener("toggle", () => {
-    if (events.open && follow.hidden) log.scrollTop = log.scrollHeight;
+    if (events.open && followOnExpand) log.scrollTop = log.scrollHeight;
   });
   const body = node("div", "run-monitor-body");
-  body.append(notice, log, follow);
-  events.append(title, body);
+  body.append(notice, log);
+  events.append(title, follow, body);
   return events;
 }
 const nearLogEnd = (log) => log.scrollHeight - log.scrollTop - log.clientHeight < 24;
@@ -924,7 +928,6 @@ function updateEvents() {
     log.dataset.firstSequence = view.events[0]?.sequence || 0;
     log.dataset.lastSequence = view.after;
     if (follow) log.scrollTop = log.scrollHeight;
-    $("follow-events").hidden = nearLogEnd(log);
   }
 }
 function artifactRow(item, basename) {

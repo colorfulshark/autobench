@@ -4503,7 +4503,9 @@ def test_run_history_delete_and_merge(browser_page, ui_server, width, zoom):
     page.unroute("**/api/runs/merge", conflict)
     confirm.click()
     expect(page.get_by_role("heading", name="运行详情", exact=True)).to_be_visible()
-    expect(page.locator("#run-detail").get_by_text("已合并", exact=True)).to_be_visible()
+    detail = page.locator("#run-detail")
+    expect(detail.get_by_text("已合并", exact=True)).to_be_visible()
+    expect(detail.locator(".run-monitor-panel:not([open])")).to_have_count(2)
     sources = page.get_by_text("来源记录", exact=True)
     sources.click()
     expect(page.locator(".run-source-list").get_by_text(first, exact=True)).to_be_visible()
@@ -4572,6 +4574,10 @@ def test_run_detail_summary_and_monitor_reflow(browser_page, ui_server):
     title = detail.get_by_role("heading", name="test2 运行详情")
     log = detail.get_by_label("运行事件日志")
     archive = detail.get_by_role("link", name="下载完整归档", exact=True)
+    panels = detail.locator(".run-monitor-panel")
+    expect(detail.locator(".run-monitor-panel:not([open])")).to_have_count(2)
+    for summary in panels.locator("summary").all():
+        summary.press("Enter")
     expect(log).to_contain_text("archived: succeeded")
     expect(archive).to_be_visible()
     expect(detail.get_by_role("progressbar", name="已结束任务")).to_have_attribute("value", "2")
@@ -4580,7 +4586,6 @@ def test_run_detail_summary_and_monitor_reflow(browser_page, ui_server):
     output = os.getenv("AUTOBENCH_UI_SCREENSHOTS")
     if output:
         Path(output).mkdir(parents=True, exist_ok=True)
-    panels = detail.locator(".run-monitor-panel")
     for width in (1920, 1440, 1280, 1024, 768, 390, 320):
         page.set_viewport_size({"width": width, "height": 900})
         task_box, events_box = (panel.bounding_box() for panel in panels.all())
@@ -4621,12 +4626,39 @@ def test_run_detail_summary_and_monitor_reflow(browser_page, ui_server):
     assert detail.evaluate("el => el.scrollWidth <= el.clientWidth")
 
 
-def test_run_events_keep_focused_log_and_scroll_position(browser_page, ui_server):
+@pytest.mark.parametrize("status", ["failed", "cancelled"])
+def test_run_detail_opens_task_and_event_panels_for_unsuccessful_runs(
+    browser_page, ui_server, status
+):
     from playwright.sync_api import expect
 
     from autobench.storage import Store
 
     page, server = browser_page, ui_server
+    store = Store(server.config.policy.state_dir)
+    try:
+        run_id = store.create(server.config)
+        for job in store.jobs(run_id):
+            store.update(job["id"], status)
+        store.set_run_status(run_id, status)
+    finally:
+        store.close()
+
+    ready(page, server, startup_path=server.existing)
+    page.get_by_role("tab", name="运行记录").click()
+    page.get_by_role("button", name="查看详情", exact=True).click()
+    expect(page.get_by_role("region", name="机器与系统任务表")).to_be_visible()
+    expect(page.get_by_label("运行事件日志")).to_be_visible()
+
+
+@pytest.mark.parametrize("width", [1440, 390])
+def test_run_events_keep_focused_log_and_scroll_position(browser_page, ui_server, width):
+    from playwright.sync_api import expect
+
+    from autobench.storage import Store
+
+    page, server = browser_page, ui_server
+    page.set_viewport_size({"width": width, "height": 900})
     server.config.benchmarks[0].repetitions = 12
     store = Store(server.config.policy.state_dir)
     run_id = store.create(server.config)
@@ -4647,13 +4679,20 @@ def test_run_events_keep_focused_log_and_scroll_position(browser_page, ui_server
     page.get_by_role("button", name="查看详情", exact=True).click()
     log = page.get_by_label("运行事件日志")
     expect(log).to_contain_text("采集测试事件 080")
+    follow = page.get_by_role("button", name="回到底部", exact=True)
     event_heading = page.locator("summary").filter(has_text="原始运行事件")
     event_heading.press("Enter")
     expect(log).to_be_hidden()
+    expect(follow).to_be_hidden()
     event_heading.press("Space")
     expect(log).to_be_visible()
+    expect(follow).to_be_visible()
+    button_box = follow.bounding_box()
+    log_box = log.bounding_box()
+    assert button_box["y"] + button_box["height"] <= log_box["y"]
     log.evaluate("el => { el.scrollTop = 0; el.focus({preventScroll: true}); }")
-    expect(page.get_by_role("button", name="回到底部", exact=True)).to_be_visible()
+    assert follow.bounding_box() == button_box
+    assert log.bounding_box() == log_box
     tasks = page.get_by_role("region", name="机器与系统任务表")
     task_scroll = tasks.evaluate("el => { el.scrollTop = 100; return el.scrollTop; }")
     assert task_scroll > 0
@@ -4674,6 +4713,19 @@ def test_run_events_keep_focused_log_and_scroll_position(browser_page, ui_server
     assert log.evaluate("el => el.scrollTop") == 0
     assert tasks.evaluate("el => el.scrollTop") == task_scroll
     assert page.locator("#run-detail").get_attribute("data-poll-animation") is None
-    page.get_by_role("button", name="回到底部", exact=True).click()
+    follow.press("Enter")
     expect(log).to_be_focused()
     assert log.evaluate("el => el.scrollHeight - el.scrollTop - el.clientHeight < 24")
+    expect(follow).to_be_visible()
+    assert log.bounding_box()["height"] == log_box["height"]
+
+    store = Store(server.config.policy.state_dir)
+    try:
+        for job in store.jobs(run_id):
+            store.update(job["id"], "succeeded")
+        store.set_run_status(run_id, "succeeded")
+    finally:
+        store.close()
+    expect(page.locator(".run-identity").get_by_text("成功", exact=True)).to_be_visible()
+    expect(tasks).to_be_visible()
+    expect(log).to_be_visible()
