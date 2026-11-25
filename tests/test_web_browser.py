@@ -819,16 +819,28 @@ def test_selected_run_does_not_override_page_after_reload(browser_page, ui_serve
     page.locator("#file-confirm").click()
     page.get_by_role("button", name="查看详情", exact=True).click()
     page.locator("#run-detail").get_by_text(run_id, exact=True).wait_for()
+    download = page.get_by_role("link", name="下载 Excel", exact=True)
+    download.wait_for()
+    report_requests = []
+    page.on(
+        "request", lambda req: report_requests.append(req.url) if "/report?" in req.url else None
+    )
     page.locator(f'[data-page="{key}"]').click()
     for _ in range(2):
+        report_requests.clear()
         page.reload()
         page.wait_for_function(
             "id => document.querySelector('#run-detail').textContent.includes(id)",
             arg=run_id,
         )
         assert_current_page(page, key)
+        if key == "runs":
+            download.wait_for()
+        assert len(report_requests) == int(key == "runs")
     page.locator('[data-page="runs"]').click()
     page.locator("#run-detail").get_by_text(run_id, exact=True).wait_for()
+    download.wait_for()
+    assert len(report_requests) == 1
     assert page.locator("#runs-overview").is_hidden()
     page.locator("#back-to-runs").click()
     assert page.locator("#state-location").text_content() == str(history)
@@ -3794,7 +3806,7 @@ def open_report_history(page, server, run_id):
     )
     ready(page, server)
     page.locator("#tab-runs").click()
-    page.locator("#generate-report").wait_for()
+    page.get_by_role("heading", name="UnixBench 平均结果报告", exact=True).wait_for()
 
 
 @pytest.mark.parametrize("width", [1280, 1440, 1920, 390, 320])
@@ -3812,7 +3824,6 @@ def test_report_combines_scores_and_round_counts_for_each_group(browser_page, ui
     )
     page.set_viewport_size({"width": width, "height": 900})
     open_report_history(page, server, run_id)
-    page.locator("#generate-report").click()
     page.locator("#download-report").wait_for()
     summary = page.get_by_role("region", name="比较组对比表，可横向滚动")
     assert summary.get_by_role("columnheader").all_text_contents() == [
@@ -3874,7 +3885,6 @@ def test_report_copies_menu_displays_full_labels(browser_page, ui_server, width,
 
         page.route("**/static/style.css", apply_text_zoom)
     open_report_history(page, server, run_id)
-    page.get_by_role("button", name="生成报告", exact=True).click()
     copies = page.get_by_role("combobox", name="并发数", exact=True)
     expect(copies).to_have_css("font-size", f"{14 * text_size / 100:g}px")
     summary = page.get_by_role("region", name="比较组对比表，可横向滚动")
@@ -3943,11 +3953,15 @@ def test_report_preview_baseline_download_and_layout(browser_page, ui_server, wi
         page.route("**/static/style.css", apply_text_zoom)
     calls = []
     page.on("request", lambda req: calls.append(req.url) if "/report?" in req.url else None)
-    open_report_history(page, server, run_id)
+    ready(page, server)
+    page.get_by_role("tab", name="运行记录", exact=True).click()
+    open_detail = history_row(page, run_id).get_by_role("button", name="查看详情", exact=True)
+    expect(open_detail).to_be_visible()
     assert not calls
-    page.locator("#generate-report").click()
+    open_detail.click()
     page.locator("#download-report").wait_for()
     assert len(calls) == 1
+    expect(page.get_by_role("button", name="生成报告", exact=True)).to_have_count(0)
     panel = page.locator(".report-panel")
     summary = page.get_by_role("region", name="比较组对比表，可横向滚动")
     detail = page.get_by_role("region", name="测试项对比表，可横向滚动")
@@ -4045,29 +4059,33 @@ def test_report_preview_baseline_download_and_layout(browser_page, ui_server, wi
         )
         == "sticky"
     )
-    page.locator("#generate-report").click()
+    with page.expect_request("**/report?*baseline=*"):
+        page.get_by_role("button", name="刷新报告", exact=True).click()
     expect(panel).to_have_attribute("aria-busy", "false")
     assert page.locator("#report-baseline").input_value() == "server01/os2/ub"
 
 
 def test_report_loading_error_retry_and_empty_state(browser_page, ui_server):
+    from playwright.sync_api import expect
+
     page, server = browser_page, ui_server
     run_id = report_history(server, empty=True)
     pending = []
-    page.route("**/report?*", lambda route: pending.append(route))
-    open_report_history(page, server, run_id)
-    page.locator("#generate-report").click()
-    page.wait_for_function(
-        "() => document.querySelector('.report-panel').getAttribute('aria-busy') === 'true'"
-    )
-    assert page.locator("#generate-report").is_disabled()
-    assert page.locator(".report-panel").get_by_role("status").is_visible()
+    report_route = f"**/api/runs/{run_id}/report?*"
+    page.route(report_route, lambda route: pending.append(route))
+    with page.expect_request(report_route):
+        open_report_history(page, server, run_id)
+    panel = page.get_by_role("region", name="UnixBench 平均结果报告", exact=True)
+    expect(panel).to_have_attribute("aria-busy", "true")
+    expect(panel.get_by_role("button", name="刷新报告", exact=True)).to_be_hidden()
+    expect(panel.get_by_role("status")).to_have_text("正在读取已回收的正式轮次…")
     assert len(pending) == 1
     pending.pop().fulfill(status=500, json={"detail": "模拟读取失败"})
-    page.locator(".report-panel").get_by_role("alert").wait_for()
-    page.unroute("**/report?*")
-    page.get_by_role("button", name="重试", exact=True).click()
+    expect(panel.get_by_role("alert")).to_have_text("报告生成失败：模拟读取失败")
+    page.unroute(report_route)
+    panel.get_by_role("button", name="重试", exact=True).click()
     page.get_by_text("暂无可解析的 INDEX 结果。结果回收后可刷新报告。", exact=True).wait_for()
+    expect(panel.get_by_role("button", name="刷新报告", exact=True)).to_be_enabled()
     summary = page.get_by_role("region", name="比较组对比表，可横向滚动")
     assert summary.get_by_role("columnheader").all_text_contents() == [
         "比较组",
@@ -4089,7 +4107,6 @@ def test_report_stale_baseline_response_cannot_replace_new_selection(browser_pag
     page, server = browser_page, ui_server
     run_id = report_history(server)
     open_report_history(page, server, run_id)
-    page.locator("#generate-report").click()
     page.locator("#download-report").wait_for()
     pending = []
     page.route("**/report?*baseline=*", lambda route: pending.append(route))
@@ -4106,25 +4123,27 @@ def test_report_stale_baseline_response_cannot_replace_new_selection(browser_pag
 
 
 def test_report_stale_response_does_not_leak_into_another_run(browser_page, ui_server):
+    from playwright.sync_api import expect
+
     page, server = browser_page, ui_server
     first = report_history(server)
     second = report_history(server, empty=True)
-    open_report_history(page, server, first)
     pending = []
-    page.route("**/report?*", lambda route: pending.append(route))
-    page.locator("#generate-report").click()
-    page.wait_for_function(
-        "() => document.querySelector('.report-panel').getAttribute('aria-busy') === 'true'"
-    )
+    first_report = f"**/api/runs/{first}/report?*"
+    page.route(first_report, lambda route: pending.append(route))
+    with page.expect_request(first_report):
+        open_report_history(page, server, first)
     page.locator("#back-to-runs").click()
     history_row(page, second).get_by_role("button", name="查看详情", exact=True).click()
-    page.wait_for_function(
-        "id => document.querySelector('#run-detail').textContent.includes(id)", arg=second
-    )
-    pending.pop().continue_()
-    page.wait_for_timeout(150)
-    assert page.locator("#generate-report").text_content() == "生成报告"
-    assert "400.00" not in page.locator(".report-panel").text_content()
+    panel = page.get_by_role("region", name="UnixBench 平均结果报告", exact=True)
+    download = panel.get_by_role("link", name="下载 Excel", exact=True)
+    expect(download).to_be_visible()
+    assert download.get_attribute("href").split("?", 1)[0] == f"/api/runs/{second}/report.xlsx"
+    with page.expect_response(first_report) as received:
+        pending.pop().continue_()
+    assert received.value.json()["run_id"] == first
+    expect(panel).to_contain_text("暂无可解析的 INDEX 结果。")
+    expect(panel).not_to_contain_text("400.00")
 
 
 @pytest.mark.parametrize("mode", ["reflow", "text-zoom", "text-spacing"])
@@ -4245,6 +4264,7 @@ def test_capture_workbench_reference_screens(browser_page, ui_server):
     capture("08-history")
     page.get_by_role("button", name="查看详情", exact=True).first.click()
     expect(page.get_by_role("heading", name="运行详情", exact=True)).to_be_visible()
+    expect(page.get_by_role("link", name="下载 Excel", exact=True)).to_be_visible()
     capture("09-run")
     page.locator("#back-to-runs").click()
     page.get_by_role("button", name="更改位置…").click()

@@ -114,10 +114,7 @@ export function createReportPanel(reportUrl) {
   }
 
   const actions = node("div", "actions");
-  const refresh = button("", load, "button secondary", "file");
-  const refreshLabel = node("span");
-  refresh.id = "generate-report";
-  refresh.append(refreshLabel);
+  const refresh = button("刷新报告", load, "button secondary", "file");
   const download = node("a", "button secondary", "下载 Excel");
   download.id = "download-report";
   download.download = "";
@@ -135,7 +132,6 @@ export function createReportPanel(reportUrl) {
   const failureMessage = node("p", "callout warning");
   failureMessage.setAttribute("role", "alert");
   failure.append(failureMessage, button("重试", load, "text-button"));
-  const intro = hint("生成报告以查看均值、相对基线变化率和轮次统计。");
 
   const controls = node("div", "report-controls");
   const baselineSelect = select("比较基线", "report-baseline", (value) => {
@@ -169,7 +165,7 @@ export function createReportPanel(reportUrl) {
 
   function updateStatus() {
     root.setAttribute("aria-busy", String(loading));
-    refreshLabel.textContent = data ? "刷新报告" : loading ? "生成中…" : "生成报告";
+    refresh.hidden = !data;
     refresh.disabled = loading;
     download.hidden = !data || Boolean(error);
     if (loading || download.hidden) download.removeAttribute("href");
@@ -182,7 +178,6 @@ export function createReportPanel(reportUrl) {
       : "正在读取已回收的正式轮次…";
     failure.hidden = !error;
     failureMessage.textContent = error ? `报告生成失败：${error}` : "";
-    intro.hidden = Boolean(data || loading || error);
   }
 
   function updateReport() {
@@ -249,7 +244,6 @@ export function createReportPanel(reportUrl) {
     header,
     status,
     failure,
-    intro,
     controls,
     overall,
     empty,
@@ -259,5 +253,10 @@ export function createReportPanel(reportUrl) {
     warnings,
   );
   updateStatus();
-  return root;
+  return {
+    element: root,
+    loadInitially() {
+      if (request === 0) load();
+    },
+  };
 }

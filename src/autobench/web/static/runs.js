@@ -600,8 +600,9 @@ function renderDetail() {
   root.hidden = false;
   const renderKey = JSON.stringify([d, view.control, Boolean(view.artifacts.length)]);
   const artifactKey = JSON.stringify([view.artifacts, view.artifactError]);
+  const reportMounted = view.report?.element.isConnected;
   if (view.renderKey === renderKey && view.artifactKey === artifactKey) return;
-  if (view.renderKey === renderKey && view.report?.isConnected) {
+  if (view.renderKey === renderKey && reportMounted) {
     root.lastElementChild.replaceWith(artifactPanel(root.lastElementChild));
     view.artifactKey = artifactKey;
     return;
@@ -609,7 +610,7 @@ function renderDetail() {
   view.renderKey = renderKey;
   const oldMatrix = root.querySelector("details[data-matrix]")?.open || false;
   const oldSources = root.querySelector("details[data-sources]");
-  const previousTaskTables = view.report?.isConnected
+  const previousTaskTables = reportMounted
     ? root.querySelector(".run-task-tables")
     : null;
   const taskScrollLeft = previousTaskTables?.scrollLeft ?? 0;
@@ -796,7 +797,7 @@ function renderDetail() {
   }
   if (grouped.size) matrix.append(taskTables);
   panel.append(matrix);
-  if (view.report?.isConnected) {
+  if (reportMounted) {
     root.firstElementChild.replaceWith(panel);
     if (view.artifactKey !== artifactKey) {
       const previous = root.lastElementChild;
@@ -804,7 +805,8 @@ function renderDetail() {
     }
   } else {
     view.report = createReportPanel(url("/report"));
-    root.replaceChildren(panel, eventPanel(), view.report, artifactPanel());
+    root.replaceChildren(panel, eventPanel(), view.report.element, artifactPanel());
+    if (state.page === "runs") view.report.loadInitially();
   }
   taskTables.scrollLeft = taskScrollLeft;
   if (taskTablesFocused) taskTables.focus({ preventScroll: true });
@@ -1010,6 +1012,7 @@ export function renderRuns() {
   renderSelection();
   renderList();
   renderDetail();
+  if (state.page === "runs") view.report?.loadInitially();
 }
 export async function initRuns() {
   view.directory =
