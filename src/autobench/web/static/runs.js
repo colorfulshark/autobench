@@ -585,7 +585,6 @@ function outcomeHint(detail) {
     return "本次运行存在失败任务。失败测试不会自动重跑；如需重新测试，请修改配置并创建新运行。";
   if (detail.status === "cancelled")
     return "运行已取消。已回收的日志与结果仍可查看和下载。";
-  if (detail.status === "succeeded") return "全部任务已成功完成并回收结果。";
   if (detail.cancel_requested)
     return "取消请求已持久化；不可达机器恢复连接后可继续处理。";
   return "关闭浏览器不会停止任务，状态每 2 秒自动更新。";
@@ -608,14 +607,14 @@ function renderDetail() {
     return;
   }
   view.renderKey = renderKey;
-  const oldMatrix = root.querySelector("details[data-matrix]")?.open || false;
-  const oldSources = root.querySelector("details[data-sources]");
-  const previousTaskTables = reportMounted
-    ? root.querySelector(".run-task-tables")
-    : null;
-  const taskScrollLeft = previousTaskTables?.scrollLeft ?? 0;
-  const taskTablesFocused = previousTaskTables === document.activeElement;
+  const previousMatrix = reportMounted ? root.querySelector("[data-matrix]") : null;
+  const previousTables = previousMatrix?.querySelector(".run-task-tables");
+  const taskScrollLeft = previousTables?.scrollLeft ?? 0;
+  const taskScrollTop = previousTables?.scrollTop ?? 0;
+  const oldSources = reportMounted ? root.querySelector("details[data-sources]") : null;
   const panel = node("section", "panel run-summary");
+  const overview = node("div", "run-summary-overview");
+  panel.append(overview);
   const actions = node("div", "actions");
   const recoverable =
     !d.controller_active && ["pending", "running", "paused"].includes(d.status);
@@ -639,30 +638,54 @@ function renderDetail() {
   for (const controlButton of actions.querySelectorAll("button"))
     controlButton.dataset.runControl = controlButton.textContent;
   const oldFocus = document.activeElement;
-  const actionName = root.contains(oldFocus) ? oldFocus.dataset.runControl : null;
-  const matrixFocused = oldFocus.matches("details[data-matrix] > summary");
-  const copyFocused = oldFocus.matches(".run-copy-id");
+  const actionName = reportMounted ? oldFocus.dataset.runControl : null;
   if (view.control)
     actions.querySelectorAll("button").forEach((b) => (b.disabled = true));
-  const archive = node("a", "button secondary", "下载完整归档");
+  const archive = node("a", "button secondary run-archive", "下载完整归档");
   archive.prepend(icon("download"));
   archive.href = url("/archive");
   archive.download = "";
-  if (view.artifacts.length) actions.append(archive);
   const title = d.plan_name ? `${d.plan_name} 运行详情` : "运行详情";
-  panel.append(
-    heading(title, d.run_id, badge(
+  const identity = node("div", "run-identity");
+  const identityTitle = node("div", "run-identity-title");
+  const label = node("h2", "icon-heading", title);
+  label.prepend(icon("layers"));
+  identityTitle.append(
+    label,
+    badge(
       d.cancel_requested && d.controller_active && !terminalRunStatuses.includes(d.status)
         ? "cancel_pending" : d.status,
-    ), "layers"),
-    node(
+    ),
+  );
+  const copyId = button(
+    "运行 ID",
+    async () => {
+      try {
+        await navigator.clipboard.writeText(d.run_id);
+        show("运行 ID 已复制。");
+      } catch {
+        window.prompt("复制运行 ID", d.run_id);
+      }
+    },
+    "text-button run-copy-id",
+    "chain",
+  );
+  copyId.setAttribute("aria-label", "复制完整运行 ID");
+  copyId.title = "复制完整运行 ID";
+  const metadata = node("div", "run-identity-meta");
+  metadata.append(node("span", "", d.run_id), copyId);
+  identity.append(identityTitle, metadata);
+  overview.append(identity);
+  if (d.status !== "succeeded") {
+    const message = node(
       "p",
       "callout " + (["failed", "paused"].includes(d.status) ? "warning" : ""),
       outcomeHint(d),
-    ),
-    actions,
-  );
-  panel.querySelector(".callout").prepend(icon("info"));
+    );
+    message.prepend(icon("info"));
+    panel.append(message);
+  }
+  if (actions.childElementCount) panel.append(actions);
   if (d.sources) {
     const sources = node("details", "technical");
     sources.dataset.sources = "true";
@@ -709,14 +732,23 @@ function renderDetail() {
     box.append(icon(symbol), figures);
     stats.append(box);
   }
-  panel.append(stats);
+  const progressGroup = node("div", "run-progress-group");
+  const progressFigure = node("div", "run-progress-figure");
+  progressFigure.append(
+    node("span", "", "任务进度"),
+    node("strong", "", `${complete} / ${d.jobs.length}`),
+  );
+  if (d.jobs.length)
+    progressFigure.append(node("span", "", `(${Math.floor(complete * 100 / d.jobs.length)}%)`));
   const progress = node("progress", "run-progress");
   if (d.jobs.length) {
     progress.max = d.jobs.length;
     progress.value = complete;
   }
   progress.setAttribute("aria-label", "已结束任务");
-  panel.append(progress);
+  progressGroup.append(progressFigure, progress);
+  overview.append(progressGroup, stats);
+  if (view.artifacts.length) overview.append(archive);
   const current = d.jobs.filter((j) =>
     [
       "preparing",
@@ -751,28 +783,58 @@ function renderDetail() {
     line.dataset.tone = statusTone(job.phase || job.status);
     panel.append(line);
   }
-  const copyId = button(
-    "复制完整运行 ID",
-    async () => {
-      try {
-        await navigator.clipboard.writeText(d.run_id);
-        show("运行 ID 已复制。");
-      } catch {
-        window.prompt("复制运行 ID", d.run_id);
-      }
-    },
-    "text-button run-copy-id",
+  const matrix = taskPanel(d, previousMatrix?.open ?? true);
+  if (reportMounted) {
+    root.firstElementChild.replaceWith(panel);
+    previousMatrix.replaceWith(matrix);
+    const tables = matrix.querySelector(".run-task-tables");
+    if (tables && previousTables) {
+      tables.scrollLeft = taskScrollLeft;
+      tables.scrollTop = taskScrollTop;
+      if (oldFocus === previousTables) tables.focus({ preventScroll: true });
+    }
+    if (oldFocus === previousMatrix.firstElementChild)
+      matrix.firstElementChild.focus({ preventScroll: true });
+    if (view.artifactKey !== artifactKey) {
+      const previous = root.lastElementChild;
+      previous.replaceWith(artifactPanel(previous));
+    }
+  } else {
+    const monitor = node("div", "run-monitor");
+    monitor.append(matrix, eventPanel());
+    view.report = createReportPanel(url("/report"));
+    root.replaceChildren(panel, monitor, view.report.element, artifactPanel());
+    if (state.page === "runs") view.report.loadInitially();
+  }
+  if (oldFocus === oldSources?.firstElementChild)
+    panel.querySelector("details[data-sources] > summary")?.focus({ preventScroll: true });
+  if (reportMounted && oldFocus.matches(".run-copy-id")) copyId.focus({ preventScroll: true });
+  if (reportMounted && oldFocus.matches(".run-archive"))
+    (archive.isConnected ? archive : copyId).focus({ preventScroll: true });
+  if (actionName) {
+    const replacement = [...actions.querySelectorAll("[data-run-control]")].find(
+      (controlButton) => controlButton.dataset.runControl === actionName && !controlButton.disabled,
+    );
+    (replacement || copyId).focus({ preventScroll: true });
+  }
+  view.artifactKey = artifactKey;
+}
+function monitorTitle(title, symbol) {
+  const summary = node("summary", "run-monitor-heading");
+  summary.append(
+    icon(symbol),
+    node("span", "", title),
+    icon("chevronRight", "icon run-monitor-chevron"),
   );
-  copyId.prepend(icon("copy"));
-  panel.append(copyId);
-  const matrix = node("details", "technical");
+  return summary;
+}
+function taskPanel(detail, open) {
+  const matrix = node("details", "panel run-monitor-panel");
   matrix.dataset.matrix = "true";
-  matrix.open = oldMatrix;
-  const matrixTitle = node("summary", "", "按机器与系统查看任务");
-  matrixTitle.prepend(icon("server"));
-  matrix.append(matrixTitle);
+  matrix.open = open;
+  matrix.append(monitorTitle("按机器与系统查看任务", "network"));
   const grouped = new Map();
-  for (const job of d.jobs) {
+  for (const job of detail.jobs) {
     const key = job.machine + " / " + job.system;
     if (!grouped.has(key)) grouped.set(key, []);
     grouped.get(key).push(job);
@@ -783,50 +845,33 @@ function renderDetail() {
   taskTables.setAttribute("aria-label", "机器与系统任务表");
   for (const [name, jobs] of grouped) {
     const taskTable = table(
-      ["测试", "次数", "状态", "说明", ...(d.sources ? ["来源运行"] : [])],
+      ["测试", "次数", "状态", "说明", ...(detail.sources ? ["来源运行"] : [])],
       jobs.map((j) => [
         j.benchmark,
         j.repetition,
         badge(j.status),
         jobReason(j) || "—",
-        ...(d.sources ? [j.source_run_id] : []),
+        ...(detail.sources ? [j.source_run_id] : []),
       ]),
     );
     taskTable.classList.add("run-task-table");
-    taskTables.append(node("h3", "group-label", name), taskTable);
+    taskTable.setAttribute("aria-label", name);
+    const group = node("div", "run-task-group");
+    const label = node("h3", "group-label", name);
+    label.prepend(icon("server"));
+    group.append(label, taskTable);
+    taskTables.append(group);
   }
-  if (grouped.size) matrix.append(taskTables);
-  panel.append(matrix);
-  if (reportMounted) {
-    root.firstElementChild.replaceWith(panel);
-    if (view.artifactKey !== artifactKey) {
-      const previous = root.lastElementChild;
-      previous.replaceWith(artifactPanel(previous));
-    }
-  } else {
-    view.report = createReportPanel(url("/report"));
-    root.replaceChildren(panel, eventPanel(), view.report.element, artifactPanel());
-    if (state.page === "runs") view.report.loadInitially();
-  }
-  taskTables.scrollLeft = taskScrollLeft;
-  if (taskTablesFocused) taskTables.focus({ preventScroll: true });
-  if (matrixFocused) matrixTitle.focus({ preventScroll: true });
-  if (oldFocus === oldSources?.firstElementChild)
-    panel.querySelector("details[data-sources] > summary")?.focus({ preventScroll: true });
-  if (copyFocused) copyId.focus({ preventScroll: true });
-  if (actionName) {
-    const replacement = [...actions.querySelectorAll("[data-run-control]")].find(
-      (controlButton) => controlButton.dataset.runControl === actionName && !controlButton.disabled,
-    );
-    (replacement || copyId).focus({ preventScroll: true });
-  }
-  view.artifactKey = artifactKey;
+  const body = node("div", "run-monitor-body");
+  body.append(grouped.size ? taskTables : hint("暂无任务。"));
+  matrix.append(body);
+  return matrix;
 }
 function eventPanel() {
-  const events = node("details", "panel technical run-events");
+  const events = node("details", "panel run-monitor-panel run-events");
   events.dataset.events = "true";
-  const title = node("summary", "", "原始运行事件");
-  title.prepend(icon("code"));
+  events.open = true;
+  const title = monitorTitle("原始运行事件", "code");
   const notice = node("p", "callout warning");
   notice.id = "run-event-notice";
   notice.setAttribute("role", "status");
@@ -844,7 +889,9 @@ function eventPanel() {
   events.addEventListener("toggle", () => {
     if (events.open && follow.hidden) log.scrollTop = log.scrollHeight;
   });
-  events.append(title, notice, log, follow);
+  const body = node("div", "run-monitor-body");
+  body.append(notice, log, follow);
+  events.append(title, body);
   return events;
 }
 const nearLogEnd = (log) => log.scrollHeight - log.scrollTop - log.clientHeight < 24;

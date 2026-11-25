@@ -2017,11 +2017,10 @@ def test_warmup_status_shows_as_active_in_run_details(browser_page, ui_server):
     detail.locator(".current-stage").wait_for()
     assert "预热中" in detail.locator(".current-stage").text_content()
     assert detail.locator(".stat").nth(1).text_content() == "1进行中"
-    detail.get_by_text("按机器与系统查看任务", exact=True).click()
-    detail.get_by_text("预热中", exact=True).wait_for()
+    detail.get_by_role("cell", name="预热中", exact=True).wait_for()
 
 
-@pytest.mark.parametrize("width", [1440, 390])
+@pytest.mark.parametrize("width", [1440, 390, 320])
 def test_run_detail_hides_resolved_reason_and_translates_recovery(browser_page, ui_server, width):
     from playwright.sync_api import expect
 
@@ -2053,19 +2052,23 @@ def test_run_detail_hides_resolved_reason_and_translates_recovery(browser_page, 
         )
         expect(failure).to_have_attribute("data-tone", "error")
         expect(detail.get_by_text(esp_error, exact=True)).to_have_count(0)
-        summary = detail.get_by_text("按机器与系统查看任务", exact=True)
-        detail.get_by_role("button", name="复制完整运行 ID").press("Tab")
+        summary = detail.locator("summary").filter(has_text="按机器与系统查看任务")
+        scroller = detail.get_by_role("region", name="机器与系统任务表")
+        expect(scroller).to_be_visible()
+        detail.get_by_role("button", name="取消运行", exact=True).press("Tab")
         expect(summary).to_be_focused()
         expect(summary).to_have_css("outline-style", "solid")
         expect(summary).to_have_css("outline-color", "rgb(71, 85, 105)")
         summary.press("Enter")
+        expect(scroller).to_be_hidden()
+        summary.press("Space")
         expect(detail.get_by_text(translated, exact=True)).to_be_visible()
         expect(detail.get_by_text(english)).to_have_count(0)
         headers = detail.locator(".run-task-table thead tr")
-        scroller = detail.get_by_role("region", name="机器与系统任务表")
-        if width == 390:
+        if width < 768:
             summary.press("Tab")
             expect(scroller).to_be_focused()
+        if width == 320:
             scroller.evaluate("el => el.scrollLeft = el.scrollWidth")
             assert scroller.evaluate("el => el.scrollLeft") > 0
         column_edges = """rows => rows.map(row => [...row.cells].map(cell => {
@@ -2084,7 +2087,7 @@ def test_run_detail_hides_resolved_reason_and_translates_recovery(browser_page, 
         expect(detail.locator(".current-stage")).to_contain_text("运行中")
         expect(notice).to_have_count(0)
         expect(detail.get_by_text(translated, exact=True)).to_have_count(0)
-        if width == 390:
+        if width < 768:
             expect(scroller).to_be_focused()
         expect(failure).to_be_visible()
         assert headers.evaluate_all(column_edges) == [first, first]
@@ -4528,14 +4531,106 @@ def test_run_history_delete_and_merge(browser_page, ui_server, width, zoom):
     store.close()
 
 
+def test_run_detail_summary_and_monitor_reflow(browser_page, ui_server):
+    from playwright.sync_api import expect
+
+    from autobench.storage import Store
+
+    page, server = browser_page, ui_server
+    config = server.config
+    config.benchmarks[0].id = "unixbench01"
+    config.machines[0].systems[0].id = "openeuler"
+    config.machines[0].systems[1].id = "kylin"
+    config.benchmarks[0].repetitions = 1
+    store = Store(config.policy.state_dir)
+    try:
+        run_id = store.create(config)
+        store.rename_run(run_id, "test2")
+        for job in store.jobs(run_id):
+            store.update(job["id"], "succeeded")
+            for message in (
+                "submitting detached benchmark job",
+                "building",
+                "stabilizing (52s remaining)",
+                "预热中",
+                "switching system",
+                "running",
+                "collecting artifacts (succeeded)",
+                "archived: succeeded",
+            ):
+                store.event(run_id, job["id"], message)
+        store.set_run_status(run_id, "succeeded")
+    finally:
+        store.close()
+    (config.policy.output_dir / run_id / "summary.txt").write_text("fixture result")
+
+    page.emulate_media(reduced_motion="reduce")
+    ready(page, server, startup_path=server.existing)
+    page.get_by_role("tab", name="运行记录").click()
+    page.get_by_role("button", name="查看详情", exact=True).click()
+    detail = page.locator("#run-detail")
+    title = detail.get_by_role("heading", name="test2 运行详情")
+    log = detail.get_by_label("运行事件日志")
+    archive = detail.get_by_role("link", name="下载完整归档", exact=True)
+    expect(log).to_contain_text("archived: succeeded")
+    expect(archive).to_be_visible()
+    expect(detail.get_by_role("progressbar", name="已结束任务")).to_have_attribute("value", "2")
+    expect(detail.get_by_text("(100%)", exact=True)).to_be_visible()
+
+    output = os.getenv("AUTOBENCH_UI_SCREENSHOTS")
+    if output:
+        Path(output).mkdir(parents=True, exist_ok=True)
+    panels = detail.locator(".run-monitor-panel")
+    for width in (1920, 1440, 1280, 1024, 768, 390, 320):
+        page.set_viewport_size({"width": width, "height": 900})
+        task_box, events_box = (panel.bounding_box() for panel in panels.all())
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), width
+        if width >= 1280:
+            assert task_box["y"] == pytest.approx(events_box["y"], abs=1)
+            assert task_box["height"] == pytest.approx(events_box["height"], abs=1)
+            assert task_box["x"] + task_box["width"] < events_box["x"]
+            assert title.bounding_box()["x"] < archive.bounding_box()["x"]
+            assert archive.bounding_box()["y"] < task_box["y"]
+        else:
+            assert task_box["x"] == pytest.approx(events_box["x"], abs=1)
+            assert task_box["y"] + task_box["height"] < events_box["y"]
+        if output and width in (1440, 390):
+            page.evaluate("scrollTo(0, 0)")
+            page.screenshot(path=Path(output) / f"run-detail-{width}.png", full_page=True)
+
+    page.set_viewport_size({"width": 1440, "height": 900})
+    page.evaluate("document.documentElement.style.fontSize = '200%'")
+    expect(title).to_have_css("font-size", "40px")
+    expect(log).to_have_css("font-size", "26px")
+    assert panels.nth(0).bounding_box()["x"] == pytest.approx(panels.nth(1).bounding_box()["x"])
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.emulate_media(forced_colors="active")
+    archive.press("Tab")
+    expect(panels.nth(0).locator("summary")).to_be_focused()
+    expect(panels.nth(0).locator("summary")).to_have_css("outline-style", "solid")
+    page.set_viewport_size({"width": 320, "height": 900})
+    page.evaluate(
+        """() => {
+            document.documentElement.style.fontSize = '';
+            const sheet = [...document.styleSheets].find(sheet => sheet.href?.endsWith('/style.css'));
+            sheet.insertRule('* { line-height: 1.5 !important; letter-spacing: .12em !important;'
+                + ' word-spacing: .16em !important; }', sheet.cssRules.length);
+            sheet.insertRule('p { margin-bottom: 2em !important; }', sheet.cssRules.length);
+        }"""
+    )
+    assert detail.evaluate("el => el.scrollWidth <= el.clientWidth")
+
+
 def test_run_events_keep_focused_log_and_scroll_position(browser_page, ui_server):
     from playwright.sync_api import expect
 
     from autobench.storage import Store
 
     page, server = browser_page, ui_server
+    server.config.benchmarks[0].repetitions = 12
     store = Store(server.config.policy.state_dir)
     run_id = store.create(server.config)
+    job_id = store.jobs(run_id)[0]["id"]
     store.close()
     events = [
         {"sequence": i, "time": 1700000000, "message": f"采集测试事件 {i:03d}"}
@@ -4550,20 +4645,34 @@ def test_run_events_keep_focused_log_and_scroll_position(browser_page, ui_server
     ready(page, server, startup_path=server.existing)
     page.get_by_role("tab", name="运行记录").click()
     page.get_by_role("button", name="查看详情", exact=True).click()
-    page.get_by_text("原始运行事件", exact=True).click()
     log = page.get_by_label("运行事件日志")
     expect(log).to_contain_text("采集测试事件 080")
+    event_heading = page.locator("summary").filter(has_text="原始运行事件")
+    event_heading.press("Enter")
+    expect(log).to_be_hidden()
+    event_heading.press("Space")
+    expect(log).to_be_visible()
     log.evaluate("el => { el.scrollTop = 0; el.focus({preventScroll: true}); }")
     expect(page.get_by_role("button", name="回到底部", exact=True)).to_be_visible()
+    tasks = page.get_by_role("region", name="机器与系统任务表")
+    task_scroll = tasks.evaluate("el => { el.scrollTop = 100; return el.scrollTop; }")
+    assert task_scroll > 0
     page.locator("#run-detail").evaluate(
         """el => {
             el.addEventListener('animationstart', () => el.dataset.pollAnimation = 'true');
         }"""
     )
     events.append({"sequence": 81, "time": 1700000000, "message": "新事件 081"})
+    store = Store(server.config.policy.state_dir)
+    try:
+        store.update(job_id, "succeeded")
+    finally:
+        store.close()
+    expect(page.get_by_role("progressbar", name="已结束任务")).to_have_attribute("value", "1")
     expect(log).to_contain_text("新事件 081")
     expect(log).to_be_focused()
     assert log.evaluate("el => el.scrollTop") == 0
+    assert tasks.evaluate("el => el.scrollTop") == task_scroll
     assert page.locator("#run-detail").get_attribute("data-poll-animation") is None
     page.get_by_role("button", name="回到底部", exact=True).click()
     expect(log).to_be_focused()
