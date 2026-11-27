@@ -275,6 +275,18 @@ def test_merge_deduplicates_origins_and_reports_original_rounds(client, config):
     assert {"30.00 (0.00%)", "80.00 (+166.67%)"} <= {
         cell.value for cell in workbook["Summary"]["B"]
     }
+    median_params = {"aggregation": "median"}
+    median_report = client.get(url + "/report", params=median_params).json()
+    median_cells = median_report["profiles"][0]["overall"]
+    assert median_cells[first["id"]]["valid_runs"] == 3
+    assert median_cells[first["id"]]["score"] == 20
+    assert median_cells[second["id"]]["display"] == "80.00 (+300.00%)"
+    median_workbook = load_workbook(
+        io.BytesIO(client.get(url + "/report.xlsx", params=median_params).content)
+    )
+    assert {"20.00 (0.00%)", "80.00 (+300.00%)"} <= {
+        cell.value for cell in median_workbook["Summary"]["B"]
+    }
     with zipfile.ZipFile(io.BytesIO(client.get(url + "/archive").content)) as zipped:
         assert zipped.read(f"{merged}/sources/{a}/same-name.log") == b"from A"
         assert zipped.read(f"{merged}/sources/{b}/same-name.log") == b"from B"

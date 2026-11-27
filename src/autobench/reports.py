@@ -1,4 +1,4 @@
-"""UnixBench final INDEX parsing, arithmetic means, and comparison workbooks."""
+"""UnixBench final INDEX parsing, score aggregation, and comparison workbooks."""
 
 from __future__ import annotations
 
@@ -8,6 +8,8 @@ import re
 import time
 from copy import copy
 from pathlib import Path
+from statistics import mean as arithmetic_mean
+from typing import Literal
 
 from openpyxl import load_workbook
 from openpyxl.comments import Comment
@@ -17,6 +19,7 @@ from autobench.artifacts import result_path
 from autobench.config import Config
 
 REPORT_TEMPLATE = Path(__file__).with_name("templates") / "unixbench.xlsx"
+ScoreAggregation = Literal["mean", "median"]
 
 TEST_ORDER = (
     "Dhrystone 2 using register variables",
@@ -185,8 +188,32 @@ def report_groups(config: Config | None, jobs: list[dict]):
                 yield key, " / ".join(parts), by_group.get(key, [])
 
 
+def _mean_score(values: list[float]) -> float:
+    try:
+        return math.fsum(value / len(values) for value in values)
+    except OverflowError:
+        # Rounded terms can sum above the float limit even when the mean fits.
+        return arithmetic_mean(values)
+
+
+def _median_score(values: list[float]) -> float:
+    ordered = sorted(values)
+    middle, extra = divmod(len(ordered), 2)
+    if extra:
+        return ordered[middle]
+    lower, upper = ordered[middle - 1], ordered[middle]
+    pair_sum = lower + upper
+    return pair_sum / 2 if math.isfinite(pair_sum) else lower / 2 + upper / 2
+
+
 def build_report(
-    run_id: str, config: Config | None, jobs: list[dict], root: Path, baseline: str | None = None
+    run_id: str,
+    config: Config | None,
+    jobs: list[dict],
+    root: Path,
+    baseline: str | None = None,
+    *,
+    aggregation: ScoreAggregation = "mean",
 ) -> dict:
     groups = []
     samples = {}
@@ -204,7 +231,7 @@ def build_report(
         for job, relative in group_jobs:
             directory = result_path(root, relative)
             if not directory.is_dir():
-                warnings.append(f"{relative}：结果未回收，未计入平均值。")
+                warnings.append(f"{relative}：结果未回收，未计入统计。")
                 continue
             group["discovered_runs"] += 1
             try:
@@ -213,7 +240,7 @@ def build_report(
                 warnings.append(f"{relative}：{exc}")
                 continue
             except OSError:
-                warnings.append(f"{relative}：结果文件读取失败，未计入平均值。")
+                warnings.append(f"{relative}：结果文件读取失败，未计入统计。")
                 continue
             if not parsed:
                 warnings.append(f"{relative}：没有可解析的 INDEX 结果。")
@@ -259,8 +286,11 @@ def build_report(
                     if value is not None:
                         values.append(value)
                         partial |= profile["partial"]
+                mean = _mean_score(values) if values else None
+                score = _median_score(values) if aggregation == "median" and values else mean
                 cells[key] = {
-                    "mean": math.fsum(value / len(values) for value in values) if values else None,
+                    "mean": mean,
+                    "score": score,
                     "valid_runs": len(values),
                     "planned_runs": group["planned_runs"],
                     "partial": partial,
@@ -268,17 +298,16 @@ def build_report(
                 if len(values) < group["planned_runs"]:
                     warnings.append(
                         f"{group['label']} · {profile_name(copies)} · {name or 'Overall Score'}："
-                        f"有效轮次 {len(values)}/{group['planned_runs']}，仅按有效值平均。"
+                        f"有效轮次 {len(values)}/{group['planned_runs']}，仅纳入有效分数。"
                     )
-            base = cells[baseline]["mean"]
+            base = cells[baseline]["score"]
             if base is None or base == 0:
                 warnings.append(
                     f"{profile_name(copies)} · {name or 'Overall Score'}：基线缺失或为零，变化率为 N/A。"
                 )
             for cell in cells.values():
-                delta = (
-                    (cell["mean"] / base - 1) * 100 if base and cell["mean"] is not None else None
-                )
+                score = cell["score"]
+                delta = (score / base - 1) * 100 if base and score is not None else None
                 cell["change_percent"] = (
                     delta if delta is not None and math.isfinite(delta) else None
                 )
@@ -303,6 +332,7 @@ def build_report(
         "data_directory": str(root),
         "generated_at": time.time(),
         "baseline": baseline,
+        "aggregation": aggregation,
         "groups": groups,
         "profiles": profiles,
         "warnings": warnings,
@@ -310,13 +340,13 @@ def build_report(
 
 
 def format_cell(cell: dict) -> str:
-    if cell["mean"] is None:
+    if cell["score"] is None:
         return "N/A"
     change = cell["change_percent"]
     # Avoid displaying a negative zero after rounding.
     delta = "N/A" if change is None else "0.00%" if abs(change) < 0.005 else f"{change:+.2f}%"
     suffix = " [Partial]" if cell["partial"] else ""
-    return f"{cell['mean']:.2f} ({delta}){suffix}"
+    return f"{cell['score']:.2f} ({delta}){suffix}"
 
 
 def report_workbook(report: dict) -> bytes:
@@ -325,6 +355,7 @@ def report_workbook(report: dict) -> bytes:
     summary = book["Summary"]
     groups = report["groups"]
     profiles = report["profiles"]
+    method = "median" if report["aggregation"] == "median" else "arithmetic mean"
     sources = list(book)[1:]
     details = []
     for profile in profiles:
@@ -346,7 +377,7 @@ def report_workbook(report: dict) -> bytes:
 
     def score(sheet, row, col, data):
         # Partial and sample counts belong to comments/warnings, preserving the
-        # template's visible "average (vs baseline)" cell format.
+        # template's visible "score (vs baseline)" cell format.
         cell = write(sheet, row, col, data["display"].removesuffix(" [Partial]"))
         cell.comment = Comment(
             f"Valid runs: {data['valid_runs']}/{data['planned_runs']}"
@@ -397,12 +428,25 @@ def report_workbook(report: dict) -> bytes:
         1,
         "Each machine / system / benchmark is treated as one test group; its formal rounds are treated as individual runs. Warmup is excluded.",
     )
+    write(summary, notes_first + 2, 1, f"Score aggregation: {method}. Format: score (vs baseline).")
+    write(
+        summary,
+        notes_first + 3,
+        1,
+        "Missing scores are shown as N/A; only valid scores are used in the aggregation.",
+    )
     for row, warning in enumerate(report["warnings"] or ["No warnings."], warnings_first):
         write(summary, row, 1, warning)
 
     for profile, sheet in zip(profiles, details):
         sheet.title = profile["label"]
         write(sheet, 1, 1, f"Detailed Results - {profile['label']}")
+        write(
+            sheet,
+            2,
+            1,
+            f"Each score is the {method} of the valid runs for that test case and profile.",
+        )
         header_style = copy(sheet["B3"]._style)
         # Discard unused example columns and their widths, retaining each used
         # template column's own width rather than replacing it with one default.

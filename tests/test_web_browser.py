@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+import re
 import socket
 import threading
 import time
@@ -3935,7 +3936,7 @@ def open_report_history(page, server, run_id):
     )
     ready(page, server)
     page.locator("#tab-runs").click()
-    page.get_by_role("heading", name="UnixBench 平均结果报告", exact=True).wait_for()
+    page.get_by_role("heading", name="UnixBench 结果报告", exact=True).wait_for()
 
 
 @pytest.mark.parametrize("width", [1280, 1440, 1920, 390, 320])
@@ -4194,6 +4195,115 @@ def test_report_preview_baseline_download_and_layout(browser_page, ui_server, wi
     assert page.locator("#report-baseline").input_value() == "server01/os2/ub"
 
 
+@pytest.mark.parametrize(("width", "text_size"), [(1440, 100), (320, 100), (390, 200)])
+def test_report_aggregation_switch_and_export(browser_page, ui_server, width, text_size):
+    from openpyxl import load_workbook
+    from playwright.sync_api import expect
+
+    page, server = browser_page, ui_server
+    run_id = report_history(server)
+    page.set_viewport_size({"width": width, "height": 900})
+    page.emulate_media(reduced_motion="reduce")
+    if text_size == 200:
+
+        def apply_text_zoom(route):
+            response = route.fetch()
+            route.fulfill(response=response, body=response.text() + "\nhtml { font-size: 200%; }")
+
+        page.route("**/static/style.css", apply_text_zoom)
+    open_report_history(page, server, run_id)
+    panel = page.get_by_role("region", name="UnixBench 结果报告", exact=True)
+    method = panel.get_by_role("combobox", name="统计口径", exact=True)
+    baseline = panel.get_by_role("combobox", name="比较基线", exact=True)
+    copies = panel.get_by_role("combobox", name="并发数", exact=True)
+    summary = panel.get_by_role("region", name="比较组对比表，可横向滚动")
+    detail = panel.get_by_role("region", name="测试项对比表，可横向滚动")
+    expect(method).to_have_value("mean")
+    expect(method).to_have_css("font-size", f"{14 * text_size / 100:g}px")
+    baseline.select_option("server01/os2/ub")
+    copies.select_option("64")
+    expect(detail).to_contain_text("25600.00 (-16.67%)")
+
+    method.scroll_into_view_if_needed()
+    method.focus()
+    page.keyboard.press("Space")
+    page.keyboard.press("ArrowDown")
+    page.keyboard.press("Enter")
+    expect(method).to_have_value("median")
+    expect(summary).to_contain_text("20.00 (-58.33%)")
+    expect(detail).to_contain_text("12800.00 (-58.33%)")
+    expect(panel).to_contain_text("统计口径：中位数")
+    expect(method).to_be_focused()
+    expect(copies).to_have_value("64")
+    expect(baseline).to_have_value("server01/os2/ub")
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    if output := os.getenv("AUTOBENCH_UI_SCREENSHOTS"):
+        panel.screenshot(path=Path(output) / f"unixbench-median-{width}-{text_size}.png")
+
+    with page.expect_download() as received:
+        panel.get_by_role("link", name="下载 Excel", exact=True).click()
+    with received.value.path().open("rb") as stream:
+        book = load_workbook(stream)
+    assert book["Summary"]["B14"].value == "20.00 (-58.33%)"
+    assert book["64 parallel copies"]["B4"].value == "12800.00 (-58.33%)"
+    assert "median" in book["64 parallel copies"]["A2"].value
+
+    with page.expect_response("**/report?*aggregation=median"):
+        panel.get_by_role("button", name="刷新报告", exact=True).click()
+    expect(panel).to_have_attribute("aria-busy", "false")
+    expect(method).to_have_value("median")
+    expect(copies).to_have_value("64")
+    expect(baseline).to_have_value("server01/os2/ub")
+    method.select_option("mean")
+    expect(summary).to_contain_text("40.00 (-16.67%)")
+    expect(detail).to_contain_text("25600.00 (-16.67%)")
+    expect(panel).to_contain_text("统计口径：平均数")
+
+
+def test_report_aggregation_ignores_stale_response_and_retries_failure(browser_page, ui_server):
+    from playwright.sync_api import expect
+
+    page, server = browser_page, ui_server
+    run_id = report_history(server)
+    open_report_history(page, server, run_id)
+    panel = page.get_by_role("region", name="UnixBench 结果报告", exact=True)
+    method = panel.get_by_role("combobox", name="统计口径", exact=True)
+    download = panel.get_by_role("link", name="下载 Excel", exact=True)
+    expect(download).to_be_visible()
+    pending = []
+    median_route = f"**/api/runs/{run_id}/report?*aggregation=median"
+    page.route(median_route, lambda route: pending.append(route))
+    with page.expect_request(median_route):
+        method.select_option("median")
+    expect(panel).to_have_attribute("aria-busy", "true")
+    expect(download).to_be_disabled()
+    expect(panel).to_contain_text("统计口径：平均数")
+    expect(panel).to_contain_text("400.00 (0.00%)")
+    with page.expect_response("**/report?*aggregation=mean"):
+        method.select_option("mean")
+    expect(panel).to_have_attribute("aria-busy", "false")
+    with page.expect_response(median_route) as received:
+        pending.pop().continue_()
+    assert received.value.json()["aggregation"] == "median"
+    expect(panel).to_contain_text("统计口径：平均数")
+    expect(download).to_have_attribute("href", re.compile(r"aggregation=mean$"))
+
+    with page.expect_request(median_route):
+        method.select_option("median")
+    expect(download).to_be_disabled()
+    pending.pop().fulfill(status=500, json={"detail": "模拟读取失败"})
+    expect(panel.get_by_role("alert")).to_have_text("报告生成失败：模拟读取失败")
+    expect(download).to_be_hidden()
+    expect(panel).to_contain_text("统计口径：平均数")
+    expect(method).to_have_value("median")
+    page.unroute(median_route)
+    with page.expect_response(median_route):
+        panel.get_by_role("button", name="重试", exact=True).click()
+    expect(panel).to_contain_text("统计口径：中位数")
+    expect(panel).to_contain_text("200.00 (0.00%)")
+    expect(download).to_have_attribute("href", re.compile(r"aggregation=median$"))
+
+
 def test_report_loading_error_retry_and_empty_state(browser_page, ui_server):
     from playwright.sync_api import expect
 
@@ -4204,7 +4314,7 @@ def test_report_loading_error_retry_and_empty_state(browser_page, ui_server):
     page.route(report_route, lambda route: pending.append(route))
     with page.expect_request(report_route):
         open_report_history(page, server, run_id)
-    panel = page.get_by_role("region", name="UnixBench 平均结果报告", exact=True)
+    panel = page.get_by_role("region", name="UnixBench 结果报告", exact=True)
     expect(panel).to_have_attribute("aria-busy", "true")
     expect(panel.get_by_role("button", name="刷新报告", exact=True)).to_be_hidden()
     expect(panel.get_by_role("status")).to_have_text("正在读取已回收的正式轮次…")
@@ -4264,7 +4374,7 @@ def test_report_stale_response_does_not_leak_into_another_run(browser_page, ui_s
         open_report_history(page, server, first)
     page.locator("#back-to-runs").click()
     history_row(page, second).get_by_role("button", name="查看详情", exact=True).click()
-    panel = page.get_by_role("region", name="UnixBench 平均结果报告", exact=True)
+    panel = page.get_by_role("region", name="UnixBench 结果报告", exact=True)
     download = panel.get_by_role("link", name="下载 Excel", exact=True)
     expect(download).to_be_visible()
     assert download.get_attribute("href").split("?", 1)[0] == f"/api/runs/{second}/report.xlsx"

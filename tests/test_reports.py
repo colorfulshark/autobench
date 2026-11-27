@@ -1,5 +1,7 @@
 import io
 import shutil
+from contextlib import closing
+from sys import float_info
 
 import pytest
 from fastapi.testclient import TestClient
@@ -209,12 +211,14 @@ def test_means_baseline_missing_rounds_and_warmup(config, report_run):
     warmup.mkdir(parents=True)
     (warmup / "report").write_text(unixbench_text(999999))
     report = build_report(run_id, config, store.jobs(run_id), root)
+    assert report["aggregation"] == "mean"
     assert report["baseline"] == "host1/os1/ub"
     assert [g["parsed_runs"] for g in report["groups"]] == [3, 2]
     assert [g["discovered_runs"] for g in report["groups"]] == [3, 2]
     profile = report["profiles"][0]
     assert profile["tests"][0]["values"]["host1/os1/ub"]["mean"] == 400
     assert profile["overall"]["host1/os1/ub"]["mean"] == 40
+    assert profile["overall"]["host1/os1/ub"]["score"] == 40
     assert profile["tests"][0]["values"]["host1/os2/ub"]["change_percent"] == pytest.approx(20)
     assert profile["tests"][0]["values"]["host1/os2/ub"]["display"] == "480.00 (+20.00%)"
     assert profile["tests"][2]["values"]["host1/os1/ub"]["display"] == "N/A"
@@ -228,6 +232,50 @@ def test_means_baseline_missing_rounds_and_warmup(config, report_run):
     )
 
 
+def test_median_uses_valid_rounds_and_same_aggregation_for_baseline(config, report_run):
+    store, run_id, root = report_run
+    write_round(
+        root,
+        "os2",
+        1,
+        unixbench_text(480, 48, extra="Custom Index   1   100   70\n")
+        + unixbench_text(4800, 480, 64),
+    )
+    warmup = root / "host1/os1/ub/warmup/results"
+    warmup.mkdir(parents=True)
+    (warmup / "report").write_text(unixbench_text(999999))
+    report = build_report(run_id, config, store.jobs(run_id), root, aggregation="median")
+    assert report["aggregation"] == "median"
+    single, parallel = report["profiles"]
+    first, second = ("host1/os1/ub", "host1/os2/ub")
+    assert single["overall"][first]["score"] == 20
+    assert single["overall"][first]["mean"] == 40
+    assert single["overall"][second]["display"] == "48.00 (+140.00%)"
+    assert single["tests"][0]["values"][first]["score"] == 200
+    assert single["tests"][0]["values"][second]["display"] == "480.00 (+140.00%)"
+    assert parallel["tests"][0]["values"][first]["score"] == 5000
+    assert parallel["tests"][0]["values"][first]["valid_runs"] == 2
+    missing_baseline = next(
+        test["values"] for test in single["tests"] if test["name"] == "Custom Index"
+    )
+    assert missing_baseline[first]["score"] is None
+    assert missing_baseline[first]["display"] == "N/A"
+    assert missing_baseline[second]["display"] == "70.00 (N/A)"
+
+
+@pytest.mark.parametrize("rounds", [2, 3])
+def test_large_finite_scores_can_be_aggregated(config, rounds):
+    config.benchmarks[0].repetitions = rounds
+    with closing(Store(config.policy.state_dir)) as store:
+        run_id = store.create(config)
+        root = store.result_directory(run_id)
+        for index in range(1, rounds + 1):
+            write_round(root, "os1", index, unixbench_text(1, float_info.max))
+        report = build_report(run_id, config, store.jobs(run_id), root, aggregation="median")
+    cell = report["profiles"][0]["overall"]["host1/os1/ub"]
+    assert cell["score"] == cell["mean"] == float_info.max
+
+
 def test_conflicting_round_is_excluded(config, report_run):
     store, run_id, root = report_run
     write_round(root, "os1", 1, unixbench_text(9000), filename="conflict.txt")
@@ -237,12 +285,13 @@ def test_conflicting_round_is_excluded(config, report_run):
     assert any("冲突" in warning for warning in report["warnings"])
 
 
-def test_partial_zero_baseline_and_default_first_valid_group(config, tmp_path):
+@pytest.mark.parametrize("aggregation", ["mean", "median"])
+def test_partial_zero_baseline_and_default_first_valid_group(config, aggregation):
     store = Store(config.policy.state_dir)
     run_id = store.create(config)
     root = config.policy.output_dir / run_id
     write_round(root, "os2", 1, unixbench_text(0, 0, 4, partial=True))
-    report = build_report(run_id, config, store.jobs(run_id), root)
+    report = build_report(run_id, config, store.jobs(run_id), root, aggregation=aggregation)
     store.close()
     assert report["baseline"] == "host1/os2/ub"
     assert report["profiles"][0]["overall"]["host1/os2/ub"]["display"] == "0.00 (N/A) [Partial]"
@@ -380,31 +429,52 @@ def report_client(config, tmp_path):
         yield client
 
 
-def test_report_api_and_excel_with_frozen_history(config, report_run, report_client):
+@pytest.mark.parametrize(
+    ("aggregation", "method", "index", "overall"),
+    [
+        (None, "arithmetic mean", "400.00 (-16.67%)", "40.00 (-16.67%)"),
+        ("median", "median", "200.00 (-58.33%)", "20.00 (-58.33%)"),
+    ],
+)
+def test_report_api_and_excel_with_frozen_history(
+    config, report_run, report_client, aggregation, method, index, overall
+):
     _, run_id, _ = report_run
     config.benchmarks[0].source_archive.unlink()
     url = f"/api/runs/{run_id}/report"
-    response = report_client.get(
-        url, params={"state_dir": str(config.policy.state_dir), "baseline": "host1/os2/ub"}
-    )
+    params = {"state_dir": str(config.policy.state_dir), "baseline": "host1/os2/ub"}
+    if aggregation:
+        params["aggregation"] = aggregation
+    response = report_client.get(url, params=params)
     assert response.status_code == 200, response.text
     report = response.json()
     assert report["baseline"] == "host1/os2/ub"
+    assert report["aggregation"] == (aggregation or "mean")
     assert response.headers["cache-control"] == "no-store"
-    response = report_client.get(url + ".xlsx", params={"baseline": report["baseline"]})
+    response = report_client.get(url + ".xlsx", params=params)
     assert response.status_code == 200
     assert "spreadsheetml" in response.headers["content-type"]
     assert f"unixbench-{run_id}.xlsx" in response.headers["content-disposition"]
     book = load_workbook(io.BytesIO(response.content))
     assert (
-        book["1 parallel copy"]["B4"].value
+        index
         == report["profiles"][0]["tests"][0]["values"]["host1/os1/ub"]["display"]
+        == book["1 parallel copy"]["B4"].value
     )
+    assert (
+        overall
+        == report["profiles"][0]["overall"]["host1/os1/ub"]["display"]
+        == book["Summary"]["B14"].value
+    )
+    assert f"Score aggregation: {method}." in book["Summary"]["A23"].value
+    for sheet in list(book)[1:]:
+        assert f"Each score is the {method}" in sheet["A2"].value
     for suffix in ("", ".xlsx"):
         assert (
             report_client.get(url + suffix, params={"baseline": "../../etc/passwd"}).status_code
             == 422
         )
+        assert report_client.get(url + suffix, params={"aggregation": "mode"}).status_code == 422
         assert report_client.get("/api/runs/invalid/report" + suffix).status_code == 422
 
 

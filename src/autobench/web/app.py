@@ -35,7 +35,7 @@ from autobench.config import (
     resolve_ssh_paths,
 )
 from autobench.errors import AutoBenchError, ConfigurationFieldError
-from autobench.reports import build_report, report_workbook
+from autobench.reports import ScoreAggregation, build_report, report_workbook
 from autobench.storage import RUN_ID_PATTERN, Store
 from autobench.web.files import ConfigFiles, ConflictError, parse_document
 
@@ -711,25 +711,37 @@ def create_app(
             raise HTTPException(404, "产物不存在")
         return path
 
-    def run_report(run_id: str, state_dir: str | None, baseline: str | None) -> dict:
+    def run_report(
+        run_id: str, state_dir: str | None, baseline: str | None, aggregation: ScoreAggregation
+    ) -> dict:
         root = result_root(run_id, state_dir)
         with store_at(state_dir) as store:
             config = None if store.run(run_id)["status"] == "merged" else store.config(run_id)
             jobs = store.jobs(run_id)
         try:
-            return build_report(run_id, config, jobs, root, baseline)
+            return build_report(run_id, config, jobs, root, baseline, aggregation=aggregation)
         except UnsafeArtifactPath as exc:
             raise HTTPException(403, str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
 
     @app.get("/api/runs/{run_id}/report")
-    def report(run_id: RunID, state_dir: str | None = None, baseline: str | None = None):
-        return run_report(run_id, state_dir, baseline)
+    def report(
+        run_id: RunID,
+        state_dir: str | None = None,
+        baseline: str | None = None,
+        aggregation: ScoreAggregation = "mean",
+    ):
+        return run_report(run_id, state_dir, baseline, aggregation)
 
     @app.get("/api/runs/{run_id}/report.xlsx")
-    def download_report(run_id: RunID, state_dir: str | None = None, baseline: str | None = None):
-        value = report_workbook(run_report(run_id, state_dir, baseline))
+    def download_report(
+        run_id: RunID,
+        state_dir: str | None = None,
+        baseline: str | None = None,
+        aggregation: ScoreAggregation = "mean",
+    ):
+        value = report_workbook(run_report(run_id, state_dir, baseline, aggregation))
         return Response(
             value,
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

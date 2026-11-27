@@ -1,20 +1,26 @@
 import { api } from "./state.js";
 import { node, button, hint, heading, icon, table, date } from "./ui.js";
 
+const REPORT_TITLE = "UnixBench 结果报告";
+const AGGREGATION_LABELS = { mean: "平均数", median: "中位数" };
+
 export function createReportPanel(reportUrl) {
   const root = node("section", "panel report-panel");
-  root.setAttribute("aria-label", "UnixBench 平均结果报告");
+  root.setAttribute("aria-label", REPORT_TITLE);
   let data = null;
   let loading = false;
   let error = "";
   let baseline = "";
+  let aggregation = "mean";
   let copies = null;
   let request = 0;
 
   function url(excel = false) {
     const target = new URL(reportUrl, window.location.origin);
     if (excel) target.pathname += ".xlsx";
-    if (baseline) target.searchParams.set("baseline", baseline);
+    const selection = excel ? data : { baseline, aggregation };
+    if (selection.baseline) target.searchParams.set("baseline", selection.baseline);
+    target.searchParams.set("aggregation", selection.aggregation);
     return target.pathname + target.search;
   }
 
@@ -30,6 +36,7 @@ export function createReportPanel(reportUrl) {
         warnings.open = !result.profiles.length;
       data = result;
       baseline = result.baseline;
+      aggregation = result.aggregation;
       if (!data.profiles.some((p) => p.copies === copies))
         copies = data.profiles[0]?.copies ?? null;
       updateReport();
@@ -121,8 +128,8 @@ export function createReportPanel(reportUrl) {
   download.setAttribute("role", "link");
   actions.append(refresh, download);
   const header = heading(
-    "UnixBench 平均结果报告",
-    "各正式轮次 INDEX 分数的算术平均值，预热不计入。",
+    REPORT_TITLE,
+    "仅统计正式轮次的有效 INDEX 分数，预热不计入。",
     actions,
     "chart",
   );
@@ -138,8 +145,12 @@ export function createReportPanel(reportUrl) {
     baseline = value;
     load();
   });
+  const aggregationSelect = select("统计口径", "report-aggregation", (value) => {
+    aggregation = value;
+    load();
+  });
   const metadata = hint();
-  controls.append(baselineSelect.field, metadata);
+  controls.append(baselineSelect.field, aggregationSelect.field, metadata);
 
   const overall = node("section", "report-overall");
   const overallTable = reportTable("比较组");
@@ -185,8 +196,9 @@ export function createReportPanel(reportUrl) {
     overall.hidden = false;
     warnings.hidden = false;
     baselineSelect.update(data.groups.map((group) => [group.id, group.label]), baseline);
+    aggregationSelect.update(Object.entries(AGGREGATION_LABELS), aggregation);
     const baselineGroup = data.groups.find((group) => group.id === data.baseline);
-    metadata.textContent = `生成时间：${date(data.generated_at)} · 基线：${baselineGroup.label}`;
+    metadata.textContent = `生成时间：${date(data.generated_at)} · 基线：${baselineGroup.label} · 统计口径：${AGGREGATION_LABELS[data.aggregation]}`;
     const index128 = data.profiles.findIndex((profile) => profile.copies === 128);
     const roundColumnOffset = index128 === -1 ? data.profiles.length : index128 + 1;
     const leadingProfiles = data.profiles.slice(0, roundColumnOffset);
